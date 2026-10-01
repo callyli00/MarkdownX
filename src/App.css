@@ -486,6 +486,20 @@ body, html, #root {
   border-bottom-style: solid;
 }
 
+/* Unresolved \eqref / \ref: surfaced honestly instead of silently reading (1) */
+.equation-ref-missing {
+  color: #b91c1c;
+  font-weight: 600;
+  cursor: help;
+  border-bottom: 1px dotted #b91c1c;
+  padding: 0 2px;
+}
+
+body.theme-dark .equation-ref-missing {
+  color: #fca5a5;
+  border-bottom-color: #fca5a5;
+}
+
 /* Code & Tables */
 .academic-article pre {
   background-color: var(--bg-code);

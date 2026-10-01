@@ -22,6 +22,9 @@ interface TokenStore {
 
 export function configureMarked(documentBasePath: string = ''): void {
   const renderer = new marked.Renderer();
+  // Duplicate headings would otherwise share one id, making every outline entry
+  // jump to the first occurrence. Suffix repeats with an occurrence counter.
+  const headingIdCounts = new Map<string, number>();
 
   renderer.heading = function (textOrToken: any, level?: any, raw?: any): string {
     const isToken = typeof textOrToken === 'object' && textOrToken !== null;
@@ -29,7 +32,10 @@ export function configureMarked(documentBasePath: string = ''): void {
     const hLevel = isToken ? textOrToken.depth : (level || 1);
     const rawText = isToken ? textOrToken.raw : (raw || text);
     const slug = encodeURIComponent(String(rawText || '').trim().toLowerCase().replace(/\s+/g, '-'));
-    return `<h${hLevel} id="heading-${slug}" data-heading="${encodeURIComponent(String(rawText || '').trim())}">${text}</h${hLevel}>`;
+    const seen = (headingIdCounts.get(slug) || 0) + 1;
+    headingIdCounts.set(slug, seen);
+    const uniqueSlug = seen > 1 ? `${slug}-${seen}` : slug;
+    return `<h${hLevel} id="heading-${uniqueSlug}" data-heading="${encodeURIComponent(String(rawText || '').trim())}">${text}</h${hLevel}>`;
   };
 
   renderer.image = function (hrefOrToken: any, title?: any, text?: any): string {
@@ -124,35 +130,149 @@ export function configureMarked(documentBasePath: string = ''): void {
   });
 }
 
+const PROTECT_PREFIX = '@@MDPROTECT';
+const PROTECT_SUFFIX = '@@';
+
+/**
+ * Replace every region whose content must reach the reader byte-exact with an
+ * opaque sentinel, so the math tokenizer can never rewrite LaTeX that lives
+ * inside code samples or HTML comments. Sentinels contain no '$' or '\\', and
+ * are restored with a replacer FUNCTION so '$$' inside the payload survives.
+ */
+function maskVerbatimRegions(input: string): { masked: string; store: Map<string, string> } {
+  const store = new Map<string, string>();
+  let counter = 0;
+  const mask = (segment: string): string => {
+    const key = `${PROTECT_PREFIX}${counter++}${PROTECT_SUFFIX}`;
+    store.set(key, segment);
+    return key;
+  };
+
+  // 1. Fenced code blocks (``` or ~~~), scanned line-wise so nesting/mismatched
+  //    fence lengths cannot desynchronise the mask.
+  const lines = input.split('\n');
+  const staged: string[] = [];
+  let openFence: string | null = null;
+  let buffer: string[] = [];
+
+  for (const line of lines) {
+    if (openFence === null) {
+      const open = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+      if (open) {
+        openFence = open[1];
+        buffer = [line];
+        continue;
+      }
+      staged.push(line);
+    } else {
+      buffer.push(line);
+      const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (close && close[1][0] === openFence[0] && close[1].length >= openFence.length) {
+        staged.push(mask(buffer.join('\n')));
+        openFence = null;
+        buffer = [];
+      }
+    }
+  }
+  if (openFence !== null) staged.push(mask(buffer.join('\n'))); // unterminated fence
+
+  // 2. Indented code blocks. Per CommonMark an indented chunk can only start
+  //    after a blank line, never as a lazy continuation of a paragraph — that
+  //    guard keeps ordinary indented prose out of the mask.
+  const isIndented = (l: string) => /^(?: {4,}|\t)/.test(l);
+  let text = staged.join('\n');
+  const outLines: string[] = [];
+  let indBuf: string[] = [];
+  const flushIndented = () => {
+    if (indBuf.length) {
+      outLines.push(mask(indBuf.join('\n')));
+      indBuf = [];
+    }
+  };
+  for (const line of text.split('\n')) {
+    const prev = outLines.length ? outLines[outLines.length - 1] : '';
+    const prevBlank = prev.trim() === '';
+    if (isIndented(line) && (prevBlank || indBuf.length > 0)) {
+      indBuf.push(line);
+    } else {
+      flushIndented();
+      outLines.push(line);
+    }
+  }
+  flushIndented();
+  text = outLines.join('\n');
+
+  // 3. HTML comments (including unterminated ones, which swallow to EOF).
+  text = text.replace(/<!--[\s\S]*?(?:-->|$)/g, (m) => mask(m));
+
+  // 4. Inline code spans. Fenced blocks are already masked above, so a plain
+  //    non-greedy backtick pair is safe here and cannot straddle a fence.
+  text = text.replace(/(`+)([\s\S]*?)\1/g, (m) => mask(m));
+
+  return { masked: text, store };
+}
+
+function unmaskVerbatimRegions(text: string, store: Map<string, string>): string {
+  let restored = text;
+  for (const [key, original] of store) {
+    // MUST use a replacer function: a string replacement would interpret '$$'
+    // inside LaTeX code samples as an escaped '$' and silently corrupt them.
+    restored = restored.replace(key, () => original);
+  }
+  return restored;
+}
+
+/** Strip a leading 'eq:' prefix so '\eqref{a}' and '\eqref{eq:a}' address one label. */
+function normalizeLabelKey(label: string): string {
+  return label.trim().replace(/^eq:/, '');
+}
+
+/** Make a label safe for use inside an HTML id attribute. */
+function labelToAnchorId(label: string): string {
+  return `eq-${normalizeLabelKey(label).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+}
+
 function processMathAndCitations(rawMarkdown: string): { sanitizedMarkdown: string; tokens: TokenStore } {
   // Sanitize any stray ASCII control characters (such as backspace \x08) that can break LaTeX engines
   const cleanMarkdown = rawMarkdown.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
+  // Mask code samples / HTML comments BEFORE any math rewriting happens.
+  const { masked, store } = maskVerbatimRegions(cleanMarkdown);
 
   const tokens: TokenStore = {};
   const labelToTagMap = new Map<string, string>();
   let tokenCounter = 0;
   let autoEqNumber = 1;
+  // Numbers already spoken for by a manual \\tag{...}: automatic numbering must
+  // skip them, otherwise a hand-numbered (1) collides with an auto-numbered (1).
+  const claimedNumbers = new Set<string>();
 
   // 1. Process Display Math: extract tags and labels
-  let sanitized = cleanMarkdown.replace(/\$\$([\s\S]*?)\$\$/g, (_, rawMathContent) => {
+  let sanitized = masked.replace(/\$\$([\s\S]*?)\$\$/g, (_, rawMathContent) => {
     let math = rawMathContent.trim();
     
-    // Check for explicit \tag{...}
+    // Check for explicit \\tag{...}
     const tagMatch = math.match(/\\tag\{([^}]+)\}/);
-    // Check for \label{...}
+    // Check for \\label{...}
     const labelMatch = math.match(/\\label\{([^}]+)\}/);
 
     let assignedTag: string | undefined = undefined;
     if (tagMatch) {
-      assignedTag = tagMatch[1].trim();
+      const explicitTag = tagMatch[1].trim();
+      assignedTag = explicitTag;
+      claimedNumbers.add(explicitTag);
       math = math.replace(/\\tag\{[^}]+\}/g, '').trim();
     } else if (labelMatch) {
-      assignedTag = String(autoEqNumber++);
+      // Advance past every number a manual \\tag already claimed.
+      while (claimedNumbers.has(String(autoEqNumber))) autoEqNumber++;
+      const nextTag = String(autoEqNumber++);
+      assignedTag = nextTag;
+      claimedNumbers.add(nextTag);
     }
 
     let labelId: string | undefined = undefined;
     if (labelMatch) {
-      const parsedId = labelMatch[1].trim();
+      const parsedId = normalizeLabelKey(labelMatch[1]);
       labelId = parsedId;
       math = math.replace(/\\label\{[^}]+\}/g, '').trim();
       if (assignedTag) {
@@ -172,15 +292,19 @@ function processMathAndCitations(rawMarkdown: string): { sanitizedMarkdown: stri
 
   // 2. Process \eqref{...} and \ref{...} in prose (both bare or inside $...$)
   sanitized = sanitized.replace(/(?:\$)?\\(eqref|ref)\{([^}]+)\}(?:\$)?/g, (_, cmd, rawLabel) => {
-    const label = rawLabel.trim();
-    const tag = labelToTagMap.get(label) || labelToTagMap.get(label.replace(/^eq:/, '')) || '1';
-    const cleanId = label.replace(/[^a-zA-Z0-9_-]/g, '-');
-    
-    if (cmd === 'eqref') {
-      return `<a class="equation-ref-link" href="#eq-${cleanId}" title="跳转至公式 (${tag})">(${tag})</a>`;
-    } else {
-      return `<a class="equation-ref-link" href="#eq-${cleanId}" title="跳转至公式 ${tag}">${tag}</a>`;
+    const label = normalizeLabelKey(rawLabel);
+    const anchorId = labelToAnchorId(label);
+    const tag = labelToTagMap.get(label);
+
+    if (tag === undefined) {
+      // Unresolved label: flag it honestly instead of masquerading as equation (1).
+      return `<span class="equation-ref-missing" title="未找到标签 {${rawLabel.trim()}}，请检查 \\label 定义">(?)</span>`;
     }
+
+    if (cmd === 'eqref') {
+      return `<a class="equation-ref-link" href="#${anchorId}" title="跳转至公式 (${tag})">(${tag})</a>`;
+    }
+    return `<a class="equation-ref-link" href="#${anchorId}" title="跳转至公式 ${tag}">${tag}</a>`;
   });
 
   // 3. Extract remaining Inline Math ($...$)
@@ -193,15 +317,19 @@ function processMathAndCitations(rawMarkdown: string): { sanitizedMarkdown: stri
     return key;
   });
 
-  return { sanitizedMarkdown: sanitized, tokens };
+  // Restore code samples / comments only after all math rewriting is finished,
+  // so marked receives the author's original bytes.
+  return { sanitizedMarkdown: unmaskVerbatimRegions(sanitized, store), tokens };
 }
 
 function detokenizeMath(html: string, tokens: TokenStore): string {
-  let restoredHtml = html;
+  // marked wraps a lone block token in <p>; a <div> may not live inside a <p>,
+  // so drop the paragraph wrapper BEFORE injecting the equation row.
+  let restoredHtml = html.replace(/<p>(\s*)(@@MATH_DISPLAY_\d+@@)(\s*)<\/p>/g, '$1$2$3');
 
   for (const [key, item] of Object.entries(tokens)) {
     if (item.type === 'display') {
-      const cleanId = item.labelId ? ` id="eq-${item.labelId.replace(/[^a-zA-Z0-9_-]/g, '-')}"` : '';
+      const cleanId = item.labelId ? ` id="${labelToAnchorId(item.labelId)}"` : '';
       const tagHtml = item.tag ? `<span class="math-equation-tag">(${item.tag})</span>` : '';
       
       const rowHtml = `<div class="math-equation-row"${cleanId}>` +
