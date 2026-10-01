@@ -5,6 +5,19 @@ const projectRoot = path.resolve(__dirname, '..');
 const mathjaxNodeDir = path.resolve(projectRoot, 'node_modules', 'mathjax', 'es5');
 const targetPublicDir = path.resolve(projectRoot, 'public', 'mathjax');
 
+// Text-to-diagram engine: ship the UMD build so diagrams work fully offline.
+const mermaidSource = path.resolve(projectRoot, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js');
+const mermaidTargetDir = path.resolve(projectRoot, 'public', 'mermaid');
+const mermaidTarget = path.join(mermaidTargetDir, 'mermaid.min.js');
+if (fs.existsSync(mermaidSource)) {
+  fs.mkdirSync(mermaidTargetDir, { recursive: true });
+  fs.copyFileSync(mermaidSource, mermaidTarget);
+  console.log('\u2713 Successfully copied mermaid.min.js to public/mermaid/');
+} else {
+  console.log('[Diagram] Note: node_modules/mermaid not found yet (run npm install).');
+  console.log('  The app will fall back to the public CDN automatically.');
+}
+
 console.log('[MathJax Offline Packager] Checking local MathJax resources...');
 
 function copyFolderRecursiveSync(source, target) {

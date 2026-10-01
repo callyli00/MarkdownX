@@ -1,4 +1,4 @@
-# MarkdownX (v1.6.1)
+# MarkdownX (v1.7.0)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -21,10 +21,31 @@
   - 顶部中央配备已打开文档下拉管理面板，实时掌握文件存储路径、未保存状态（`•`）并支持多标签一秒切换。
 - **大 M 艺术体全新视觉体系**：配备精心设计的大 M 艺术体（Artistic M）全套桌面多尺寸高分辨率图标及 `.ico` 资源，界面菜单与下拉列表均统一嵌入品牌 Logo。
 - **科学计算代码高亮**：原生内置 `highlight.js`，针对 Fortran、C++、Python、JSON 等工程计算语言深度调优。
+- **文本绘图引擎（Text-to-Diagram）**：原生集成 `mermaid`，在 Markdown 中以 ` ```mermaid ` 围栏直接绘制流程图、时序图、状态图与甘特图，完全离线可用，自动适配纯白/深色/原木三套主题；语法出错时优雅降级为可读源码。
 
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v1.7.0] - 2026-10-01
+
+#### 文本绘图引擎 Text-to-Diagram (Mermaid Integration)
+- **原生 Mermaid 图表渲染**：
+  - 集成 `mermaid` v11.17.2，支持流程图（flowchart）、时序图（sequenceDiagram）、状态图、类图、甘特图、ER 图等全部图表语法。
+  - 编写 ` ```mermaid ` 围栏即在沉浸排版视图中直接绘制，源码模式与打印/PDF 导出同样保留可读回退。
+  - 完全离线：`mermaid.min.js` 由 `postinstall` / `vite` 构建钩子自动内联进 `dist/mermaid/`，断网环境零延迟启动。
+- **与既有渲染管线的严格隔离（架构关键点）**：
+  - 围栏代码块在 v1.6.1 起已被遮蔽机制（`maskVerbatimRegions`）保护，若沿用旧顺序，图表源码会被当作逐字代码显示。故新增 `extractMermaidBlocks()`，在遮蔽之前先将图表提离文本流。
+  - 图表内的 `$\sigma$` 等 LaTeX 片段保持原样，交由 Mermaid 自身解析，互不干扰。
+  - 图表源码经 `escapeHtml` 转义后写入 `data-mermaid-source` 属性，杜绝属性注入。
+- **健壮性与可观测性**：
+  - 语法错误时 `mermaid.render()` 抛错被捕获，自动展开源码回退块并显示红色错误说明，绝不白屏或静默失败。
+  - 未闭合的 ` ```mermaid ` 围栏降级为普通段落，不吞掉后续文档内容。
+  - 每次渲染使用随机 `mmd-` 渲染 ID，连续输入不会发生 ID 冲突。
+  - 主题切换时重新 `initialize()`（default / dark / neutral），图表随主题同步换色。
+- **安全加固**：`securityLevel: 'strict'` 关闭 Mermaid 的 HTML 标签注入能力；CSP `script-src` 增补 `blob:` 以允许其临时 SVG 资源。
+
+---
 
 ### [v1.6.1] - 2026-10-01
 
@@ -363,7 +384,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.6.1_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.7.0_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -374,8 +395,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.6.1_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.6.1_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.7.0_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.7.0_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -385,7 +406,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.6.1_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.7.0_universal.dmg`
 
 ---
 

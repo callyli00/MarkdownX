@@ -10,6 +10,10 @@ src-tauri/target
 public/mathjax/*
 !public/mathjax/README.txt
 
+# Mermaid offline bundle (auto-generated from the npm `mermaid` package)
+public/mermaid/*
+!public/mermaid/README.txt
+
 # Tauri generated ACL schemas (recreated by tauri-build on every build)
 src-tauri/gen/schemas
 

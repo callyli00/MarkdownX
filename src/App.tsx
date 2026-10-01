@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
-import { renderMarkdown, triggerMathJax } from './utils/markdownRenderer';
+import { renderMarkdown, triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
 import './App.css';
 
 interface FileTab {
@@ -473,6 +473,13 @@ export const App: React.FC = () => {
       triggerMathJax(previewRef.current);
     }
   }, [renderedHtml, isSourceMode]);
+
+  // Draw ```mermaid diagrams whenever the preview HTML is rebuilt.
+  useEffect(() => {
+    if (previewRef.current && !isSourceMode) {
+      renderMermaidDiagrams(previewRef.current, appTheme);
+    }
+  }, [renderedHtml, isSourceMode, appTheme]);
 
   // Production build fix: listen for mathjax-ready event when MathJax finishes async loading
   useEffect(() => {
@@ -1487,7 +1494,7 @@ ${texBody}
       {/* 1. Typora Native Top Menu Bar (文件, 编辑, 段落/字体, 视图) */}
       <header className="typora-menubar">
         <div className="menubar-left">
-          <div className="app-logo-wrap" title="MarkdownX v1.6.1"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
+          <div className="app-logo-wrap" title="MarkdownX v1.7.0"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
 
           {/* 文件(F) Menu Dropdown */}
           <div className="menu-item-wrap">
@@ -2521,7 +2528,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.6.1 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.7.0 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。

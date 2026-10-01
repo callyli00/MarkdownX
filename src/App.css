@@ -2208,6 +2208,87 @@ body.theme-dark .conflict-btn-dismiss {
   background-color: rgba(0, 0, 0, 0.06);
 }
 
+/* =========================================
+   Text-to-Diagram: Mermaid Diagrams
+   ========================================= */
+.mermaid-diagram {
+  margin: 1.8em 0;
+  padding: 18px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background-color: var(--bg-surface);
+  text-align: center;
+  overflow-x: auto;
+}
+
+.mermaid-render-target {
+  display: block;
+  min-height: 1.5em;
+}
+
+.mermaid-render-target svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Source stays readable until (or unless) the diagram draws successfully. */
+.mermaid-fallback {
+  display: none;
+  margin: 0 !important;
+  text-align: left;
+  background-color: var(--bg-code) !important;
+}
+
+.mermaid-error-note {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background-color: rgba(239, 68, 68, 0.08);
+  color: #b91c1c;
+  font-size: 12.5px;
+  text-align: left;
+  word-break: break-word;
+}
+
+.mermaid-unavailable::after {
+  content: '图表引擎未加载：请检查离线资源 public/mermaid/ 是否存在';
+  display: block;
+  font-size: 12.5px;
+  color: #b45309;
+}
+
+body.theme-dark .mermaid-error-note {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+body.theme-dark .mermaid-diagram {
+  background-color: #0d131f;
+}
+
+body.theme-dark .mermaid-fallback {
+  background-color: #1e293b !important;
+}
+
+body.theme-sepia .mermaid-diagram {
+  background-color: #f7efe2;
+}
+
+body.theme-sepia .mermaid-fallback {
+  background-color: #efe4d3 !important;
+}
+
+/* Keep diagrams out of the print flow when they failed to render. */
+@media print {
+  .mermaid-diagram {
+    border-color: #d0d7de !important;
+    background-color: #ffffff !important;
+  }
+  .mermaid-error-note {
+    color: #b91c1c !important;
+  }
+}
+
 /* External Reload Toast */
 .external-reload-toast {
   position: fixed;

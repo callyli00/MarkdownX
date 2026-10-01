@@ -13,11 +13,71 @@ hljs.registerLanguage('json', json);
 
 interface TokenStore {
   [key: string]: {
-    type: 'display' | 'inline';
+    type: 'display' | 'inline' | 'mermaid';
     math: string;
     tag?: string;
     labelId?: string;
   };
+}
+
+const MERMAID_PREFIX = '@@MERMAID';
+const MERMAID_SUFFIX = '@@';
+
+/** Escape text for safe interpolation into an HTML text node. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Lift every ```mermaid fence out of the document BEFORE the math tokenizer
+ * runs, because fenced blocks are masked verbatim and would otherwise reach the
+ * reader as literal source. Returns an opaque sentinel per diagram plus the
+ * diagram bodies keyed by index.
+ */
+function extractMermaidBlocks(input: string): {
+  text: string;
+  sources: string[];
+} {
+  const sources: string[] = [];
+  const lines = input.split('\n');
+  const out: string[] = [];
+  let open = false;
+  let buffer: string[] = [];
+  let lang = '';
+
+  for (const line of lines) {
+    if (!open) {
+      const m = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+-]*)[ \t]*$/);
+      // A fence with NO language, or an unknown one, is left untouched for the
+      // verbatim masker so it still renders as an ordinary code sample.
+      if (m && m[2].toLowerCase() === 'mermaid') {
+        open = true;
+        lang = m[1];
+        buffer = [];
+        continue;
+      }
+      out.push(line);
+    } else {
+      const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (close && close[1][0] === lang[0] && close[1].length >= lang.length) {
+        sources.push(buffer.join('\n'));
+        out.push(`${MERMAID_PREFIX}${sources.length - 1}${MERMAID_SUFFIX}`);
+        open = false;
+        buffer = [];
+      } else {
+        buffer.push(line);
+      }
+    }
+  }
+  // Unterminated mermaid fence: emit it as an ordinary code block instead of
+  // swallowing the remainder of the document.
+  if (open) out.push(...buffer);
+
+  return { text: out.join('\n'), sources };
 }
 
 export function configureMarked(documentBasePath: string = ''): void {
@@ -232,12 +292,20 @@ function labelToAnchorId(label: string): string {
   return `eq-${normalizeLabelKey(label).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 }
 
-function processMathAndCitations(rawMarkdown: string): { sanitizedMarkdown: string; tokens: TokenStore } {
+function processMathAndCitations(rawMarkdown: string): {
+  sanitizedMarkdown: string;
+  tokens: TokenStore;
+  diagramSources: string[];
+} {
   // Sanitize any stray ASCII control characters (such as backspace \x08) that can break LaTeX engines
   const cleanMarkdown = rawMarkdown.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 
+  // Diagrams leave the text flow first: fenced blocks are masked verbatim below,
+  // so a ```mermaid block would otherwise be rendered as literal source.
+  const { text: withoutDiagrams, sources: diagramSources } = extractMermaidBlocks(cleanMarkdown);
+
   // Mask code samples / HTML comments BEFORE any math rewriting happens.
-  const { masked, store } = maskVerbatimRegions(cleanMarkdown);
+  const { masked, store } = maskVerbatimRegions(withoutDiagrams);
 
   const tokens: TokenStore = {};
   const labelToTagMap = new Map<string, string>();
@@ -319,13 +387,31 @@ function processMathAndCitations(rawMarkdown: string): { sanitizedMarkdown: stri
 
   // Restore code samples / comments only after all math rewriting is finished,
   // so marked receives the author's original bytes.
-  return { sanitizedMarkdown: unmaskVerbatimRegions(sanitized, store), tokens };
+  return {
+    sanitizedMarkdown: unmaskVerbatimRegions(sanitized, store),
+    tokens,
+    diagramSources
+  };
 }
 
-function detokenizeMath(html: string, tokens: TokenStore): string {
-  // marked wraps a lone block token in <p>; a <div> may not live inside a <p>,
-  // so drop the paragraph wrapper BEFORE injecting the equation row.
-  let restoredHtml = html.replace(/<p>(\s*)(@@MATH_DISPLAY_\d+@@)(\s*)<\/p>/g, '$1$2$3');
+function detokenizeMath(html: string, tokens: TokenStore, diagramSources: string[]): string {
+  // marked wraps a lone block sentinel in <p>; a <div> may not live inside a <p>,
+  // so strip BOTH block-level wrappers before injecting any block markup.
+  let restoredHtml = html.replace(
+    /<p>(\s*)(@@MATH_DISPLAY_\d+@@|@@MERMAID\d+@@)(\s*)<\/p>/g,
+    '$1$2$3'
+  );
+
+  // Replace each diagram sentinel with a container that mermaid.render() can
+  // populate, plus a <pre> fallback so an error still shows readable source.
+  diagramSources.forEach((source, index) => {
+    const diagramHtml =
+      `<div class="mermaid-diagram">` +
+      `<div class="mermaid-render-target" data-mermaid-source="${escapeHtml(source)}"></div>` +
+      `<pre class="mermaid-fallback"><code class="language-mermaid">${escapeHtml(source)}</code></pre>` +
+      `</div>`;
+    restoredHtml = restoredHtml.replace(`${MERMAID_PREFIX}${index}${MERMAID_SUFFIX}`, () => diagramHtml);
+  });
 
   for (const [key, item] of Object.entries(tokens)) {
     if (item.type === 'display') {
@@ -352,9 +438,110 @@ function detokenizeMath(html: string, tokens: TokenStore): string {
 
 export async function renderMarkdown(rawMarkdown: string, documentBasePath: string = ''): Promise<string> {
   configureMarked(documentBasePath);
-  const { sanitizedMarkdown, tokens } = processMathAndCitations(rawMarkdown);
+  const { sanitizedMarkdown, tokens, diagramSources } = processMathAndCitations(rawMarkdown);
   const rawHtml = await marked.parse(sanitizedMarkdown);
-  return detokenizeMath(rawHtml, tokens);
+  return detokenizeMath(rawHtml, tokens, diagramSources);
+}
+
+interface MermaidApi {
+  initialize: (config: Record<string, unknown>) => void;
+  render: (id: string, text: string) => Promise<{ svg: string }>;
+}
+
+let mermaidInitPromise: Promise<void> | null = null;
+let mermaidLoadPromise: Promise<MermaidApi | null> | null = null;
+let mermaidInitialisedTheme: 'light' | 'dark' | 'sepia' | null = null;
+
+/** Load the vendored offline bundle first, then fall back to a CDN. */
+function loadMermaid(): Promise<MermaidApi | null> {
+  if (mermaidLoadPromise) return mermaidLoadPromise;
+  mermaidLoadPromise = new Promise<MermaidApi | null>((resolve) => {
+    const globalMermaid = (window as unknown as { mermaid?: MermaidApi }).mermaid;
+    if (globalMermaid) {
+      resolve(globalMermaid);
+      return;
+    }
+    const sources = ['./mermaid/mermaid.min.js', 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js'];
+    let index = 0;
+    const tryNext = () => {
+      if (index >= sources.length) {
+        resolve(null);
+        return;
+      }
+      const src = sources[index++];
+      const script = document.createElement('script');
+      script.src = src;
+      script.async = true;
+      script.onload = () => {
+        const api = (window as unknown as { mermaid?: MermaidApi }).mermaid;
+        resolve(api || null);
+      };
+      script.onerror = tryNext;
+      document.head.appendChild(script);
+    };
+    tryNext();
+  });
+  return mermaidLoadPromise;
+}
+
+/**
+ * Render every ```mermaid diagram inside `root`. Safe to call repeatedly: the
+ * preview element is replaced wholesale on each keystroke, so each call sees a
+ * fresh set of empty containers. Failures degrade to the visible source block.
+ */
+export async function renderMermaidDiagrams(root: HTMLElement | null, theme: 'light' | 'dark' | 'sepia' = 'light'): Promise<void> {
+  if (!root) return;
+  const targets = Array.from(root.querySelectorAll<HTMLElement>('.mermaid-render-target'));
+  if (targets.length === 0) return;
+
+  const mermaid = await loadMermaid();
+  if (!mermaid) {
+    targets.forEach((el) => el.classList.add('mermaid-unavailable'));
+    return;
+  }
+
+  if (!mermaidInitPromise || mermaidInitialisedTheme !== theme) {
+    mermaidInitialisedTheme = theme;
+    mermaidInitPromise = (async () => {
+      mermaid.initialize({
+        startOnLoad: false,
+        // Offscreen staging root: mermaid measures text for auto-layout, and
+        // rendering into a display:none container yields zero-size diagrams.
+        fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--font-sans-active') || 'sans-serif',
+        theme: theme === 'dark' ? 'dark' : theme === 'sepia' ? 'neutral' : 'default',
+        securityLevel: 'strict',
+        flowchart: { htmlLabels: false, useMaxWidth: true },
+        sequence: { useMaxWidth: true },
+        themeVariables: { fontFamily: 'inherit' }
+      });
+    })();
+  }
+  await mermaidInitPromise;
+
+  for (const target of targets) {
+    const host = target.closest('.mermaid-diagram');
+    const fallback = host ? host.querySelector<HTMLElement>('.mermaid-fallback') : null;
+    const diagramSource = target.getAttribute('data-mermaid-source') || '';
+    if (!diagramSource.trim()) continue;
+
+    const renderId = `mmd-${Math.random().toString(36).slice(2, 10)}`;
+    try {
+      const { svg } = await mermaid.render(renderId, diagramSource);
+      target.innerHTML = svg;
+      target.classList.add('mermaid-rendered');
+      if (fallback) fallback.style.display = 'none';
+    } catch (err) {
+      console.warn('[Mermaid] render failed:', err);
+      target.classList.add('mermaid-error');
+      if (fallback) {
+        fallback.style.display = '';
+        target.insertAdjacentHTML(
+          'afterend',
+          `<div class="mermaid-error-note">图表语法错误，已显示源码：${escapeHtml(String((err as Error)?.message || err))}</div>`
+        );
+      }
+    }
+  }
 }
 
 export async function triggerMathJax(targetElement: HTMLElement | null): Promise<void> {

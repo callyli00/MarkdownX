@@ -11,6 +11,17 @@ function mathjaxLocalPlugin(): Plugin {
     name: "mathjax-local-plugin",
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
+        if (req.url && req.url.startsWith("/mermaid/")) {
+          const filePath = req.url.split("?")[0].replace("/mermaid/", "");
+          const bundled = path.resolve(__dirname, "public", "mermaid", filePath);
+          const fromModules = path.resolve(__dirname, "node_modules", "mermaid", "dist", filePath);
+          const target = fs.existsSync(bundled) ? bundled : (fs.existsSync(fromModules) ? fromModules : "");
+          if (target) {
+            res.setHeader("Content-Type", "application/javascript");
+            return fs.createReadStream(target).pipe(res);
+          }
+        }
+
         if (req.url && req.url.startsWith("/mathjax/")) {
           const filePath = req.url.split("?")[0].replace("/mathjax/", "");
           const localPublicPath = path.resolve(__dirname, "public", "mathjax", filePath);
@@ -40,6 +51,15 @@ function mathjaxLocalPlugin(): Plugin {
           if (!fs.existsSync(publicMathjaxDir)) {
             fs.mkdirSync(publicMathjaxDir, { recursive: true });
           }
+          const mermaidDir = path.resolve(__dirname, "node_modules", "mermaid", "dist");
+          const mermaidPublicDir = path.resolve(__dirname, "public", "mermaid");
+          if (fs.existsSync(path.join(mermaidDir, "mermaid.min.js"))) {
+            if (!fs.existsSync(mermaidPublicDir)) {
+              fs.mkdirSync(mermaidPublicDir, { recursive: true });
+            }
+            fs.copyFileSync(path.join(mermaidDir, "mermaid.min.js"), path.join(mermaidPublicDir, "mermaid.min.js"));
+          }
+
           ["tex-svg.js", "tex-chtml.js"].forEach((file) => {
             const src = path.join(mathjaxDir, file);
             const dst = path.join(publicMathjaxDir, file);
