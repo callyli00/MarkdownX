@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MarkdownX</title>
+
+    <!-- Configure MathJax global options with lifecycle ready hook -->
+    <script>
+      // Clear any corrupted or disabled MathJax menu configurations from localStorage
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('mjx.') || k.includes('MathJax') || k === 'mjx.menu')) {
+            localStorage.removeItem(k);
+          }
+        }
+      } catch {}
+
+      // Get user's preferred MathJax rendering engine (default: svg)
+      let mathEngine = 'svg';
+      try {
+        const storedPrefs = localStorage.getItem('markdownx_app_preferences_v140');
+        if (storedPrefs) {
+          const p = JSON.parse(storedPrefs);
+          if (p.defaultMathEngine) mathEngine = p.defaultMathEngine;
+        } else {
+          const direct = localStorage.getItem('markdownx_math_engine');
+          if (direct) mathEngine = direct;
+        }
+      } catch {}
+
+      window.__MARKDOWNX_MATH_ENGINE__ = mathEngine;
+
+      window.MathJax = {
+        tex: {
+          inlineMath: [['$', '$']],
+          displayMath: [['$$', '$$']],
+          processEscapes: true
+        },
+        svg: {
+          fontCache: 'global'
+        },
+        options: {
+          enableMenu: false, // 彻底禁用公式右键弹出菜单
+          skipHtmlTags: [
+            'script',
+            'noscript',
+            'style',
+            'textarea',
+            'pre',
+            'code'
+          ]
+        },
+        startup: {
+          typeset: false,
+          ready: () => {
+            MathJax.startup.defaultReady();
+            window.__MATHJAX_READY__ = true;
+            window.dispatchEvent(new CustomEvent('mathjax-ready'));
+          }
+        }
+      };
+
+      // Dynamically load MathJax: offline local bundle first, CDN fallback
+      const scriptName = mathEngine === 'chtml' ? 'tex-chtml.js' : 'tex-svg.js';
+      
+      function injectScript(src, onError) {
+        const s = document.createElement('script');
+        s.id = 'MathJax-script';
+        s.async = true;
+        s.src = src;
+        if (onError) s.onerror = onError;
+        document.head.appendChild(s);
+      }
+
+      // Step 1: Try relative path './mathjax/' (works in Tauri standalone dist/ and local bundles)
+      injectScript('./mathjax/' + scriptName, function() {
+        // Step 2: Try root path '/mathjax/' (works in Vite dev server)
+        injectScript('/mathjax/' + scriptName, function() {
+          // Step 3: Fallback to fast jsDelivr CDN
+          injectScript('https://cdn.jsdelivr.net/npm/mathjax@3/es5/' + scriptName, function() {
+            // Step 4: Fallback to cdnjs CDN
+            injectScript('https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/' + scriptName);
+          });
+        });
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

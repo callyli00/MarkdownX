@@ -1,0 +1,34 @@
+{
+  "name": "markdown-x",
+  "private": true,
+  "version": "1.6.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "postinstall": "node -e \"try { require('./scripts/copy-mathjax.cjs'); } catch (e) { console.log('MathJax auto-copy notice:', e.message); }\"",
+    "copy:mathjax": "node scripts/copy-mathjax.cjs",
+    "download:mathjax": "node scripts/download-mathjax.cjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-fs": "^2.0.0",
+    "highlight.js": "^11.9.0",
+    "marked": "^12.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "mathjax": "^3.2.2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.56",
+    "@types/react-dom": "^18.2.19",
+    "@vitejs/plugin-react": "^4.2.1",
+    "typescript": "^5.2.2",
+    "vite": "^5.1.4"
+  }
+}
