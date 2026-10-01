@@ -23,6 +23,30 @@ interface TokenStore {
 const MERMAID_PREFIX = '@@MERMAID';
 const MERMAID_SUFFIX = '@@';
 
+// Mermaid source is self-identifying: a diagram always begins with one of these
+// declarations. Sniffing them lets an UNTAGGED fence (``` on its own line) still
+// render as a diagram, which is how most users paste Mermaid from a chat box.
+const MERMAID_DECLARATIONS = [
+  'graph', 'flowchart', 'sequenceDiagram', 'classDiagram', 'stateDiagram',
+  'stateDiagram-v2', 'erDiagram', 'journey', 'gantt', 'pie', 'mindmap',
+  'timeline', 'gitGraph', 'quadrantChart', 'requirementDiagram', 'C4Context',
+  'sankey-beta', 'xychart-beta', 'block-beta', 'packet-beta', 'kanban',
+  'architecture-beta', 'radar-beta', 'treemap-beta'
+];
+
+/** True when the leading lines look like a Mermaid diagram declaration. */
+function looksLikeMermaid(body: string): boolean {
+  const meaningful = body
+    .split('\n')
+    .map((l) => l.trim())
+    // '%%' introduces a Mermaid comment; '{%%' a directive fence.
+    .filter((l) => l.length > 0 && !l.startsWith('%%'))
+    .slice(0, 3);
+  if (meaningful.length === 0) return false;
+  const head = meaningful[0].split(/[\s:]/)[0].toLowerCase();
+  return MERMAID_DECLARATIONS.includes(head);
+}
+
 /** Escape text for safe interpolation into an HTML text node. */
 function escapeHtml(value: string): string {
   return value
@@ -49,19 +73,39 @@ function extractMermaidBlocks(input: string): {
   let buffer: string[] = [];
   let lang = '';
 
+  // `openLine` keeps the verbatim opening fence so an untagged block can be
+  // re-emitted byte-identically if it turns out not to be a diagram.
+  let pendingFence: { marker: string; openLine: string; body: string[] } | null = null;
+
   for (const line of lines) {
-    if (!open) {
-      const m = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+-]*)[ \t]*$/);
-      // A fence with NO language, or an unknown one, is left untouched for the
-      // verbatim masker so it still renders as an ordinary code sample.
-      if (m && m[2].toLowerCase() === 'mermaid') {
+    if (!open && !pendingFence) {
+      // The info string runs to end-of-line so metadata such as
+      // ```mermaid title="..." is captured whole.
+      const m = line.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+      if (!m) {
+        out.push(line);
+        continue;
+      }
+      const marker = m[1];
+      const info = m[2] || '';
+      // The info string may carry metadata, e.g. ```mermaid title="流程".
+      const infoHead = info.split(/\s+/)[0].toLowerCase();
+
+      if (infoHead === 'mermaid') {
         open = true;
-        lang = m[1];
+        lang = marker;
         buffer = [];
         continue;
       }
-      out.push(line);
-    } else {
+
+      // No/unknown language tag: hold the fence briefly so the body can be
+      // sniffed for a Mermaid declaration. Everything stays byte-identical, so
+      // emitting it unchanged later is always safe.
+      pendingFence = { marker, openLine: line, body: [] };
+      continue;
+    }
+
+    if (open) {
       const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
       if (close && close[1][0] === lang[0] && close[1].length >= lang.length) {
         sources.push(buffer.join('\n'));
@@ -71,11 +115,31 @@ function extractMermaidBlocks(input: string): {
       } else {
         buffer.push(line);
       }
+      continue;
     }
+
+    // Accumulating a pending untagged fence.
+    const pending = pendingFence;
+    if (!pending) continue;
+    const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+    if (close && close[1][0] === pending.marker[0] && close[1].length >= pending.marker.length) {
+      const body = pending.body.join('\n');
+      if (looksLikeMermaid(body)) {
+        sources.push(body);
+        out.push(`${MERMAID_PREFIX}${sources.length - 1}${MERMAID_SUFFIX}`);
+      } else {
+        out.push(pending.openLine, ...pending.body, close[0]);
+      }
+      pendingFence = null;
+      continue;
+    }
+    pending.body.push(line);
   }
-  // Unterminated mermaid fence: emit it as an ordinary code block instead of
-  // swallowing the remainder of the document.
+
+  // Unterminated fence of either kind: emit verbatim rather than swallowing the
+  // rest of the document.
   if (open) out.push(...buffer);
+  if (pendingFence) out.push(pendingFence.openLine, ...pendingFence.body);
 
   return { text: out.join('\n'), sources };
 }
