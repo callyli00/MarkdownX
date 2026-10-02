@@ -1,4 +1,4 @@
-# MarkdownX (v1.8.6)
+# MarkdownX (v1.8.7)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -27,6 +27,17 @@
 
 ## 版本更新履历 (Changelog)
 
+### [v1.8.7] - 2026-10-02
+
+#### 设置弹窗按语义拆分 (Split Settings Modal)
+- **背景**：`文件 > 偏好设置...` 与 `段落/格式 > ⚙️ 自定义排版与字体设置...` 此前打开的是同一个"偏好设置与默认排版配置"混合弹窗——两个入口零区别，且窗口把两类不同性质的内容混在一起（即时排版参数 vs 程序级启动偏好）。
+- **拆分**：弹窗按打开来源显示对应半区，两个入口从此名副其实：
+  - `文件 > 偏好设置...`（及快捷键 `Ctrl+,`）→ 只显示**程序默认启动设置**：启动默认主题 / 启动默认视图 / 公式渲染引擎 / 外部修改监控；
+  - `段落/格式 > ⚙️ 自定义排版与字体设置...` → 只显示**排版三组**：字体族选择 / 字号与间距 / 段落排版格式（对齐、缩进、版心宽度）。
+  - 底部动作按钮（⭐设为程序默认值 / 🔄恢复出厂设置 / 完成）在两个视图中均保留——它们作用于全局，任一上下文使用都合理。
+- 窗口标题随视图切换（"偏好设置 (Preferences)" / "自定义排版与字体设置 (Typography)"），不再造成"点哪个都一样"的困惑。
+
+---
 ### [v1.8.6] - 2026-10-02
 
 #### 菜单栏去重与编辑菜单可靠性修复 (Menu Deduplication & Edit Commands)
@@ -479,7 +490,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.6_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.7_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -490,8 +501,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.8.6_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.6_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.8.7_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.7_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -501,7 +512,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.6_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.7_universal.dmg`
 
 ---
 

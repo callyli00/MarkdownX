@@ -944,6 +944,10 @@ export const App: React.FC = () => {
   });
 
   const [showTypographyModal, setShowTypographyModal] = useState<boolean>(false);
+  // The settings modal holds two different natures of content. Each menu entry
+  // promises one of them, so the opener picks which half is shown: live
+  // document typography, or program-level startup preferences.
+  const [settingsModalView, setSettingsModalView] = useState<'typography' | 'preferences'>('typography');
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
   // Apply typography variables to document root
@@ -1533,6 +1537,7 @@ export const App: React.FC = () => {
           handlePrint();
         } else if (e.key === ',' || e.key === '，') {
           e.preventDefault();
+          setSettingsModalView('preferences');
           setShowTypographyModal(true);
         } else if (e.key === 'w' || e.key === 'W') {
           e.preventDefault();
@@ -2251,7 +2256,7 @@ ${texBody}
       {/* 1. Typora Native Top Menu Bar (文件, 编辑, 段落/字体, 视图) */}
       <header className="typora-menubar">
         <div className="menubar-left">
-          <div className="app-logo-wrap" title="MarkdownX v1.8.6"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
+          <div className="app-logo-wrap" title="MarkdownX v1.8.7"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
 
           {/* 文件(F) Menu Dropdown */}
           <div className="menu-item-wrap">
@@ -2334,7 +2339,7 @@ ${texBody}
                 </div>
 
                 <div className="dropdown-divider" />
-                <div className="dropdown-item" onClick={() => { setShowTypographyModal(true); setActiveMenu(null); }}>
+                <div className="dropdown-item" onClick={() => { setSettingsModalView('preferences'); setShowTypographyModal(true); setActiveMenu(null); }}>
                   <span>偏好设置...</span>
                   <span className="shortcut">Ctrl+,</span>
                 </div>
@@ -2394,7 +2399,7 @@ ${texBody}
             </button>
             {activeMenu === 'format' && (
               <div className="typora-dropdown-menu">
-                <div className="dropdown-item" onClick={() => { setShowTypographyModal(true); setActiveMenu(null); }}>
+                <div className="dropdown-item" onClick={() => { setSettingsModalView('typography'); setShowTypographyModal(true); setActiveMenu(null); }}>
                   <span>⚙️ 自定义排版与字体设置...</span>
                   <span className="shortcut">详细</span>
                 </div>
@@ -3283,7 +3288,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.6 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.7 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。
@@ -3304,7 +3309,7 @@ $$`}
           <div className="typo-modal-box" onClick={(e) => e.stopPropagation()}>
             <div className="typo-modal-header">
               <div className="typo-modal-title">
-                <span>⚙️ 偏好设置与默认排版配置 (Preferences)</span>
+                <span>{settingsModalView === 'preferences' ? '⚙️ 偏好设置 (Preferences)' : '⚙️ 自定义排版与字体设置 (Typography)'}</span>
               </div>
               <button className="typo-modal-close-btn" onClick={() => setShowTypographyModal(false)}>
                 ×
@@ -3312,7 +3317,8 @@ $$`}
             </div>
 
             <div className="typo-modal-body">
-              {/* Group 1: 字体配置 */}
+              {/* Group 1: 字体配置 (typography view only) */}
+              {settingsModalView === 'typography' && (<>
               <div className="typo-config-group">
                 <div className="typo-group-title">字体族选择 (Typography Families)</div>
                 
@@ -3400,7 +3406,10 @@ $$`}
                 </div>
               </div>
 
-              {/* Group 4: 程序默认启动行为配置 */}
+              </>)}
+
+              {/* Group 4: 程序默认启动行为配置 (preferences view only) */}
+              {settingsModalView === 'preferences' && (<>
               <div className="typo-config-group">
                 <div className="typo-group-title">程序默认启动设置 (Default Startup Settings)</div>
                 
@@ -3505,6 +3514,8 @@ $$`}
                 </div>
               </div>
 
+              </>)}
+
               {/* Feedback toast banner */}
               {modalFeedback && (
                 <div style={{
@@ -3521,7 +3532,8 @@ $$`}
                 </div>
               )}
 
-              {/* Group 3: 段落版式与对齐 */}
+              {/* Group 3: 段落版式与对齐 (typography view only) */}
+              {settingsModalView === 'typography' && (<>
               <div className="typo-config-group">
                 <div className="typo-group-title">段落排版格式 (Paragraph Formatting)</div>
 
@@ -3578,6 +3590,7 @@ $$`}
                   </select>
                 </div>
               </div>
+              </>)}
             </div>
 
             <div className="typo-modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
