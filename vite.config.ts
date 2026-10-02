@@ -60,6 +60,18 @@ function mathjaxLocalPlugin(): Plugin {
             fs.copyFileSync(path.join(mermaidDir, "mermaid.min.js"), path.join(mermaidPublicDir, "mermaid.min.js"));
           }
 
+          const mjExtensions = path.resolve(__dirname, "node_modules", "mathjax", "es5", "input", "tex", "extensions");
+          const mjExtensionsTarget = path.resolve(__dirname, "public", "mathjax", "input", "tex", "extensions");
+          if (fs.existsSync(mjExtensions)) {
+            fs.mkdirSync(mjExtensionsTarget, { recursive: true });
+            for (const file of fs.readdirSync(mjExtensions)) {
+              if (!file.endsWith(".js")) continue;
+              const from = path.join(mjExtensions, file);
+              const to = path.join(mjExtensionsTarget, file);
+              if (!fs.existsSync(to)) fs.copyFileSync(from, to);
+            }
+          }
+
           ["tex-svg.js", "tex-chtml.js"].forEach((file) => {
             const src = path.join(mathjaxDir, file);
             const dst = path.join(publicMathjaxDir, file);

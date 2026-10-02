@@ -1,4 +1,4 @@
-# MarkdownX (v1.8.1)
+# MarkdownX (v1.8.2)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -26,6 +26,20 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v1.8.2] - 2026-10-01
+
+#### 公式扩展完整性修复 (MathJax Extension Completeness)
+- **修复 `\boldsymbol` / `\pmb` 等命令渲染为红色报错文字**：
+  - **根因**：`tex-svg.js` / `tex-chtml.js` 主引擎仅内嵌常用宏，`\boldsymbol`、`\pmb`、`\bm`、`\qty`、`\dv`、`\ce` 等由 MathJax 在运行时按需加载 `input/tex/extensions/*.js`。离线打包脚本此前只复制两个主引擎文件，扩展缺失导致加载失败，进而使**整轮 typeset 被拒绝**（`MathJax.typesetPromise` 抛错），页面上所有公式一同退化为原始源码。
+  - **修复**：`scripts/copy-mathjax.cjs` 与 `vite.config.ts` 同步复制全部 35 个 TeX 扩展（556 KB），离线包体积 3.7 MB → 4.2 MB。
+  - 在 `index.html` 中扩展 `tex.autoload` 映射表（**完整保留 MathJax 原生默认项**并追加），启用 `physics`、`mathtools`、`gensymb`、`centernot` 等科研排版常用包；并新增 `\bm` → `\boldsymbol` 宏别名（LaTeX 的 `bm` 包不在 MathJax 内）。
+- **修复 HTML 属性内注入公式标记导致 DOM 结构损坏**：
+  - **根因**：公式分词器在原始 Markdown 上运行，会把 `$...$` 替换为 `<span>` 元素。当公式位于 HTML 属性内（如 `<img alt="... $\pmb{n}$ ...">`），注入的 `<span class="` 会提前终止属性，`<img>` 标签被撕裂成 `math-inline"=""` 之类伪属性；MathJax 随后因 `replaceChild of null` 崩溃，**再次导致全页公式排版中断**。
+  - **修复**：新增 `isInsideHtmlTag()` 守卫，识别标签内部（属性空间）并跳过分词，公式保持字面量原样。该守卫使用"标签起始字符"启发式，确保正文中的 `$a < b$` 这类小于号比较不会被误判。
+- **图注公式排版**：`<figcaption>` 内的行内公式此前因上述 DOM 损坏而整体失效，现随两项修复一并恢复正常。
+
+---
 
 ### [v1.8.1] - 2026-10-01
 
@@ -416,7 +430,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.1_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.2_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -427,8 +441,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.8.1_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.1_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.8.2_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.2_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -438,7 +452,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.1_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.2_universal.dmg`
 
 ---
 

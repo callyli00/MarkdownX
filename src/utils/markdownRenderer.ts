@@ -306,6 +306,29 @@ export function configureMarked(documentBasePath: string = ''): void {
   });
 }
 
+/**
+ * True when `index` sits inside an HTML tag (`<img ... >`), i.e. in attribute
+ * space rather than in a text node.
+ *
+ * This matters because the math tokenizer runs on the raw Markdown, before any
+ * HTML parsing, and it replaces `$..$` with a <span> element. Inside an
+ * attribute that injected markup is catastrophic: `alt="... <span class="`
+ * terminates the attribute early, the tag is shredded, and MathJax later dies
+ * with "replaceChild of null" - taking every later equation down with it. Math
+ * that lives in an attribute can never be typeset anyway (it is attribute text,
+ * not a text node), so it must be left exactly as written.
+ */
+function isInsideHtmlTag(text: string, index: number): boolean {
+  const lastOpen = text.lastIndexOf('<', index - 1);
+  if (lastOpen === -1) return false;
+  const lastClose = text.lastIndexOf('>', index - 1);
+  if (lastClose > lastOpen) return false;
+  // Only a plausible tag opener counts, so "a < b and $x$" is not mistaken for
+  // attribute space.
+  const next = text[lastOpen + 1] || '';
+  return next === '/' || next === '!' || next === '?' || /[A-Za-z]/.test(next);
+}
+
 const PROTECT_PREFIX = '@@MDPROTECT';
 const PROTECT_SUFFIX = '@@';
 
@@ -432,7 +455,9 @@ function processMathAndCitations(rawMarkdown: string): {
   const claimedNumbers = new Set<string>();
 
   // 1. Process Display Math: extract tags and labels
-  let sanitized = masked.replace(/\$\$([\s\S]*?)\$\$/g, (_, rawMathContent) => {
+  let sanitized = masked.replace(/\$\$([\s\S]*?)\$\$/g, (match, rawMathContent, offset, whole) => {
+    // See isInsideHtmlTag: never rewrite math that lives in attribute space.
+    if (isInsideHtmlTag(whole as string, offset as number)) return match;
     let math = rawMathContent.trim();
     
     // Check for explicit \\tag{...}
@@ -492,7 +517,8 @@ function processMathAndCitations(rawMarkdown: string): {
   });
 
   // 3. Extract remaining Inline Math ($...$)
-  sanitized = sanitized.replace(/(?<!\\)\$((?:\\.|[^$])+?)\$/g, (_, inlineMath) => {
+  sanitized = sanitized.replace(/(?<!\\)\$((?:\\.|[^$])+?)\$/g, (match, inlineMath, offset, whole) => {
+    if (isInsideHtmlTag(whole as string, offset as number)) return match;
     const key = `@@MATH_INLINE_${tokenCounter++}@@`;
     tokens[key] = {
       type: 'inline',

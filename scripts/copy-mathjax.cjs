@@ -65,6 +65,18 @@ if (fs.existsSync(mathjaxNodeDir)) {
     console.log('✓ Successfully copied CHTML fonts to public/mathjax/output/chtml/fonts/');
   }
 
+  // 4. Copy the TeX extension set. The combined tex-svg/tex-chtml bundles only
+  //    embed a subset of packages; anything else (\boldsymbol, \bm, \cancel,
+  //    \color, mhchem, physics, ...) is fetched at runtime by the autoload
+  //    extension. Without these files the fetch fails and MathJax rejects the
+  //    WHOLE typeset pass, so every equation on the page degrades to raw text.
+  const extSource = path.join(mathjaxNodeDir, 'input', 'tex', 'extensions');
+  if (fs.existsSync(extSource)) {
+    const extTarget = path.join(targetPublicDir, 'input', 'tex', 'extensions');
+    copyFolderRecursiveSync(extSource, extTarget);
+    console.log('✓ Successfully copied TeX extensions to public/mathjax/input/tex/extensions/');
+  }
+
   console.log('🎉 MathJax offline localization completed! Standalone builds will run 100% offline.');
 } else {
   console.log('[MathJax Offline Packager] Note: node_modules/mathjax not found yet.');

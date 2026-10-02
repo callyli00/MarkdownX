@@ -36,7 +36,39 @@
         tex: {
           inlineMath: [['$', '$']],
           displayMath: [['$$', '$$']],
-          processEscapes: true
+          processEscapes: true,
+          // The combined tex-svg bundle only embeds a subset of TeX packages.
+          // Everything else (boldsymbol, physics, mhchem, ...) is fetched on
+          // first use via `autoload`; the offline packager ships the matching
+          // input/tex/extensions/ directory, so these load from disk.
+          // The stock defaults are preserved verbatim and extended.
+          autoload: {
+            action: ['toggle', 'mathtip', 'texttip'],
+            amscd: [[], ['CD']],
+            bbox: ['bbox'],
+            boldsymbol: ['boldsymbol', 'bm', 'pmb'],
+            braket: ['bra', 'ket', 'braket', 'set', 'Bra', 'Ket', 'Braket', 'Set', 'ketbra', 'Ketbra'],
+            bussproofs: [[], ['prooftree']],
+            cancel: ['cancel', 'bcancel', 'xcancel', 'cancelto'],
+            color: ['color', 'definecolor', 'textcolor', 'colorbox', 'fcolorbox'],
+            enclose: ['enclose'],
+            extpfeil: ['xtwoheadrightarrow', 'xtwoheadleftarrow', 'xmapsto', 'xlongequal', 'xtofrom', 'Newextarrow', 'xrightarrow', 'xleftarrow'],
+            html: ['href', 'class', 'style', 'cssId'],
+            mhchem: ['ce', 'pu'],
+            newcommand: ['newcommand', 'renewcommand', 'newenvironment', 'renewenvironment', 'def', 'let'],
+            unicode: ['unicode'],
+            verb: ['verb'],
+            physics: ['qty', 'dv', 'pdv', 'dd', 'abs', 'norm', 'ev', 'comm', 'anticomm', 'poissonbracket',
+                      'mqty', 'pmqty', 'expval', 'order', 'vb', 'va', 'grad', 'curl', 'laplacian'],
+            mathtools: ['coloneqq', 'mathclap', 'clap', 'dcases', 'xleftrightarrow'],
+            gensymb: ['degree', 'celsius', 'perthousand', 'ohm', 'micro'],
+            centernot: ['centernot']
+          },
+          macros: {
+            // LaTeX's bm package is not part of MathJax; alias it so documents
+            // written for pdflatex still render.
+            bm: ['\\boldsymbol{#1}', 1]
+          }
         },
         svg: {
           fontCache: 'global'
