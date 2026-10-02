@@ -1,4 +1,4 @@
-# MarkdownX (v1.8.4)
+# MarkdownX (v1.8.5)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -27,6 +27,18 @@
 
 ## 版本更新履历 (Changelog)
 
+### [v1.8.5] - 2026-10-02
+
+#### 确定性源码锚点与落点高亮 (Deterministic Source Anchors & Landing Highlight)
+- **双击定位改为"渲染时锚定"，彻底替换文本搜索猜测**：
+  - **旧逻辑的根本缺陷**：定位依赖"把渲染文本折叠后在全文里搜索"，本质是启发式猜测——重复段落、图片 `alt` 复述图注、公式排版变形都会让搜索落到别处，任何文档都可能出现偏差。
+  - **新逻辑**：渲染管线全程记录**精确偏移翻译**（公式/图表/引用重写 + 等长遮蔽哨兵，遮蔽往返对偏移透明）；每个顶层块、每个公式、每个图表容器的生成元素都被刻上其**真实源码区间**（`data-src-start`/`data-src-end`）。双击时读取锚点，并在**该块自己的源码切片内**做折叠对齐，把点击字符映射到确切源码偏移——没有全局搜索，重复文本与公式排版无法再干扰结果。反向（源码→预览）同样按锚点定位。
+- **跳转落点高亮 2.0（"提醒我在哪儿"）**：
+  - 源码视图落点高亮改为**镜像测量真实光标位置**：旧算法按"逻辑行号 × 行高"估算，长段落折行时偏差可达数行；新实现用镜像 div 复刻排版实测光标坐标，折行不再错行。视觉升级为呼吸脉冲 + 光标列指示条，2.5 秒渐隐，滚动时保持贴合。
+  - 反向返回预览时，光标所在块同样闪烁一次，双向落点都可见。
+- **实证**：重复段落（两处各自精确）、表格单元格、列表第二项、代码块、公式行、图注、图片——**13/13 字符级精确**；真实书籍章节（真实 MathJax 排版）**15/15 行级精确**；换行感知测量实测（折行场景实测 250px，旧朴素算法 102px，相差 5 行）。
+
+---
 ### [v1.8.4] - 2026-10-02
 
 #### 出版社公式容器与图形定位修复 (Publisher Math Spans & Figure Navigation)
@@ -458,7 +470,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.4_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.5_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -469,8 +481,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.8.4_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.4_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.8.5_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.5_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -480,7 +492,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.4_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.5_universal.dmg`
 
 ---
 

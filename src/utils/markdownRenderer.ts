@@ -67,35 +67,127 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+interface TranslationPiece { o: number; e: number; s: number; S: number }
+
+/**
+ * Exact offset translation from the reworked Markdown handed to marked back to
+ * the author's bytes on disk. Every preprocessing pass reports its edits here,
+ * so each rendered construct can carry the true source span it came from - the
+ * anchor a deterministic click-to-source lookup needs (no text guessing).
+ */
+export class SourceTranslation {
+  private pieces: TranslationPiece[];
+  constructor(length: number) {
+    this.pieces = [{ o: 0, e: length, s: 0, S: length }];
+  }
+  /** Original-source offset for a position in the current (reworked) text. */
+  map(offset: number): number {
+    const pieces = this.pieces;
+    let lo = 0;
+    let hi = pieces.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (pieces[mid].e <= offset) lo = mid + 1;
+      else hi = mid;
+    }
+    const p = pieces[lo];
+    if (!p) return offset;
+    if (offset <= p.o) return p.s;
+    if (offset >= p.e) return p.S;
+    const span = p.e - p.o;
+    if (span <= 0) return p.s;
+    return p.s + Math.min(p.S - p.s, Math.round(((offset - p.o) / span) * (p.S - p.s)));
+  }
+  /** Record that [start, start+oldLength) became `newLength` characters that
+   *  stand for the original range [srcStart, srcEnd). */
+  replace(start: number, oldLength: number, newLength: number, srcStart: number, srcEnd: number): void {
+    const end = start + oldLength;
+    const delta = newLength - oldLength;
+    const next: TranslationPiece[] = [];
+    for (const p of this.pieces) {
+      if (p.e <= start) { next.push(p); continue; }
+      if (p.o >= end) { next.push({ o: p.o + delta, e: p.e + delta, s: p.s, S: p.S }); continue; }
+      if (p.o < start) next.push({ o: p.o, e: start, s: p.s, S: Math.min(p.S, srcStart) });
+      if (p.e > end) next.push({ o: end + delta, e: p.e + delta, s: Math.max(p.s, srcEnd), S: p.S });
+    }
+    next.push({ o: start, e: start + newLength, s: srcStart, S: srcEnd });
+    next.sort((a, b) => a.o - b.o);
+    this.pieces = next;
+  }
+}
+
+/**
+ * String.replace wrapper that reports every replacement to the translation.
+ * Matches within one call are found in the pre-call text while earlier
+ * replacements shift later positions, so the call tracks its own delta.
+ */
+function trackedReplace(
+  text: string,
+  translation: SourceTranslation,
+  regex: RegExp,
+  replacer: (...args: any[]) => string
+): string {
+  let delta = 0;
+  return text.replace(regex, (...args: any[]) => {
+    const offset = typeof args[args.length - 2] === 'number' ? (args[args.length - 2] as number) : 0;
+    const match = String(args[0] ?? '');
+    const replacement = replacer(...args);
+    if (replacement.length !== match.length) {
+      const at = offset + delta;
+      translation.replace(at, match.length, replacement.length, translation.map(at), translation.map(at + match.length));
+    }
+    delta += replacement.length - match.length;
+    return replacement;
+  });
+}
+
 /**
  * Lift every ```mermaid fence out of the document BEFORE the math tokenizer
  * runs, because fenced blocks are masked verbatim and would otherwise reach the
  * reader as literal source. Returns an opaque sentinel per diagram plus the
  * diagram bodies keyed by index.
  */
+interface MermaidEdit { inStart: number; inEnd: number; outLength: number }
+
 function extractMermaidBlocks(input: string): {
   text: string;
   sources: string[];
+  edits: MermaidEdit[];
 } {
   const sources: string[] = [];
+  const edits: MermaidEdit[] = [];
   const lines = input.split('\n');
-  const out: string[] = [];
+  // Every emitted item remembers the input range it came from, so the lift can
+  // be translated back to the author's bytes exactly.
+  type Item = { text: string; src: [number, number] | null; sentinel?: boolean };
+  const out: Item[] = [];
+  const push = (text: string, src: [number, number] | null = null, sentinel = false) => {
+    out.push(sentinel ? { text, src, sentinel } : { text, src });
+  };
   let open = false;
-  let buffer: string[] = [];
+  let buffer: Item[] = [];
   let lang = '';
   let openLine = '';
+  let openStart = 0;
 
   // `openLine` keeps the verbatim opening fence so an untagged block can be
   // re-emitted byte-identically if it turns out not to be a diagram.
-  let pendingFence: { marker: string; openLine: string; body: string[] } | null = null;
+  let pendingFence: { marker: string; openLine: Item; body: Item[] } | null = null;
+
+  let lineStart = 0;
 
   for (const line of lines) {
+    const lineEnd = lineStart + line.length;
+    const src: [number, number] = [lineStart, lineEnd];
+    const prevStart = lineStart;
+    lineStart = lineEnd + 1;
+
     if (!open && !pendingFence) {
       // The info string runs to end-of-line so metadata such as
       // ```mermaid title="..." is captured whole.
       const m = line.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
       if (!m) {
-        out.push(line);
+        push(line, src);
         continue;
       }
       const marker = m[1];
@@ -107,6 +199,7 @@ function extractMermaidBlocks(input: string): {
         open = true;
         lang = marker;
         openLine = line;
+        openStart = prevStart;
         buffer = [];
         continue;
       }
@@ -114,19 +207,21 @@ function extractMermaidBlocks(input: string): {
       // No/unknown language tag: hold the fence briefly so the body can be
       // sniffed for a Mermaid declaration. Everything stays byte-identical, so
       // emitting it unchanged later is always safe.
-      pendingFence = { marker, openLine: line, body: [] };
+      pendingFence = { marker, openLine: { text: line, src }, body: [] };
       continue;
     }
 
     if (open) {
       const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
       if (close && close[1][0] === lang[0] && close[1].length >= lang.length) {
-        sources.push(buffer.join('\n'));
-        out.push(`${MERMAID_PREFIX}${sources.length - 1}${MERMAID_SUFFIX}`);
+        sources.push(buffer.map((b) => b.text).join('\n'));
+        const key = `${MERMAID_PREFIX}${sources.length - 1}${MERMAID_SUFFIX}`;
+        push(key, null, true);
+        edits.push({ inStart: openStart, inEnd: lineEnd, outLength: key.length });
         open = false;
         buffer = [];
       } else {
-        buffer.push(line);
+        buffer.push({ text: line, src });
       }
       continue;
     }
@@ -136,17 +231,25 @@ function extractMermaidBlocks(input: string): {
     if (!pending) continue;
     const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
     if (close && close[1][0] === pending.marker[0] && close[1].length >= pending.marker.length) {
-      const body = pending.body.join('\n');
+      const body = pending.body.map((b) => b.text).join('\n');
       if (looksLikeMermaid(body)) {
         sources.push(body);
-        out.push(`${MERMAID_PREFIX}${sources.length - 1}${MERMAID_SUFFIX}`);
+        const key = `${MERMAID_PREFIX}${sources.length - 1}${MERMAID_SUFFIX}`;
+        push(key, null, true);
+        edits.push({
+          inStart: pending.openLine.src ? pending.openLine.src[0] : 0,
+          inEnd: lineEnd,
+          outLength: key.length
+        });
       } else {
-        out.push(pending.openLine, ...pending.body, close[0]);
+        push(pending.openLine.text, pending.openLine.src);
+        for (const b of pending.body) push(b.text, b.src);
+        push(close[0], src);
       }
       pendingFence = null;
       continue;
     }
-    pending.body.push(line);
+    pending.body.push({ text: line, src });
   }
 
   // Unterminated fence: NEVER guessed at, NEVER trimmed. The block is re-emitted
@@ -154,16 +257,38 @@ function extractMermaidBlocks(input: string): {
   // swallow the remainder of the document) and followed by an explicit hint, so
   // the author sees exactly what was written and how to fix it.
   if (open) {
-    out.push(openLine, ...buffer, lang, '', MERMAID_UNCLOSED);
+    const anchor: [number, number] = [openStart, openStart];
+    push(openLine, anchor);
+    for (const b of buffer) push(b.text, b.src);
+    push(lang, null);
+    push('', null);
+    push(MERMAID_UNCLOSED, null);
   }
   if (pendingFence) {
-    out.push(pendingFence.openLine, ...pendingFence.body, pendingFence.marker);
-    if (looksLikeMermaid(pendingFence.body.join('\n'))) {
-      out.push('', MERMAID_UNCLOSED);
+    push(pendingFence.openLine.text, pendingFence.openLine.src);
+    for (const b of pendingFence.body) push(b.text, b.src);
+    push(pendingFence.marker, null);
+    if (looksLikeMermaid(pendingFence.body.map((b) => b.text).join('\n'))) {
+      push('', null);
+      push(MERMAID_UNCLOSED, null);
     }
   }
 
-  return { text: out.join('\n'), sources };
+  // Synthesized output (supplied markers, hints) and each sentinel are paired
+  // with the input range they stand for. Sentinels were recorded inline;
+  // anything else without a counterpart anchors to the end of the preceding
+  // ranged item.
+  let lastSrcEnd = 0;
+  for (const item of out) {
+    if (item.src) {
+      lastSrcEnd = item.src[1];
+    } else if (!item.sentinel && item.text) {
+      edits.push({ inStart: lastSrcEnd, inEnd: lastSrcEnd, outLength: item.text.length });
+    }
+  }
+  edits.sort((a, b) => a.inStart - b.inStart || a.inEnd - b.inEnd);
+
+  return { text: out.map((i) => i.text).join('\n'), sources, edits };
 }
 
 /**
@@ -334,9 +459,6 @@ function isInsideHtmlTag(text: string, index: number): boolean {
   return next === '/' || next === '!' || next === '?' || /[A-Za-z]/.test(next);
 }
 
-const PROTECT_PREFIX = '@@MDPROTECT';
-const PROTECT_SUFFIX = '@@';
-
 /**
  * Replace every region whose content must reach the reader byte-exact with an
  * opaque sentinel, so the math tokenizer can never rewrite LaTeX that lives
@@ -346,8 +468,18 @@ const PROTECT_SUFFIX = '@@';
 function maskVerbatimRegions(input: string): { masked: string; store: Map<string, string> } {
   const store = new Map<string, string>();
   let counter = 0;
+  // Length-preserving sentinel: the mask is exactly as long as the region it
+  // hides, so the mask/unmask round trip is transparent to the offset
+  // translation and no position shifts while code is hidden. Control-char
+  // delimiters cannot collide with maths syntax or with the stripped input
+  // (stray control characters were removed before masking). Sub-4-char
+  // segments - a one-character inline code - cannot contain a delimiter pair
+  // the maths passes look for, so they are safely left unmasked.
   const mask = (segment: string): string => {
-    const key = `${PROTECT_PREFIX}${counter++}${PROTECT_SUFFIX}`;
+    if (segment.length < 4) return segment;
+    const id = (counter++).toString(36);
+    if (id.length > segment.length - 2) return segment;
+    const key = `\u0001${id.padStart(segment.length - 2, '0')}\u0001`;
     store.set(key, segment);
     return key;
   };
@@ -440,13 +572,30 @@ function processMathAndCitations(rawMarkdown: string): {
   sanitizedMarkdown: string;
   tokens: TokenStore;
   diagramSources: string[];
+  translation: SourceTranslation;
+  tokenSourceSpans: Record<string, { start: number; end: number }>;
 } {
+  // Every rewriting pass reports its replacements here; the rendered HTML then
+  // carries true source spans, and a click can be answered deterministically.
+  const translation = new SourceTranslation(rawMarkdown.length);
+
   // Sanitize any stray ASCII control characters (such as backspace \x08) that can break LaTeX engines
-  const cleanMarkdown = rawMarkdown.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  const cleanMarkdown = trackedReplace(rawMarkdown, translation, /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, () => '');
 
   // Diagrams leave the text flow first: fenced blocks are masked verbatim below,
   // so a ```mermaid block would otherwise be rendered as literal source.
-  const { text: withoutDiagrams, sources: diagramSources } = extractMermaidBlocks(cleanMarkdown);
+  const { text: withoutDiagrams, sources: diagramSources, edits: mermaidEdits } = extractMermaidBlocks(cleanMarkdown);
+  // Fold each lifted fence into the translation: its sentinel stands for the
+  // whole fence, markers included.
+  let mermaidDelta = 0;
+  for (const mermaidEdit of mermaidEdits) {
+    const at = mermaidEdit.inStart + mermaidDelta;
+    const oldLength = mermaidEdit.inEnd - mermaidEdit.inStart;
+    const srcA = translation.map(at);
+    const srcB = translation.map(at + oldLength);
+    translation.replace(at, oldLength, mermaidEdit.outLength, srcA, srcB);
+    mermaidDelta += mermaidEdit.outLength - oldLength;
+  }
 
   // Mask code samples / HTML comments BEFORE any math rewriting happens.
   const { masked, store } = maskVerbatimRegions(withoutDiagrams);
@@ -525,7 +674,7 @@ function processMathAndCitations(rawMarkdown: string): {
   //    reader as raw backslashes. Rewrite the wrapper into standard delimiters
   //    so every math notation is tokenized by the same machinery.
   const MATH_WRAPPER = /<(span|div)\b[^>]*\bclass\s*=\s*("[^"]*"|'[^']*')[^>]*>([\s\S]*?)<\/\1>/gi;
-  let sanitized = masked.replace(MATH_WRAPPER, (match, tagName, quotedClass, body, offset, whole) => {
+  let sanitized = trackedReplace(masked, translation, MATH_WRAPPER, (match: string, tagName: string, quotedClass: string, body: string, offset: number, whole: string): string => {
     // See isInsideHtmlTag: never rewrite math in attribute space.
     if (isInsideHtmlTag(whole, offset)) return match;
     const classes = String(quotedClass).slice(1, -1).trim().toLowerCase().split(/\s+/);
@@ -553,11 +702,11 @@ function processMathAndCitations(rawMarkdown: string): {
   // 2. Display delimiters: '$$...$$' and the LaTeX-native '\[...\]' - both the
   //    forms step 1 produced and the ones the author wrote directly.
   for (const delims of displayDelimiters) {
-    sanitized = sanitized.replace(delims, tokenizeDisplayMath as (...args: any[]) => string);
+    sanitized = trackedReplace(sanitized, translation, delims, tokenizeDisplayMath as (...args: any[]) => string);
   }
 
   // 3. Process \eqref{...} and \ref{...} in prose (both bare or inside $...$)
-  sanitized = sanitized.replace(/(?:\$)?\\(eqref|ref)\{([^}]+)\}(?:\$)?/g, (_, cmd, rawLabel) => {
+  sanitized = trackedReplace(sanitized, translation, /(?:\$)?\\(eqref|ref)\{([^}]+)\}(?:\$)?/g, (_, cmd: string, rawLabel: string) => {
     const label = normalizeLabelKey(rawLabel);
     const anchorId = labelToAnchorId(label);
     const tag = labelToTagMap.get(label);
@@ -585,23 +734,44 @@ function processMathAndCitations(rawMarkdown: string): {
     };
     return key;
   };
-  sanitized = sanitized.replace(/(?<!\\)\$((?:\\.|[^$])+?)\$/g, tokenizeInlineMath);
-  sanitized = sanitized.replace(/(?<!\\)\\\(([\s\S]*?)\\\)/g, tokenizeInlineMath);
+  sanitized = trackedReplace(sanitized, translation, /(?<!\\)\$((?:\\.|[^$])+?)\$/g, tokenizeInlineMath);
+  sanitized = trackedReplace(sanitized, translation, /(?<!\\)\\\(([\s\S]*?)\\\)/g, tokenizeInlineMath);
 
   // Restore code samples / comments only after all math rewriting is finished,
-  // so marked receives the author's original bytes.
-  return {
-    sanitizedMarkdown: unmaskVerbatimRegions(sanitized, store),
-    tokens,
-    diagramSources
+  // so marked receives the author's original bytes. Masks were length
+  // preserving, so this round trip is transparent to the translation.
+  const sanitizedMarkdown = unmaskVerbatimRegions(sanitized, store);
+
+  // Anchor every sentinel to the source text it stands for: find it in the
+  // final markdown, then translate through every recorded edit.
+  const tokenSourceSpans: Record<string, { start: number; end: number }> = {};
+  const anchor = (key: string) => {
+    const at = sanitizedMarkdown.indexOf(key);
+    if (at === -1) return;
+    tokenSourceSpans[key] = { start: translation.map(at), end: translation.map(at + key.length) };
   };
+  for (const key of Object.keys(tokens)) anchor(key);
+  diagramSources.forEach((_, index) => anchor(`${MERMAID_PREFIX}${index}${MERMAID_SUFFIX}`));
+
+  return { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans };
 }
 
-function detokenizeMath(html: string, tokens: TokenStore, diagramSources: string[]): string {
+function detokenizeMath(
+  html: string,
+  tokens: TokenStore,
+  diagramSources: string[],
+  tokenSourceSpans: Record<string, { start: number; end: number }>
+): string {
+  const srcAttr = (key: string): string => {
+    const span = tokenSourceSpans[key];
+    return span ? ` data-src-start="${span.start}" data-src-end="${span.end}"` : '';
+  };
+
   // marked wraps a lone block sentinel in <p>; a <div> may not live inside a <p>,
-  // so strip BOTH block-level wrappers before injecting any block markup.
+  // so strip BOTH block-level wrappers before injecting any block markup. The
+  // wrapper may now carry a source anchor, hence the attribute-tolerant match.
   let restoredHtml = html.replace(
-    /<p>(\s*)(@@MATH_DISPLAY_\d+@@|@@MERMAID\d+@@)(\s*)<\/p>/g,
+    /<p(?:\s[^>]*)?>(\s*)(@@MATH_DISPLAY_\d+@@|@@MERMAID\d+@@)(\s*)<\/p>/g,
     '$1$2$3'
   );
 
@@ -609,7 +779,7 @@ function detokenizeMath(html: string, tokens: TokenStore, diagramSources: string
   // populate, plus a <pre> fallback so an error still shows readable source.
   diagramSources.forEach((source, index) => {
     const diagramHtml =
-      `<div class="mermaid-diagram">` +
+      `<div class="mermaid-diagram"${srcAttr(`${MERMAID_PREFIX}${index}${MERMAID_SUFFIX}`)}>` +
       `<div class="mermaid-render-target" data-mermaid-source="${escapeHtml(source)}"></div>` +
       `<pre class="mermaid-fallback"><code class="language-mermaid">${escapeHtml(source)}</code></pre>` +
       `</div>`;
@@ -622,7 +792,7 @@ function detokenizeMath(html: string, tokens: TokenStore, diagramSources: string
       const tagHtml = item.tag ? `<span class="math-equation-tag">(${item.tag})</span>` : '';
       
       const texAttr = item.math ? ` data-tex-source="${escapeHtml(item.math)}"` : '';
-      const rowHtml = `<div class="math-equation-row"${cleanId}${texAttr}>` +
+      const rowHtml = `<div class="math-equation-row"${cleanId}${texAttr}${srcAttr(key)}>` +
         `<div class="math-equation-content">$$${item.math}$$</div>` +
         `${tagHtml}` +
         `</div>`;
@@ -635,7 +805,7 @@ function detokenizeMath(html: string, tokens: TokenStore, diagramSources: string
       // data-tex-source lets the preview->source mapper put the TeX back when it
       // probes a typeset formula (MathJax glyphs no longer match the source).
       const inlineTexAttr = item.math ? ` data-tex-source="${escapeHtml(item.math)}"` : '';
-      const inlineMathHtml = `<span class="math-inline"${inlineTexAttr}>$${item.math}$</span>`;
+      const inlineMathHtml = `<span class="math-inline"${inlineTexAttr}${srcAttr(key)}>$${item.math}$</span>`;
       restoredHtml = restoredHtml.replace(key, () => inlineMathHtml);
     }
   }
@@ -645,9 +815,36 @@ function detokenizeMath(html: string, tokens: TokenStore, diagramSources: string
 
 export async function renderMarkdown(rawMarkdown: string, documentBasePath: string = ''): Promise<string> {
   configureMarked(documentBasePath);
-  const { sanitizedMarkdown, tokens, diagramSources } = processMathAndCitations(rawMarkdown);
-  const rawHtml = await marked.parse(sanitizedMarkdown);
-  const html = detokenizeMath(rawHtml, tokens, diagramSources);
+  const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans } =
+    processMathAndCitations(rawMarkdown);
+
+  // Render each top-level block on its own, then stamp that block's TRUE source
+  // span onto its first tag. Click-to-source mapping then reads an anchor
+  // instead of searching for rendered text: deterministic for every document -
+  // repeated paragraphs and duplicate captions included.
+  const lexed = marked.lexer(sanitizedMarkdown) as any[];
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const token of lexed) {
+    const raw = token && typeof token.raw === 'string' ? token.raw : '';
+    const start = cursor;
+    cursor += raw.length;
+    let segment = String(marked.parser([token]));
+    if (raw) {
+      const spanStart = translation.map(start);
+      const spanEnd = translation.map(start + raw.length);
+      if (spanEnd > spanStart) {
+        segment = segment.replace(
+          /^(\s*<[a-zA-Z][a-zA-Z0-9:-]*)/,
+          `$1 data-src-start="${spanStart}" data-src-end="${spanEnd}"`
+        );
+      }
+    }
+    parts.push(segment);
+  }
+  const rawHtml = parts.join('');
+
+  const html = detokenizeMath(rawHtml, tokens, diagramSources, tokenSourceSpans);
   // Last step: raw HTML image sources can only be rewritten once the markup is
   // final, since the Markdown path resolves its own images earlier.
   return resolveRawHtmlImageSources(html, documentBasePath);

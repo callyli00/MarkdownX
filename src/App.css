@@ -361,29 +361,95 @@ body, html, #root {
 }
 
 /* Landing highlight: marks the line a preview double-click jumped to, so the
-   caret is findable in a wall of text. Fades out on its own. */
+   caret is findable in a wall of text. Two quick pulses, then it fades out on
+   its own; a tick below the exact caret column pinpoints the spot. */
 .source-caret-flash {
   position: absolute;
   pointer-events: none;
   z-index: 2;
   border-radius: 3px;
-  background-color: rgba(9, 105, 218, 0.22);
-  box-shadow: inset 3px 0 0 0 var(--color-primary);
-  animation: sourceCaretFlash 1.6s ease-out forwards;
+  background-color: rgba(9, 105, 218, 0.30);
+  box-shadow:
+    inset 3px 0 0 0 var(--color-primary),
+    0 0 0 1px rgba(9, 105, 218, 0.35);
+  animation: sourceCaretFlash 2.5s ease-out forwards;
 }
 
 @keyframes sourceCaretFlash {
-  0% { opacity: 1; }
-  70% { opacity: 0.85; }
+  0% { opacity: 0; }
+  7% { opacity: 1; }
+  15% { opacity: 0.45; }
+  23% { opacity: 1; }
+  70% { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+
+.source-caret-tick {
+  position: absolute;
+  width: 3px;
+  border-radius: 2px;
+  background-color: var(--color-primary);
+  pointer-events: none;
+  z-index: 3;
+  transform-origin: top;
+  animation: sourceCaretTick 2.5s ease-out forwards;
+}
+
+@keyframes sourceCaretTick {
+  0% { opacity: 0; transform: scaleY(0.3); }
+  10% { opacity: 1; transform: scaleY(1); }
+  75% { opacity: 1; }
   100% { opacity: 0; }
 }
 
 body.theme-dark .source-caret-flash {
-  background-color: rgba(56, 189, 248, 0.26);
+  background-color: rgba(56, 189, 248, 0.32);
+  box-shadow:
+    inset 3px 0 0 0 var(--color-primary),
+    0 0 0 1px rgba(56, 189, 248, 0.4);
 }
 
 body.theme-sepia .source-caret-flash {
-  background-color: rgba(180, 83, 9, 0.24);
+  background-color: rgba(180, 83, 9, 0.28);
+  box-shadow:
+    inset 3px 0 0 0 var(--color-primary),
+    0 0 0 1px rgba(180, 83, 9, 0.35);
+}
+
+/* Returning from the source view: the block that holds the caret pulses once,
+   so the reader's eye lands where the edit happened. */
+.jump-target-flash {
+  border-radius: 6px;
+  animation: jumpTargetFlash 2.5s ease-out forwards;
+}
+
+@keyframes jumpTargetFlash {
+  0% { background-color: transparent; }
+  12% { background-color: rgba(9, 105, 218, 0.16); }
+  55% { background-color: rgba(9, 105, 218, 0.09); }
+  100% { background-color: transparent; }
+}
+
+body.theme-dark .jump-target-flash {
+  animation: jumpTargetFlashDark 2.5s ease-out forwards;
+}
+
+@keyframes jumpTargetFlashDark {
+  0% { background-color: transparent; }
+  12% { background-color: rgba(56, 189, 248, 0.20); }
+  55% { background-color: rgba(56, 189, 248, 0.10); }
+  100% { background-color: transparent; }
+}
+
+body.theme-sepia .jump-target-flash {
+  animation: jumpTargetFlashSepia 2.5s ease-out forwards;
+}
+
+@keyframes jumpTargetFlashSepia {
+  0% { background-color: transparent; }
+  12% { background-color: rgba(180, 83, 9, 0.16); }
+  55% { background-color: rgba(180, 83, 9, 0.08); }
+  100% { background-color: transparent; }
 }
 
 .typora-fullscreen-textarea {

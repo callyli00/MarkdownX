@@ -267,15 +267,17 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
 /** Characters that mark up the source but never survive into rendered text. */
 const MATCH_NOISE = /[#*_`>|[\]()!~\\=+\-$]/;
 
+/** One folded character, or '' when the character never survives into text. */
+function foldChar(ch: string): string {
+  if (ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t' || ch === '\u00A0') return '';
+  if (MATCH_NOISE.test(ch)) return '';
+  return ch.toLowerCase();
+}
+
 /** Fold a string for comparison: drop whitespace and Markdown syntax, lower-case. */
 export function foldForMatch(text: string): string {
   let out = '';
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t' || ch === '\u00A0') continue;
-    if (MATCH_NOISE.test(ch)) continue;
-    out += ch.toLowerCase();
-  }
+  for (let i = 0; i < text.length; i++) out += foldChar(text[i]);
   return out;
 }
 
@@ -384,6 +386,23 @@ export function sourceOffsetForElement(
   root: HTMLElement | null,
   point?: { x: number; y: number }
 ): number | null {
+  // 1) Deterministic anchors (v1.8.5): the block's TRUE source span is stamped
+  //    on the element. Read it, then refine to the clicked character inside
+  //    that block's own slice - a bounded alignment, not a document search.
+  const anchor = anchorRangeOf(start, root);
+  if (anchor) {
+    // A click on the artwork itself lands on the <img> tag, not the caption.
+    const img = start.closest('img');
+    if (img && anchor.el.contains(img)) {
+      const imgAt = source.indexOf('<img', anchor.start);
+      if (imgAt !== -1 && (anchor.end <= anchor.start || imgAt < anchor.end)) return imgAt;
+    }
+    const refined = refineWithinAnchor(anchor.el, source, anchor.start, anchor.end, point);
+    return refined ?? anchor.start;
+  }
+
+  // 2) Legacy fallback for renders without anchors (older HTML, exotic blocks):
+  //    fold-and-search, innermost block first.
   const index = getSourceIndex(source);
   let node: HTMLElement | null = start;
 
@@ -418,6 +437,278 @@ export function sourceOffsetForElement(
       }
     }
     node = node.parentElement;
+  }
+  return null;
+}
+
+/**
+ * Deterministic click-to-source resolution (v1.8.5). The renderer stamps every
+ * top-level block - and every generated formula or diagram - with the TRUE
+ * source span it was built from (data-src-start / data-src-end). A click reads
+ * the anchor of its innermost enclosing block and, within that block, aligns
+ * the clicked character against the block's own source slice. No global text
+ * search is involved, so repeated paragraphs and duplicate captions cannot
+ * deflect the answer.
+ */
+function anchorRangeOf(el: HTMLElement, root: HTMLElement | null): { el: HTMLElement; start: number; end: number } | null {
+  let node: HTMLElement | null = el;
+  while (node && node !== root) {
+    const attr = node.getAttribute('data-src-start');
+    if (attr !== null) {
+      const start = Number(attr);
+      const endAttr = Number(node.getAttribute('data-src-end'));
+      if (Number.isFinite(start) && start >= 0) {
+        return { el: node, start, end: Number.isFinite(endAttr) && endAttr >= start ? endAttr : start };
+      }
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/**
+ * Measure where the caret at `pos` actually sits inside a textarea, in CONTENT
+ * coordinates (padding included, scroll excluded). A mirror div replicating the
+ * textarea's box carries the text up to `pos` plus a zero-width marker, so the
+ * answer is correct even when long paragraphs wrap - logical-line arithmetic
+ * silently drifts the moment one line folds onto two.
+ */
+export function measureTextareaCaret(
+  ta: HTMLTextAreaElement,
+  pos: number
+): { top: number; caretLeft: number; height: number } {
+  const cs = window.getComputedStyle(ta);
+  const mirror = document.createElement('div');
+  const copied = [
+    'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'lineHeight',
+    'textTransform', 'wordSpacing', 'textIndent', 'tabSize',
+    'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth'
+  ];
+  for (const prop of copied) {
+    (mirror.style as unknown as Record<string, string>)[prop] = cs.getPropertyValue(
+      prop.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase())
+    );
+  }
+  mirror.style.position = 'absolute';
+  mirror.style.left = '-10000px';
+  mirror.style.top = '0';
+  mirror.style.visibility = 'hidden';
+  mirror.style.boxSizing = cs.boxSizing || 'border-box';
+  mirror.style.whiteSpace = 'pre-wrap';
+  mirror.style.overflowWrap = 'break-word';
+  mirror.style.wordBreak = cs.wordBreak || 'break-word';
+  mirror.style.width = `${ta.clientWidth}px`;
+  mirror.textContent = ta.value.slice(0, Math.max(0, Math.min(pos, ta.value.length)));
+  const marker = document.createElement('span');
+  marker.textContent = '\u200B';
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const fallbackLineHeight = parseFloat(cs.lineHeight);
+  const height = Number.isFinite(fallbackLineHeight) && fallbackLineHeight > 0
+    ? fallbackLineHeight
+    : marker.offsetHeight || 24;
+  // The inline marker reports its own glyph box, not the full line box; lift
+  // the result by the half-leading so the band covers the visual line exactly.
+  const halfLeading = Math.max(0, (height - (marker.offsetHeight || height)) / 2);
+  const result = { top: marker.offsetTop - halfLeading, caretLeft: marker.offsetLeft, height };
+  document.body.removeChild(mirror);
+  return result;
+}
+
+/** The first anchor inside `el` (used for the reverse direction). */
+function firstAnchorIn(el: HTMLElement): { start: number; end: number } | null {
+  const holder = el.matches('[data-src-start]') ? el : (el.querySelector('[data-src-start]') as HTMLElement | null);
+  if (!holder) return null;
+  const start = Number(holder.getAttribute('data-src-start'));
+  if (!Number.isFinite(start) || start < 0) return null;
+  const endAttr = Number(holder.getAttribute('data-src-end'));
+  return { start, end: Number.isFinite(endAttr) && endAttr >= start ? endAttr : start };
+}
+
+/** Fold a source slice, skipping HTML tag interiors (never visible text). */
+function foldSourceRange(source: string, start: number, end: number, skipTags: boolean): { folded: string; map: number[] } {
+  const chars: string[] = [];
+  const map: number[] = [];
+  const stop = Math.min(source.length, Math.max(start, end));
+  let i = Math.max(0, start);
+  while (i < stop) {
+    const ch = source[i];
+    if (skipTags && ch === '<' && /[A-Za-z/!?]/.test(source[i + 1] || '')) {
+      const close = source.indexOf('>', i);
+      if (close !== -1 && close - i < 4000) {
+        i = close + 1;
+        continue;
+      }
+    }
+    const f = foldChar(ch);
+    if (f) {
+      chars.push(f);
+      map.push(i);
+    }
+    i++;
+  }
+  return { folded: chars.join(''), map };
+}
+
+function foldWithMap(text: string): { folded: string; map: number[] } {
+  const chars: string[] = [];
+  const map: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const f = foldChar(text[i]);
+    if (f) {
+      chars.push(f);
+      map.push(i);
+    }
+  }
+  return { folded: chars.join(''), map };
+}
+
+/** Count of folded characters at raw positions strictly before `limit`. */
+function foldCountBefore(map: number[], limit: number): number {
+  let lo = 0;
+  let hi = map.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (map[mid] < limit) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Rendered text of a block with generated chrome removed and every typeset
+ * formula replaced by the TeX it was built from, plus the position of the
+ * clicked character inside that text.
+ */
+function buildBlockText(block: HTMLElement, click: { node: Node; offset: number } | null): { text: string; clickAt: number } {
+  let out = '';
+  let clickAt = -1;
+  const checkClick = (node: Node, extra: number) => {
+    if (click && (click.node === node || (node.nodeType === Node.ELEMENT_NODE && node.contains(click.node)))) {
+      clickAt = out.length + extra;
+    }
+  };
+  const visit = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent || '';
+      checkClick(node, Math.min(Math.max(click ? click.offset : 0, 0), text.length));
+      out += text;
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node as HTMLElement;
+    const tag = el.tagName;
+    if (tag === 'BUTTON' || tag === 'SCRIPT' || tag === 'STYLE') return;
+    if (el.classList.contains('code-block-header') || el.classList.contains('math-equation-tag')) return;
+    if (el.classList.contains('mermaid-unclosed-hint') || el.classList.contains('mermaid-error-note')) return;
+    if (el.style && el.style.display === 'none') return;
+    const tex = el.getAttribute('data-tex-source');
+    if (tex !== null && (el.classList.contains('math-inline') || el.classList.contains('math-equation-row'))) {
+      checkClick(el, 1);
+      out += tex;
+      return;
+    }
+    const diagramSource = el.getAttribute('data-mermaid-source');
+    if (diagramSource !== null) {
+      checkClick(el, 0);
+      out += diagramSource;
+      return;
+    }
+    for (const child of Array.from(el.childNodes)) visit(child);
+  };
+  for (const child of Array.from(block.childNodes)) visit(child);
+  return { text: out, clickAt };
+}
+
+/**
+ * Greedy fold-space alignment: walk both folded strings; on a mismatch skip
+ * whichever side's next occurrence of the other's character lies nearer. The
+ * source side carries markup the rendered side never shows, and the rendered
+ * side carries generated chrome, so both skip directions are needed. Returns
+ * the source fold index for each processed rendered fold index (-1 = unmapped).
+ */
+function alignFolded(foldedRendered: string, foldedSource: string): Int32Array {
+  const map = new Int32Array(foldedRendered.length).fill(-1);
+  let i = 0;
+  let j = 0;
+  while (i < foldedRendered.length && j < foldedSource.length) {
+    if (foldedRendered[i] === foldedSource[j]) {
+      map[i] = j;
+      i++;
+      j++;
+      continue;
+    }
+    const nextInSource = foldedSource.indexOf(foldedRendered[i], j);
+    const nextInRendered = foldedRendered.indexOf(foldedSource[j], i);
+    if (nextInSource === -1 && nextInRendered === -1) break;
+    if (nextInRendered === -1 || (nextInSource !== -1 && nextInSource - j <= nextInRendered - i)) {
+      j = nextInSource;
+    } else {
+      i = nextInRendered;
+    }
+  }
+  return map;
+}
+
+/** The click position (text node + offset) inside `block`, if determinable. */
+function locateClickIn(block: HTMLElement, point: { x: number; y: number } | undefined): { node: Node; offset: number } | null {
+  try {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      if (block.contains(range.startContainer) && range.startContainer.nodeType === Node.TEXT_NODE) {
+        return { node: range.startContainer, offset: range.startOffset };
+      }
+    }
+  } catch {
+    /* fall through to the point */
+  }
+  if (!point) return null;
+  const caretFromPoint = (document as Document & {
+    caretRangeFromPoint?: (cx: number, cy: number) => Range | null;
+  }).caretRangeFromPoint;
+  if (!caretFromPoint) return null;
+  try {
+    const range = caretFromPoint.call(document, point.x, point.y);
+    if (range && block.contains(range.startContainer)) {
+      return { node: range.startContainer, offset: range.startOffset };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Map the clicked character inside an anchored block to its exact source
+ * offset, aligning folded rendered text against the block's own source slice.
+ * Returns null when no reliable alignment exists; the caller then falls back
+ * to the block start, which is still exact at block granularity.
+ */
+function refineWithinAnchor(
+  block: HTMLElement,
+  source: string,
+  start: number,
+  end: number,
+  point?: { x: number; y: number }
+): number | null {
+  const click = locateClickIn(block, point);
+  if (!click) return null;
+  const built = buildBlockText(block, click);
+  if (built.clickAt < 0) return null;
+  const skipTags = !block.classList.contains('code-block-container');
+  const sourceFold = foldSourceRange(source, start, end, skipTags);
+  if (!sourceFold.folded.length) return null;
+  const renderedFold = foldWithMap(built.text);
+  if (!renderedFold.folded.length) return null;
+  const aligned = alignFolded(renderedFold.folded, sourceFold.folded);
+  const clickFold = foldCountBefore(renderedFold.map, built.clickAt);
+  // The caret sits before the character the user pointed at, so map THAT
+  // character; walk back only when it has no aligned counterpart.
+  for (let k = Math.min(clickFold, aligned.length - 1); k >= 0; k--) {
+    const j = aligned[k];
+    if (j >= 0 && j < sourceFold.map.length) return sourceFold.map[j];
   }
   return null;
 }
@@ -462,11 +753,15 @@ export function blockForSourceOffset(root: HTMLElement, source: string, offset: 
   let cursor = 0;
   let target: HTMLElement | null = null;
   for (const el of Array.from(root.children) as HTMLElement[]) {
-    const probe = probeTextOf(el);
-    if (!probe.trim()) continue;
-    const at = locateRenderedText(index, probe, cursor);
-    if (at === null) continue;
-    cursor = at;
+    const anchor = firstAnchorIn(el);
+    let at: number | null = anchor ? anchor.start : null;
+    if (at === null) {
+      const probe = probeTextOf(el);
+      if (!probe.trim()) continue;
+      at = locateRenderedText(index, probe, cursor);
+      if (at === null) continue;
+    }
+    cursor = Math.max(cursor, at);
     if (at <= offset) target = el;
     else break; // children are in document order
   }
@@ -523,7 +818,16 @@ export const App: React.FC = () => {
 
   // Where the source caret just landed, painted as a short-lived highlight so
   // the writer can actually see the jump target instead of hunting for it.
-  const [caretFlash, setCaretFlash] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
+  const [caretFlash, setCaretFlash] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+    tickLeft: number;
+  } | null>(null);
+  // The line's position in CONTENT coordinates, so the highlight can stay glued
+  // to it if the writer scrolls while it is still fading.
+  const flashAnchorRef = useRef<{ paneTop: number; contentTop: number } | null>(null);
 
   // Caret offset to apply when the source view opens, and the position to
   // reveal again when the preview comes back (Typora-style continuity). The
@@ -756,25 +1060,27 @@ export const App: React.FC = () => {
       ta.focus();
       ta.setSelectionRange(pos, pos);
       const style = window.getComputedStyle(ta);
-      const lineHeight = parseFloat(style.lineHeight) || 28;
-      const paddingTop = parseFloat(style.paddingTop) || 0;
       const paddingLeft = parseFloat(style.paddingLeft) || 0;
       const paddingRight = parseFloat(style.paddingRight) || 0;
-      const lineIndex = ta.value.slice(0, pos).split('\n').length - 1;
-      // Absolute placement (not a delta): the target line lands one third down
-      // the viewport regardless of any scroll offset the textarea already has.
-      ta.scrollTop = Math.max(0, paddingTop + lineIndex * lineHeight - ta.clientHeight / 3);
+      // Real measured caret geometry, so wrapped paragraphs cannot shift the
+      // highlight onto a neighbouring line.
+      const caret = measureTextareaCaret(ta, pos);
+      // Place the target roughly one third down the viewport, independently of
+      // any scroll offset the textarea already had.
+      ta.scrollTop = Math.max(0, caret.top - ta.clientHeight / 3);
 
       // A caret alone is nearly invisible in a wall of text; flash the line it
-      // landed on so the jump target is unmistakable.
+      // landed on, plus a tick under the exact column.
       const pane = ta.parentElement;
       if (pane) {
-        const top = ta.offsetTop + paddingTop + lineIndex * lineHeight - ta.scrollTop;
+        const paneTop = ta.offsetTop;
+        flashAnchorRef.current = { paneTop, contentTop: caret.top };
         setCaretFlash({
-          top,
+          top: paneTop + caret.top - ta.scrollTop,
           left: ta.offsetLeft + paddingLeft,
           width: Math.max(0, ta.clientWidth - paddingLeft - paddingRight),
-          height: lineHeight
+          height: caret.height,
+          tickLeft: ta.offsetLeft + caret.caretLeft
         });
       }
     });
@@ -784,8 +1090,23 @@ export const App: React.FC = () => {
   // writer interacts with the text, so it never lingers as visual noise.
   useEffect(() => {
     if (!caretFlash) return;
-    const timer = window.setTimeout(() => setCaretFlash(null), 1600);
+    const timer = window.setTimeout(() => setCaretFlash(null), 2500);
     return () => window.clearTimeout(timer);
+  }, [caretFlash]);
+
+  // While the landing highlight is alive it must stay glued to its line: track
+  // the textarea's own scrolling and re-anchor.
+  useEffect(() => {
+    if (!caretFlash) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const sync = () => {
+      const anchor = flashAnchorRef.current;
+      if (!anchor) return;
+      setCaretFlash((prev) => (prev ? { ...prev, top: anchor.paneTop + anchor.contentTop - ta.scrollTop } : prev));
+    };
+    ta.addEventListener('scroll', sync, { passive: true });
+    return () => ta.removeEventListener('scroll', sync);
   }, [caretFlash]);
 
   // Returning from the source view: scroll the preview back to the block that
@@ -818,7 +1139,15 @@ export const App: React.FC = () => {
     requestAnimationFrame(reveal);
     // Re-apply once the async typesetters have reflowed the article.
     const settle = window.setTimeout(reveal, 350);
-    return () => window.clearTimeout(settle);
+    // Mark the block the caret came back to, so the return landing is as
+    // findable as the jump into the source view.
+    target.classList.add('jump-target-flash');
+    const clearFlash = window.setTimeout(() => target.classList.remove('jump-target-flash'), 2500);
+    return () => {
+      window.clearTimeout(settle);
+      window.clearTimeout(clearFlash);
+      target.classList.remove('jump-target-flash');
+    };
   }, [isSourceMode, renderedHtml]);
 
   // Production build fix: listen for mathjax-ready event when MathJax finishes async loading
@@ -969,11 +1298,15 @@ export const App: React.FC = () => {
     const foldTop = scroller.getBoundingClientRect().top + 8;
     let cursor = 0;
     for (const el of Array.from(article.children) as HTMLElement[]) {
-      const probe = probeTextOf(el);
-      if (!probe.trim()) continue;
-      const at = locateRenderedText(index, probe, cursor);
-      if (at === null) continue;
-      cursor = at; // every located block advances the search, skipped or not
+      const anchor = firstAnchorIn(el);
+      let at: number | null = anchor ? anchor.start : null;
+      if (at === null) {
+        const probe = probeTextOf(el);
+        if (!probe.trim()) continue;
+        at = locateRenderedText(index, probe, cursor);
+        if (at === null) continue;
+      }
+      cursor = Math.max(cursor, at); // every located block advances the search
       if (el.getBoundingClientRect().bottom >= foldTop) return at;
     }
     return null;
@@ -1900,7 +2233,7 @@ ${texBody}
       {/* 1. Typora Native Top Menu Bar (文件, 编辑, 段落/字体, 视图) */}
       <header className="typora-menubar">
         <div className="menubar-left">
-          <div className="app-logo-wrap" title="MarkdownX v1.8.4"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
+          <div className="app-logo-wrap" title="MarkdownX v1.8.5"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
 
           {/* 文件(F) Menu Dropdown */}
           <div className="menu-item-wrap">
@@ -2708,10 +3041,16 @@ ${texBody}
             /* Pure Source Code Editor */
             <div className="source-fullscreen-pane">
               {caretFlash && (
-                <div
-                  className="source-caret-flash"
-                  style={{ top: caretFlash.top, left: caretFlash.left, width: caretFlash.width, height: caretFlash.height }}
-                />
+                <>
+                  <div
+                    className="source-caret-flash"
+                    style={{ top: caretFlash.top, left: caretFlash.left, width: caretFlash.width, height: caretFlash.height }}
+                  />
+                  <div
+                    className="source-caret-tick"
+                    style={{ top: caretFlash.top, left: caretFlash.tickLeft, height: caretFlash.height }}
+                  />
+                </>
               )}
               <textarea
                 ref={textareaRef}
@@ -2943,7 +3282,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.4 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.5 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。
