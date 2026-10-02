@@ -1,4 +1,4 @@
-# MarkdownX (v1.8.5)
+# MarkdownX (v1.8.6)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -27,6 +27,15 @@
 
 ## 版本更新履历 (Changelog)
 
+### [v1.8.6] - 2026-10-02
+
+#### 菜单栏去重与编辑菜单可靠性修复 (Menu Deduplication & Edit Commands)
+- **删除 `文件 > 打印...`**：它与 `文件 > 导出 > PDF...` 调用完全相同的处理器，属功能重复；保留"导出 > PDF..."为主入口（其快捷键标签补充为 `Ctrl+P · 出版级`），键盘 `Ctrl+P` 行为不变。
+- **删除 `主题(T) > 🎨 排版与偏好设置...`**：与 `文件 > 偏好设置...`、`段落/格式 > ⚙️ 自定义排版与字体设置...` 打开同一弹窗；主题菜单现只保留主题选择本身（另两个入口按各自使用场景保留）。
+- **修复编辑菜单命令不可靠**：`撤销 / 重做 / 复制 / 粘贴` 此前直接调用 `document.execCommand`，而点击下拉项会使源码编辑器失焦，命令可能作用于失效目标；现在先重新聚焦编辑器再执行，源码模式下四个命令均正确作用于正在编辑的文本。
+- **菜单审计结论存档**：源码模式（4 入口）、侧边栏开关（3 入口）、新建文档（3 入口）、主题（菜单选择 + 按钮循环）等多入口经评估**按 Typora 习惯保留**，不属冗余；快捷键全量核对无重复绑定、无冲突。
+
+---
 ### [v1.8.5] - 2026-10-02
 
 #### 确定性源码锚点与落点高亮 (Deterministic Source Anchors & Landing Highlight)
@@ -470,7 +479,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.5_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.6_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -481,8 +490,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.8.5_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.5_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.8.6_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.6_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -492,7 +501,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.5_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.6_universal.dmg`
 
 ---
 

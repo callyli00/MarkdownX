@@ -1246,6 +1246,24 @@ export const App: React.FC = () => {
     setActiveFileId(openFiles[nextIndex].id);
   }, [openFiles, activeFileId]);
 
+  /**
+   * Edit-menu commands. Clicking a dropdown item blurs the source textarea, so
+   * the command must re-focus the editor first - otherwise undo/redo/copy/paste
+   * act on a stale page selection (or on nothing) instead of the text being
+   * edited. Falls back to the plain command in preview mode, where there is no
+   * editable textarea.
+   */
+  const runEditorCommand = (command: 'undo' | 'redo' | 'copy' | 'paste') => {
+    const ta = textareaRef.current;
+    if (ta) ta.focus();
+    try {
+      document.execCommand(command);
+    } catch {
+      /* the webview may refuse paste without clipboard permission */
+    }
+    setActiveMenu(null);
+  };
+
   // Window controls
   const handleToggleFullscreen = async () => {
     try {
@@ -2233,7 +2251,7 @@ ${texBody}
       {/* 1. Typora Native Top Menu Bar (文件, 编辑, 段落/字体, 视图) */}
       <header className="typora-menubar">
         <div className="menubar-left">
-          <div className="app-logo-wrap" title="MarkdownX v1.8.5"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
+          <div className="app-logo-wrap" title="MarkdownX v1.8.6"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
 
           {/* 文件(F) Menu Dropdown */}
           <div className="menu-item-wrap">
@@ -2293,7 +2311,7 @@ ${texBody}
                   <div className="typora-submenu export-submenu">
                     <div className="dropdown-item" onClick={handlePrint}>
                       <span>PDF...</span>
-                      <span className="shortcut">出版级</span>
+                      <span className="shortcut">Ctrl+P · 出版级</span>
                     </div>
                     <div className="dropdown-item" onClick={handleExportHtmlWithStyles}>
                       <span>HTML (带完整样式)...</span>
@@ -2313,12 +2331,6 @@ ${texBody}
                       <span className="shortcut">学术手稿</span>
                     </div>
                   </div>
-                </div>
-
-                {/* 打印... (Print) - Kept 100% Independent! */}
-                <div className="dropdown-item" onClick={handlePrint}>
-                  <span>打印...</span>
-                  <span className="shortcut">Ctrl+P</span>
                 </div>
 
                 <div className="dropdown-divider" />
@@ -2348,20 +2360,20 @@ ${texBody}
             </button>
             {activeMenu === 'edit' && (
               <div className="typora-dropdown-menu">
-                <div className="dropdown-item" onClick={() => document.execCommand('undo')}>
+                <div className="dropdown-item" onClick={() => runEditorCommand('undo')}>
                   <span>撤销</span>
                   <span className="shortcut">Ctrl+Z</span>
                 </div>
-                <div className="dropdown-item" onClick={() => document.execCommand('redo')}>
+                <div className="dropdown-item" onClick={() => runEditorCommand('redo')}>
                   <span>重做</span>
                   <span className="shortcut">Ctrl+Y</span>
                 </div>
                 <div className="dropdown-divider" />
-                <div className="dropdown-item" onClick={() => document.execCommand('copy')}>
+                <div className="dropdown-item" onClick={() => runEditorCommand('copy')}>
                   <span>复制</span>
                   <span className="shortcut">Ctrl+C</span>
                 </div>
-                <div className="dropdown-item" onClick={() => document.execCommand('paste')}>
+                <div className="dropdown-item" onClick={() => runEditorCommand('paste')}>
                   <span>粘贴</span>
                   <span className="shortcut">Ctrl+V</span>
                 </div>
@@ -2654,17 +2666,6 @@ ${texBody}
                     <span>{appTheme === thm.id ? `✓ ${thm.icon} ${thm.name}` : `  ${thm.icon} ${thm.name}`}</span>
                   </div>
                 ))}
-                <div className="dropdown-divider" />
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setShowTypographyModal(true);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>🎨 排版与偏好设置...</span>
-                  <span className="shortcut">Ctrl+,</span>
-                </div>
               </div>
             )}
           </div>
@@ -3282,7 +3283,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.5 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.6 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。
