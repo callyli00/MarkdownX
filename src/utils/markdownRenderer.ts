@@ -22,6 +22,14 @@ interface TokenStore {
 
 const MERMAID_PREFIX = '@@MERMAID';
 const MERMAID_SUFFIX = '@@';
+// Appended when a diagram fence never closes. A missing closing fence usually
+// means prose leaked into the body (a paste that dropped the terminator), so the
+// block is shown verbatim as ordinary code instead of being guessed at: any
+// attempt to trim the body could silently mangle valid Mermaid statements.
+// Contains no backticks and no dollar signs so the verbatim masker and the math
+// tokenizer pass it through untouched.
+const MERMAID_UNCLOSED =
+  '<div class="mermaid-unclosed-hint">⚠️ 检测到未闭合的 Mermaid 代码围栏（缺少结尾的 3 个反引号），已按普通代码块原样显示，不做任何裁剪。补上结尾标记后即可渲染为图表。</div>';
 
 // Mermaid source is self-identifying: a diagram always begins with one of these
 // declarations. Sniffing them lets an UNTAGGED fence (``` on its own line) still
@@ -44,7 +52,10 @@ function looksLikeMermaid(body: string): boolean {
     .slice(0, 3);
   if (meaningful.length === 0) return false;
   const head = meaningful[0].split(/[\s:]/)[0].toLowerCase();
-  return MERMAID_DECLARATIONS.includes(head);
+  // Compare case-insensitively: the declaration list is camelCase
+  // (sequenceDiagram, classDiagram, gitGraph, ...) while `head` is lowercased,
+  // so a plain includes() would silently reject every camelCase diagram type.
+  return MERMAID_DECLARATIONS.some((d) => d.toLowerCase() === head);
 }
 
 /** Escape text for safe interpolation into an HTML text node. */
@@ -72,6 +83,7 @@ function extractMermaidBlocks(input: string): {
   let open = false;
   let buffer: string[] = [];
   let lang = '';
+  let openLine = '';
 
   // `openLine` keeps the verbatim opening fence so an untagged block can be
   // re-emitted byte-identically if it turns out not to be a diagram.
@@ -94,6 +106,7 @@ function extractMermaidBlocks(input: string): {
       if (infoHead === 'mermaid') {
         open = true;
         lang = marker;
+        openLine = line;
         buffer = [];
         continue;
       }
@@ -136,10 +149,19 @@ function extractMermaidBlocks(input: string): {
     pending.body.push(line);
   }
 
-  // Unterminated fence of either kind: emit verbatim rather than swallowing the
-  // rest of the document.
-  if (open) out.push(...buffer);
-  if (pendingFence) out.push(pendingFence.openLine, ...pendingFence.body);
+  // Unterminated fence: NEVER guessed at, NEVER trimmed. The block is re-emitted
+  // verbatim as a code sample (the closing marker is supplied so it cannot
+  // swallow the remainder of the document) and followed by an explicit hint, so
+  // the author sees exactly what was written and how to fix it.
+  if (open) {
+    out.push(openLine, ...buffer, lang, '', MERMAID_UNCLOSED);
+  }
+  if (pendingFence) {
+    out.push(pendingFence.openLine, ...pendingFence.body, pendingFence.marker);
+    if (looksLikeMermaid(pendingFence.body.join('\n'))) {
+      out.push('', MERMAID_UNCLOSED);
+    }
+  }
 
   return { text: out.join('\n'), sources };
 }
@@ -601,7 +623,8 @@ export async function renderMermaidDiagrams(root: HTMLElement | null, theme: 'li
         fallback.style.display = '';
         target.insertAdjacentHTML(
           'afterend',
-          `<div class="mermaid-error-note">图表语法错误，已显示源码：${escapeHtml(String((err as Error)?.message || err))}</div>`
+          `<div class="mermaid-error-note">图表语法错误，已显示源码：${escapeHtml(String((err as Error)?.message || err))}` +
+          `<br>常见原因：围栏缺少结尾标记，导致正文被并入图表源码。</div>`
         );
       }
     }
