@@ -265,14 +265,14 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
  * ------------------------------------------------------------------ */
 
 /** Characters that mark up the source but never survive into rendered text. */
-const MATCH_NOISE = /[#*_`>|[\]()!~\\=+\-]/;
+const MATCH_NOISE = /[#*_`>|[\]()!~\\=+\-$]/;
 
 /** Fold a string for comparison: drop whitespace and Markdown syntax, lower-case. */
 export function foldForMatch(text: string): string {
   let out = '';
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t') continue;
+    if (ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t' || ch === '\u00A0') continue;
     if (MATCH_NOISE.test(ch)) continue;
     out += ch.toLowerCase();
   }
@@ -289,11 +289,34 @@ interface SourceIndex {
 export function buildSourceIndex(content: string): SourceIndex {
   const chars: string[] = [];
   const offsets: number[] = [];
-  for (let i = 0; i < content.length; i++) {
-    const folded = foldForMatch(content[i]);
-    if (!folded) continue;
-    chars.push(folded);
-    offsets.push(i);
+
+  // HTML tags are markup, never visible text - and an attribute often repeats
+  // text that also renders (an img alt restates the caption below it), which
+  // used to capture lookups meant for the visible copy. Fold the document line
+  // by line, skipping tag interiors; fenced code is exempt because there a
+  // literal '<div>' IS content.
+  const lines = content.split('\n');
+  let base = 0;
+  let inFence = false;
+  for (const line of lines) {
+    if (/^\s{0,3}(?:```|~~~)/.test(line)) inFence = !inFence;
+    let i = 0;
+    while (i < line.length) {
+      if (!inFence && line[i] === '<') {
+        const tag = /^<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?\/?>/.exec(line.slice(i));
+        if (tag) {
+          i += tag[0].length;
+          continue;
+        }
+      }
+      const folded = foldForMatch(line[i]);
+      if (folded) {
+        chars.push(folded);
+        offsets.push(base + i);
+      }
+      i++;
+    }
+    base += line.length + 1;
   }
   return { folded: chars.join(''), offsets };
 }
@@ -355,7 +378,12 @@ export function locateRenderedText(index: SourceIndex, text: string, hint = 0): 
  * inline <code>/<strong>/<svg> resolves through its enclosing block; the
  * outermost block that still matches wins.
  */
-export function sourceOffsetForElement(start: HTMLElement, source: string, root: HTMLElement | null): number | null {
+export function sourceOffsetForElement(
+  start: HTMLElement,
+  source: string,
+  root: HTMLElement | null,
+  point?: { x: number; y: number }
+): number | null {
   const index = getSourceIndex(source);
   let node: HTMLElement | null = start;
 
@@ -366,17 +394,66 @@ export function sourceOffsetForElement(start: HTMLElement, source: string, root:
   // chrome) still falls through to the enclosing row, list or paragraph.
   while (node && node !== root) {
     // TABLE and the list wrappers matter: clicking a table's own padding (or a
-    // <ul> gutter) must still resolve, not fall through to the article.
-    if (/^(P|H1|H2|H3|H4|H5|H6|LI|TD|TH|TR|TABLE|PRE|BLOCKQUOTE|UL|OL|DIV|ARTICLE)$/.test(node.tagName)) {
+    // <ul> gutter) must still resolve, not fall through to the article. FIGURE
+    // and FIGCAPTION matter for the same reason: a book page is mostly figures,
+    // and a caption click used to walk past both and resolve to nothing.
+    if (/^(P|H1|H2|H3|H4|H5|H6|LI|TD|TH|TR|TABLE|THEAD|TBODY|TFOOT|CAPTION|PRE|BLOCKQUOTE|UL|OL|DL|DT|DD|DIV|SECTION|ARTICLE|FIGURE|FIGCAPTION|ASIDE|HEADER|FOOTER|MAIN|NAV|DETAILS|SUMMARY|ADDRESS|HGROUP)$/.test(node.tagName)) {
       const probe = probeTextOf(node);
       if (probe.trim()) {
         const found = locateRenderedText(index, probe, 0);
-        if (found !== null) return found;
+        if (found !== null) {
+          // The artwork itself: land on the <img> tag, not on the caption below.
+          // Only a raw-HTML figure is written literally in the source; a
+          // Markdown image has none, so restricting the search to figures
+          // keeps a stray '<img' elsewhere from capturing the click.
+          const img = start.closest('img');
+          if (img && img.closest('figure') && node.contains(img)) {
+            const tagAt = source.lastIndexOf('<img', found);
+            if (tagAt !== -1 && found - tagAt < 4000) return tagAt;
+          }
+          // Otherwise narrow the block down to the text actually double-clicked.
+          const refined = point ? refineOffsetAtPoint(index, found, point.x, point.y) : null;
+          return refined ?? found;
+        }
       }
     }
     node = node.parentElement;
   }
   return null;
+}
+
+/**
+ * Narrow a resolved block down to the text at a double-click point. The block
+ * start is a coarse answer for a long paragraph; when the browser can tell us
+ * which character the click landed on, locate that neighbourhood instead. A
+ * failed or ambiguous refinement falls back to the block offset.
+ */
+function refineOffsetAtPoint(index: SourceIndex, blockOffset: number, x: number, y: number): number | null {
+  const caretFromPoint = (document as Document & {
+    caretRangeFromPoint?: (cx: number, cy: number) => Range | null;
+  }).caretRangeFromPoint;
+  if (!caretFromPoint) return null;
+  let range: Range | null = null;
+  try {
+    range = caretFromPoint.call(document, x, y);
+  } catch {
+    return null;
+  }
+  if (!range) return null;
+  const node: Node = range.startContainer;
+  if (node.nodeType !== Node.TEXT_NODE) return null;
+  const text = node.textContent || '';
+  const at = Math.min(Math.max(range.startOffset, 0), text.length);
+  const windowText = text.slice(Math.max(0, at - 40), Math.min(text.length, at + 20));
+  const windowFold = foldForMatch(windowText);
+  if (windowFold.length < 4) return null;
+  const found = locateRenderedText(index, windowText, blockOffset);
+  if (found === null) return null;
+  // Accept the refinement only when the WHOLE window matched there; otherwise
+  // locateRenderedText fell back to a short prefix and the answer is a guess.
+  const foldedAt = index.offsets.indexOf(found);
+  if (foldedAt === -1 || !index.folded.startsWith(windowFold, foldedAt)) return null;
+  return found;
 }
 
 /** The first child element of `root` whose rendered content matches `offset` or earlier. */
@@ -413,6 +490,12 @@ export function probeTextOf(el: HTMLElement): string {
   }
   const clone = el.cloneNode(true) as HTMLElement;
   clone.querySelectorAll('.code-block-header, .math-equation-tag, .equation-ref-missing').forEach((n) => n.remove());
+  // MathJax replaces a formula's TeX with rendered glyphs, which no longer
+  // match the source; swap each formula back for the TeX it was built from so
+  // probes keep lining up with the Markdown.
+  clone.querySelectorAll('.math-inline[data-tex-source]').forEach((n) => {
+    n.textContent = n.getAttribute('data-tex-source') || '';
+  });
   return clone.textContent || '';
 }
 
@@ -864,7 +947,9 @@ export const App: React.FC = () => {
   const handlePreviewDoubleClick = (event: React.MouseEvent<HTMLElement>) => {
     const source = activeFile?.content || '';
     const target = event.target as HTMLElement;
-    const offset = target ? sourceOffsetForElement(target, source, previewRef.current) : null;
+    const offset = target
+      ? sourceOffsetForElement(target, source, previewRef.current, { x: event.clientX, y: event.clientY })
+      : null;
     pendingSourceCaretRef.current = offset;
     setIsSourceMode(true);
   };
@@ -1815,7 +1900,7 @@ ${texBody}
       {/* 1. Typora Native Top Menu Bar (文件, 编辑, 段落/字体, 视图) */}
       <header className="typora-menubar">
         <div className="menubar-left">
-          <div className="app-logo-wrap" title="MarkdownX v1.8.3"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
+          <div className="app-logo-wrap" title="MarkdownX v1.8.4"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
 
           {/* 文件(F) Menu Dropdown */}
           <div className="menu-item-wrap">
@@ -2858,7 +2943,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.3 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.4 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。

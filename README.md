@@ -1,4 +1,4 @@
-# MarkdownX (v1.8.3)
+# MarkdownX (v1.8.4)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -27,6 +27,21 @@
 
 ## 版本更新履历 (Changelog)
 
+### [v1.8.4] - 2026-10-02
+
+#### 出版社公式容器与图形定位修复 (Publisher Math Spans & Figure Navigation)
+- **修复图注公式 `\boldsymbol{n}(\boldsymbol{r})` 原样裸露（第三种公式写法）**：
+  - **根因**：出版社 HTML（InDesign 导出、Pandoc 转换等）把公式包进专用容器 `<span class="math math-inline">…</span>`，载荷是**裸 TeX**（无 `$`、无 `\(` 定界符）。此前三种定界符识别均无法命中，图注中的 `\boldsymbol{n}(\boldsymbol{r})`、`\delta r`、`\delta n` 等以原始反斜杠文本显示。
+  - **修复**：公式分词层新增**出版社公式容器归一化**（管线第一步）：识别 `<span>`/`<div>` 上精确的 `math`、`math-inline`、`math-display`、`math-block` 类（兼容 Pandoc 的 `math inline`/`math display`，容器内自带定界符的写法先剥离再重写），统一重写为标准定界符进入既有 token 管线。HTML 属性空间内的同名标签由 `isInsideHtmlTag` 守卫排除，`alt` 属性中的裸 LaTeX 保持原样。
+- **修复双击定位"根本对不上"（图形/图注区域完全失效）**：
+  - **根因（双层）**：① 块级元素白名单缺少 `FIGURE`/`FIGCAPTION`（及 `SECTION`、`DL`、`DETAILS` 等），双击图注或图片时向上查找一路冒泡到整个 `<article>` 并返回 `null`，光标**根本不移动**；② 折叠索引未区分标签内部与可见正文，而图片 `alt` 常逐字复述图注，导致图注点击被 `alt` 文本抢占、落点漂移到 `<img>` 行。
+  - **修复**：① 块级白名单补齐 13 个标签（`FIGURE`、`FIGCAPTION`、`SECTION`、`ASIDE`、`HEADER`、`FOOTER`、`MAIN`、`NAV`、`DL/DT/DD`、`DETAILS/SUMMARY`、`ADDRESS`、`HGROUP`），点击图片本体时**定向落到 `<img>` 标签行**；② `buildSourceIndex` 改为逐行折叠并**跳过 HTML 标签内部**（围栏代码除外），`$` 与不换行空格不再干扰对位；③ 行内公式 span 新增 `data-tex-source`，探测克隆中把 MathJax 字形还原为原始 TeX，含公式的段落/图注仍可精确对位；④ 双击时经 `caretRangeFromPoint` **精化到双击词邻域**（整窗匹配校验，失败安全回退块首）。
+- **验证（全链路实证）**：
+  - 真实书籍章节（双图 + span 公式图注 + 行内/块级公式）× 真实 MathJax × 真实映射函数：**15/15 双击落点行级精确**；对照实验中修复前 7 项图形类点击全部为 `NULL`。字符级偏差 0–25 字符。
+  - 图注内 5 个公式全部排版成功（`mjx-container = 5`、`merror = 0`）。
+  - 回归：渲染器全量 20/20、Mermaid 31/31、LaTeX 定界符 12/12、位置映射 14/14。
+
+---
 ### [v1.8.3] - 2026-10-01
 
 #### LaTeX 原生定界符支持 (Native LaTeX Delimiters)
@@ -443,7 +458,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.3_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.4_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -454,8 +469,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.8.3_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.3_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.8.4_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.4_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -465,7 +480,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.3_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.4_universal.dmg`
 
 ---
 

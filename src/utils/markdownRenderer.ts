@@ -319,6 +319,11 @@ export function configureMarked(documentBasePath: string = ''): void {
  * not a text node), so it must be left exactly as written.
  */
 function isInsideHtmlTag(text: string, index: number): boolean {
+  // A match at the very start cannot be inside anything. Without this guard,
+  // lastIndexOf clamps its negative fromIndex to 0, finds the match's OWN '<'
+  // and reports attribute space - silently skipping the first element of a
+  // document (a leading display formula rendered as raw source).
+  if (index <= 0) return false;
   const lastOpen = text.lastIndexOf('<', index - 1);
   if (lastOpen === -1) return false;
   const lastClose = text.lastIndexOf('>', index - 1);
@@ -513,12 +518,45 @@ function processMathAndCitations(rawMarkdown: string): {
     return key;
   };
 
-  let sanitized = masked;
+  // 1. Publisher HTML wraps its maths in a dedicated span (or div):
+  //    <span class="math math-inline">\boldsymbol{n}(\boldsymbol{r})</span>.
+  //    The payload is BARE TeX - no $, no \( \) - so none of the delimiter
+  //    passes below could ever match it and whole figure captions reached the
+  //    reader as raw backslashes. Rewrite the wrapper into standard delimiters
+  //    so every math notation is tokenized by the same machinery.
+  const MATH_WRAPPER = /<(span|div)\b[^>]*\bclass\s*=\s*("[^"]*"|'[^']*')[^>]*>([\s\S]*?)<\/\1>/gi;
+  let sanitized = masked.replace(MATH_WRAPPER, (match, tagName, quotedClass, body, offset, whole) => {
+    // See isInsideHtmlTag: never rewrite math in attribute space.
+    if (isInsideHtmlTag(whole, offset)) return match;
+    const classes = String(quotedClass).slice(1, -1).trim().toLowerCase().split(/\s+/);
+    // Only an exact 'math' class or a 'math-…' modifier marks maths; a utility
+    // class such as 'mathtools' must not be caught by a loose prefix test.
+    if (!classes.some((c) => c === 'math' || c.startsWith('math-'))) return match;
+    let inner = String(body).trim();
+    // The payload may carry its own delimiters (Pandoc keeps \(..\) inside its
+    // 'math inline' spans); normalise them away before re-wrapping.
+    const displayWrap = /^\$\$([\s\S]*?)\$\$$|^\\\[([\s\S]*?)\\\]$/.exec(inner);
+    if (displayWrap) {
+      inner = (displayWrap[1] ?? displayWrap[2] ?? '').trim();
+    } else {
+      const inlineWrap = /^\$([\s\S]*?)\$$|^\\\(([\s\S]*?)\\\)$/.exec(inner);
+      if (inlineWrap) inner = (inlineWrap[1] ?? inlineWrap[2] ?? '').trim();
+    }
+    if (!inner) return match;
+    const joined = classes.join(' ');
+    const isDisplay =
+      /\b(?:math-)?(?:display|block)\b/.test(joined) ||
+      (String(tagName).toLowerCase() === 'div' && !/\binline\b/.test(joined));
+    return isDisplay ? `$$${inner}$$` : `$${inner}$`;
+  });
+
+  // 2. Display delimiters: '$$...$$' and the LaTeX-native '\[...\]' - both the
+  //    forms step 1 produced and the ones the author wrote directly.
   for (const delims of displayDelimiters) {
     sanitized = sanitized.replace(delims, tokenizeDisplayMath as (...args: any[]) => string);
   }
 
-  // 2. Process \eqref{...} and \ref{...} in prose (both bare or inside $...$)
+  // 3. Process \eqref{...} and \ref{...} in prose (both bare or inside $...$)
   sanitized = sanitized.replace(/(?:\$)?\\(eqref|ref)\{([^}]+)\}(?:\$)?/g, (_, cmd, rawLabel) => {
     const label = normalizeLabelKey(rawLabel);
     const anchorId = labelToAnchorId(label);
@@ -535,7 +573,7 @@ function processMathAndCitations(rawMarkdown: string): {
     return `<a class="equation-ref-link" href="#${anchorId}" title="跳转至公式 ${tag}">${tag}</a>`;
   });
 
-  // 3. Extract remaining Inline Math: '$...$' and the LaTeX-native '\\(...\\)'.
+  // 4. Extract remaining Inline Math: '$...$' and the LaTeX-native '\\(...\\)'.
   //    Publisher HTML routinely uses the escaped-paren pair for inline math, so
   //    rejecting it left whole captions showing raw LaTeX.
   const tokenizeInlineMath = (match: string, inlineMath: string, offset: number, whole: string): string => {
@@ -594,7 +632,10 @@ function detokenizeMath(html: string, tokens: TokenStore, diagramSources: string
       // Passing a function () => rowHtml guarantees '$$' and '$' are never swallowed or mangled.
       restoredHtml = restoredHtml.replace(key, () => rowHtml);
     } else {
-      const inlineMathHtml = `<span class="math-inline">$${item.math}$</span>`;
+      // data-tex-source lets the preview->source mapper put the TeX back when it
+      // probes a typeset formula (MathJax glyphs no longer match the source).
+      const inlineTexAttr = item.math ? ` data-tex-source="${escapeHtml(item.math)}"` : '';
+      const inlineMathHtml = `<span class="math-inline"${inlineTexAttr}>$${item.math}$</span>`;
       restoredHtml = restoredHtml.replace(key, () => inlineMathHtml);
     }
   }
