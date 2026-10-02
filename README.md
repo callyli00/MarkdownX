@@ -1,4 +1,4 @@
-# MarkdownX (v1.8.7)
+# MarkdownX (v1.8.8)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -27,6 +27,15 @@
 
 ## 版本更新履历 (Changelog)
 
+### [v1.8.8] - 2026-10-02
+
+#### 右键菜单治理 (Right-Click Menu Policy)
+- **现象**：在软件任意位置右键会弹出"返回 / 刷新 / 另存为 / 打印 / 更多工具 / 检查"菜单。
+- **根因**：界面运行于 **WebView2**（Windows 上 Tauri 使用的 Chromium 内核组件），其**默认行为**就是在页面任意位置右键弹出内核自带的浏览器菜单——这不是 MarkdownX 的功能。此前的代码只对公式区域（`mjx-container`/`.math-equation-row`）做了拦截，其余区域从未处理，故浏览器菜单原样弹出。
+- **修复**：新增全局右键策略——在界面各处（预览区、菜单栏、侧边栏、弹窗、空白区）**压制浏览器默认菜单**；仅在真正的可编辑字段（源码编辑器、输入框）内保留原生的剪切/复制/粘贴（与拼写建议）菜单。
+- **附带安全收益**：内核菜单中的"刷新 (Ctrl+R)"会整体重载应用、存在丢失未保存编辑的风险，"检查"会暴露开发者工具——现已不可误触（开发者工具仍可通过 `视图 > 开发者工具` / `Shift+F12` 打开）。
+
+---
 ### [v1.8.7] - 2026-10-02
 
 #### 设置弹窗按语义拆分 (Split Settings Modal)
@@ -490,7 +499,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.7_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.8_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -501,8 +510,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.8.7_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.7_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.8.8_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.8_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -512,7 +521,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.7_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.8_universal.dmg`
 
 ---
 

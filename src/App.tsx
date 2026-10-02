@@ -1016,23 +1016,30 @@ export const App: React.FC = () => {
     }, 300);
   };
 
-  // Prevent MathJax contextmenu and auto-clean any corrupted MathJax localStorage
+  // Right-click policy. WebView2 (the Chromium engine under the app) shows its
+  // own browser context menu - 返回/刷新/另存为/打印/检查 - on right-click
+  // ANYWHERE by default. That menu is out of place in a desktop editor, and its
+  // 刷新 entry would reload the whole app and risk unsaved edits, so it is
+  // suppressed across the UI. The one exception is real editable fields, where
+  // the native 剪切/复制/粘贴 (and spellcheck) menu is genuinely useful.
+  // Also auto-cleans any corrupted MathJax menu state from earlier versions.
   useEffect(() => {
     try {
       localStorage.removeItem('mjx.menu');
       localStorage.removeItem('MathJax-Menu-Settings');
     } catch {}
 
-    const handleMathContextMenu = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (target && target.closest('mjx-container, .math-equation-row')) {
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const editable = target && target.closest('textarea, input, [contenteditable="true"]');
+      if (!editable) {
         e.preventDefault();
         e.stopPropagation();
       }
     };
 
-    window.addEventListener('contextmenu', handleMathContextMenu, true);
-    return () => window.removeEventListener('contextmenu', handleMathContextMenu, true);
+    window.addEventListener('contextmenu', handleContextMenu, true);
+    return () => window.removeEventListener('contextmenu', handleContextMenu, true);
   }, []);
 
   // Typeset MathJax whenever rendered HTML updates
@@ -2256,7 +2263,7 @@ ${texBody}
       {/* 1. Typora Native Top Menu Bar (文件, 编辑, 段落/字体, 视图) */}
       <header className="typora-menubar">
         <div className="menubar-left">
-          <div className="app-logo-wrap" title="MarkdownX v1.8.7"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
+          <div className="app-logo-wrap" title="MarkdownX v1.8.8"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
 
           {/* 文件(F) Menu Dropdown */}
           <div className="menu-item-wrap">
@@ -3288,7 +3295,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.7 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.8 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。
