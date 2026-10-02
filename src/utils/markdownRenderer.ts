@@ -454,11 +454,25 @@ function processMathAndCitations(rawMarkdown: string): {
   // skip them, otherwise a hand-numbered (1) collides with an auto-numbered (1).
   const claimedNumbers = new Set<string>();
 
-  // 1. Process Display Math: extract tags and labels
-  let sanitized = masked.replace(/\$\$([\s\S]*?)\$\$/g, (match, rawMathContent, offset, whole) => {
+  // 1. Process Display Math: extract tags and labels.
+  //    '$$...$$' and the LaTeX-native '\\[...\\]' (emitted by publisher HTML and
+  //    LaTeX exports) are both accepted; both are normalised to the same token.
+  const displayDelimiters: [RegExp, RegExp] = [
+    /\$\$([\s\S]*?)\$\$/g,
+    /\\\[([\s\S]*?)\\\]/g
+  ];
+
+  const tokenizeDisplayMath = (match: string, rawMathContent: string, offset: number, whole: string): string => {
     // See isInsideHtmlTag: never rewrite math that lives in attribute space.
-    if (isInsideHtmlTag(whole as string, offset as number)) return match;
+    if (isInsideHtmlTag(whole, offset)) return match;
     let math = rawMathContent.trim();
+
+    // Guard for the \[...\] form only: escaped brackets are also how authors
+    // write a literal citation such as [35]. Display math always carries a real
+    // math signal (a command, superscript, subscript or relation), so require
+    // one. Without this, '\[35\]' in prose would be centred as an equation -
+    // the exact regression fixed back in v1.5.0.
+    if (match.startsWith('\\[') && !/[\\^_=]/.test(math)) return match;
     
     // Check for explicit \\tag{...}
     const tagMatch = math.match(/\\tag\{([^}]+)\}/);
@@ -497,7 +511,12 @@ function processMathAndCitations(rawMarkdown: string): {
       labelId
     };
     return key;
-  });
+  };
+
+  let sanitized = masked;
+  for (const delims of displayDelimiters) {
+    sanitized = sanitized.replace(delims, tokenizeDisplayMath as (...args: any[]) => string);
+  }
 
   // 2. Process \eqref{...} and \ref{...} in prose (both bare or inside $...$)
   sanitized = sanitized.replace(/(?:\$)?\\(eqref|ref)\{([^}]+)\}(?:\$)?/g, (_, cmd, rawLabel) => {
@@ -516,16 +535,20 @@ function processMathAndCitations(rawMarkdown: string): {
     return `<a class="equation-ref-link" href="#${anchorId}" title="跳转至公式 ${tag}">${tag}</a>`;
   });
 
-  // 3. Extract remaining Inline Math ($...$)
-  sanitized = sanitized.replace(/(?<!\\)\$((?:\\.|[^$])+?)\$/g, (match, inlineMath, offset, whole) => {
-    if (isInsideHtmlTag(whole as string, offset as number)) return match;
+  // 3. Extract remaining Inline Math: '$...$' and the LaTeX-native '\\(...\\)'.
+  //    Publisher HTML routinely uses the escaped-paren pair for inline math, so
+  //    rejecting it left whole captions showing raw LaTeX.
+  const tokenizeInlineMath = (match: string, inlineMath: string, offset: number, whole: string): string => {
+    if (isInsideHtmlTag(whole, offset)) return match;
     const key = `@@MATH_INLINE_${tokenCounter++}@@`;
     tokens[key] = {
       type: 'inline',
       math: inlineMath
     };
     return key;
-  });
+  };
+  sanitized = sanitized.replace(/(?<!\\)\$((?:\\.|[^$])+?)\$/g, tokenizeInlineMath);
+  sanitized = sanitized.replace(/(?<!\\)\\\(([\s\S]*?)\\\)/g, tokenizeInlineMath);
 
   // Restore code samples / comments only after all math rewriting is finished,
   // so marked receives the author's original bytes.

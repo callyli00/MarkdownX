@@ -1,4 +1,4 @@
-# MarkdownX (v1.8.2)
+# MarkdownX (v1.8.3)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -26,6 +26,19 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v1.8.3] - 2026-10-01
+
+#### LaTeX 原生定界符支持 (Native LaTeX Delimiters)
+- **修复出版级 HTML 导出物的公式完全不渲染**：
+  - **根因**：程序此前仅识别 `$...$` / `$$...$$`。而从出版社 HTML、LaTeX 导出物或 PDF 转换工具贴入的文档，行内公式普遍使用标准 LaTeX 定界符 **`\(...\)`**、块级使用 **`\[...\]`**。二者此前完全不被识别，导致公式以 `\pmb{n} = \{0, \cos \theta\}` 的形式**原样裸露**（这也解释了为何同一文档中 `$$` 公式正常、而 `\(` 图注公式失效）。
+  - **修复**：在公式分词层新增两类定界符识别，统一归一化为既有 token 管线。`\(...\)` 行内、`\[...\]` 块级，现均可正确排版。**四类定界符可混用**。
+- **文献引用防误判守卫**：
+  - `\[35\]` 这类转义方括号在学术写作中亦用于表示文献引用。若无条件识别，会被误当作块级公式强制居中换行——即 v1.5.0 曾修复过的回归。
+  - 故对 `\[...\]` 形式增设**数学信号守卫**：仅当内容含 `\`、`^`、`_` 或 `=` 等数学标记时才按公式处理；`\[35\]`、`\[1-3\]` 等纯引用保持原样。
+- 与既有 HTML 属性守卫协同工作：`<img alt="... \( x \) ...">` 中的定界符同样不会被注入标记。
+
+---
 
 ### [v1.8.2] - 2026-10-01
 
@@ -430,7 +443,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.2_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.3_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -441,8 +454,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.8.2_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.2_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.8.3_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.3_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -452,7 +465,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.2_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.3_universal.dmg`
 
 ---
 
