@@ -356,6 +356,34 @@ body, html, #root {
   height: 100%;
   overflow-y: auto;
   background-color: #fafbfc;
+  /* Anchor for .source-caret-flash, which is positioned against this pane. */
+  position: relative;
+}
+
+/* Landing highlight: marks the line a preview double-click jumped to, so the
+   caret is findable in a wall of text. Fades out on its own. */
+.source-caret-flash {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+  border-radius: 3px;
+  background-color: rgba(9, 105, 218, 0.22);
+  box-shadow: inset 3px 0 0 0 var(--color-primary);
+  animation: sourceCaretFlash 1.6s ease-out forwards;
+}
+
+@keyframes sourceCaretFlash {
+  0% { opacity: 1; }
+  70% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+
+body.theme-dark .source-caret-flash {
+  background-color: rgba(56, 189, 248, 0.26);
+}
+
+body.theme-sepia .source-caret-flash {
+  background-color: rgba(180, 83, 9, 0.24);
 }
 
 .typora-fullscreen-textarea {
@@ -535,6 +563,33 @@ body.theme-dark .equation-ref-missing {
 
 .academic-article tr:nth-child(even) {
   background-color: #fcfcfd;
+}
+
+/* Figures pasted as raw HTML (typical for equations-heavy book chapters):
+   the Markdown renderer only styles its own <img class="rendered-image">, so
+   figure/figcaption and bare <img> need their own rules. */
+.academic-article img {
+  max-width: 100%;
+  height: auto;
+}
+
+.academic-article figure {
+  margin: 2em 0;
+  text-align: center;
+}
+
+.academic-article figure img {
+  display: block;
+  margin: 0 auto;
+  border-radius: 4px;
+}
+
+.academic-article figcaption {
+  margin-top: 0.7em;
+  font-size: 0.88em;
+  line-height: 1.6;
+  color: var(--text-muted);
+  text-align: left;
 }
 
 .rendered-image {
@@ -1037,6 +1092,7 @@ body.font-theme-technical {
   pre,
   table,
   .rendered-image,
+  figure,
   blockquote,
   .callout-card {
     page-break-inside: avoid !important;

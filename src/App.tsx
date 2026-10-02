@@ -438,6 +438,10 @@ export const App: React.FC = () => {
   // Mode: false for Typora WYSIWYG/Preview mode (default), true for Source mode
   const [isSourceMode, setIsSourceMode] = useState<boolean>(() => initialPrefs.current.defaultViewMode === 'source');
 
+  // Where the source caret just landed, painted as a short-lived highlight so
+  // the writer can actually see the jump target instead of hunting for it.
+  const [caretFlash, setCaretFlash] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
+
   // Caret offset to apply when the source view opens, and the position to
   // reveal again when the preview comes back (Typora-style continuity). The
   // restore also records the tab and the exact Markdown it was measured
@@ -668,11 +672,38 @@ export const App: React.FC = () => {
     requestAnimationFrame(() => {
       ta.focus();
       ta.setSelectionRange(pos, pos);
+      const style = window.getComputedStyle(ta);
+      const lineHeight = parseFloat(style.lineHeight) || 28;
+      const paddingTop = parseFloat(style.paddingTop) || 0;
+      const paddingLeft = parseFloat(style.paddingLeft) || 0;
+      const paddingRight = parseFloat(style.paddingRight) || 0;
       const lineIndex = ta.value.slice(0, pos).split('\n').length - 1;
-      const lineHeight = 28;
-      ta.scrollTop = Math.max(0, lineIndex * lineHeight - ta.clientHeight / 3);
+      // Absolute placement (not a delta): the target line lands one third down
+      // the viewport regardless of any scroll offset the textarea already has.
+      ta.scrollTop = Math.max(0, paddingTop + lineIndex * lineHeight - ta.clientHeight / 3);
+
+      // A caret alone is nearly invisible in a wall of text; flash the line it
+      // landed on so the jump target is unmistakable.
+      const pane = ta.parentElement;
+      if (pane) {
+        const top = ta.offsetTop + paddingTop + lineIndex * lineHeight - ta.scrollTop;
+        setCaretFlash({
+          top,
+          left: ta.offsetLeft + paddingLeft,
+          width: Math.max(0, ta.clientWidth - paddingLeft - paddingRight),
+          height: lineHeight
+        });
+      }
     });
   }, [isSourceMode]);
+
+  // The flash is transient: fade it out on its own, and clear it the moment the
+  // writer interacts with the text, so it never lingers as visual noise.
+  useEffect(() => {
+    if (!caretFlash) return;
+    const timer = window.setTimeout(() => setCaretFlash(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [caretFlash]);
 
   // Returning from the source view: scroll the preview back to the block that
   // holds the caret, so editing never throws the reader to the top.
@@ -1784,7 +1815,7 @@ ${texBody}
       {/* 1. Typora Native Top Menu Bar (文件, 编辑, 段落/字体, 视图) */}
       <header className="typora-menubar">
         <div className="menubar-left">
-          <div className="app-logo-wrap" title="MarkdownX v1.8.0"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
+          <div className="app-logo-wrap" title="MarkdownX v1.8.1"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
 
           {/* 文件(F) Menu Dropdown */}
           <div className="menu-item-wrap">
@@ -2591,12 +2622,21 @@ ${texBody}
           {isSourceMode ? (
             /* Pure Source Code Editor */
             <div className="source-fullscreen-pane">
+              {caretFlash && (
+                <div
+                  className="source-caret-flash"
+                  style={{ top: caretFlash.top, left: caretFlash.left, width: caretFlash.width, height: caretFlash.height }}
+                />
+              )}
               <textarea
                 ref={textareaRef}
                 aria-label="Markdown Source Code"
                 className="typora-fullscreen-textarea"
                 value={activeFile?.content || ''}
-                onChange={(e) => handleContentChange(e.target.value)}
+                onChange={(e) => {
+                  if (caretFlash) setCaretFlash(null);
+                  handleContentChange(e.target.value);
+                }}
                 onKeyUp={() => {
                   if (isTypewriterMode && textareaRef.current) {
                     const ta = textareaRef.current;
@@ -2818,7 +2858,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.0 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.1 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。

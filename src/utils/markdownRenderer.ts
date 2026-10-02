@@ -166,6 +166,52 @@ function extractMermaidBlocks(input: string): {
   return { text: out.join('\n'), sources };
 }
 
+/**
+ * Turn a document-relative asset reference into a loadable URL. Shared by the
+ * Markdown image renderer and the raw-HTML <img> pass so both resolve
+ * identically (a figure pasted as HTML must behave like one written as
+ * Markdown).
+ */
+function resolveLocalAssetUrl(href: string, documentBasePath: string): string {
+  const isRemote = /^https?:\/\//i.test(href) || href.startsWith('data:') || href.startsWith('asset:') || href.startsWith('blob:');
+  if (isRemote || !href) return href;
+
+  let resolvedPath = href;
+  const isAbsolute =
+    href.startsWith('/') || /^[A-Za-z]:[\\/]/.test(href);
+  if (documentBasePath && !isAbsolute) {
+    const separator = documentBasePath.includes('\\') ? '\\' : '/';
+    const cleanHref = href.replace(/^\.\/|^\.\\/, '');
+    resolvedPath = `${documentBasePath}${separator}${cleanHref}`;
+  }
+  try {
+    return convertFileSrc(resolvedPath);
+  } catch (err) {
+    console.error('convertFileSrc error:', err);
+    return href;
+  }
+}
+
+/**
+ * Raw HTML blocks (for example a <figure> pasted from a LaTeX PDF export or a
+ * publisher's HTML) bypass the Markdown image renderer entirely, so their <img
+ * src> would stay a bare relative path and never load inside the webview.
+ * Rewrite those sources here.
+ */
+function resolveRawHtmlImageSources(html: string, documentBasePath: string): string {
+  if (!documentBasePath) return html;
+  return html.replace(/<img\b[^>]*>/gi, (tag) =>
+    tag.replace(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i, (match, doubleQuoted, singleQuoted) => {
+      const raw = (doubleQuoted ?? singleQuoted ?? '').trim();
+      if (!raw) return match;
+      const resolved = resolveLocalAssetUrl(raw, documentBasePath);
+      if (resolved === raw) return match;
+      const quote = doubleQuoted !== undefined ? '"' : "'";
+      return `src=${quote}${resolved}${quote}`;
+    })
+  );
+}
+
 export function configureMarked(documentBasePath: string = ''): void {
   const renderer = new marked.Renderer();
   // Duplicate headings would otherwise share one id, making every outline entry
@@ -190,23 +236,7 @@ export function configureMarked(documentBasePath: string = ''): void {
     const imgTitle = (isToken ? hrefOrToken.title : title) || '';
     const altText = (isToken ? hrefOrToken.text : text) || '';
 
-    let sourceUrl = href;
-    const isRemote = /^https?:\/\//i.test(href) || href.startsWith('data:');
-    
-    if (!isRemote && href) {
-      let resolvedPath = href;
-      if (documentBasePath && !href.startsWith('/') && !/^[A-Za-z]:\\/.test(href) && !/^[A-Za-z]:\//.test(href)) {
-        const separator = documentBasePath.includes('\\') ? '\\' : '/';
-        const cleanHref = href.replace(/^\.\/|^\.\\/, '');
-        resolvedPath = `${documentBasePath}${separator}${cleanHref}`;
-      }
-      try {
-        sourceUrl = convertFileSrc(resolvedPath);
-      } catch (err) {
-        console.error('convertFileSrc error:', err);
-        sourceUrl = href;
-      }
-    }
+    const sourceUrl = resolveLocalAssetUrl(href, documentBasePath);
 
     const titleAttr = imgTitle ? ` title="${imgTitle}"` : '';
     return `<img src="${sourceUrl}" alt="${altText}"${titleAttr} class="rendered-image" />`;
@@ -527,7 +557,10 @@ export async function renderMarkdown(rawMarkdown: string, documentBasePath: stri
   configureMarked(documentBasePath);
   const { sanitizedMarkdown, tokens, diagramSources } = processMathAndCitations(rawMarkdown);
   const rawHtml = await marked.parse(sanitizedMarkdown);
-  return detokenizeMath(rawHtml, tokens, diagramSources);
+  const html = detokenizeMath(rawHtml, tokens, diagramSources);
+  // Last step: raw HTML image sources can only be rewritten once the markup is
+  // final, since the Markdown path resolves its own images earlier.
+  return resolveRawHtmlImageSources(html, documentBasePath);
 }
 
 interface MermaidApi {

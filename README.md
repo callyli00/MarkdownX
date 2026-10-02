@@ -1,4 +1,4 @@
-# MarkdownX (v1.8.0)
+# MarkdownX (v1.8.1)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -26,6 +26,21 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v1.8.1] - 2026-10-01
+
+#### 定位可见性与原始 HTML 图片修复 (Landing Highlight & Raw-HTML Figures)
+- **双击定位增加落地高亮 (Landing Highlight)**：
+  - 从预览双击跳入源码时，在光标所在行绘制一条淡蓝色高亮条（左侧带主题色竖标），并以 1.6 秒淡出；此后只要开始输入即刻清除，不留视觉噪音。
+  - 高亮位置依据 textarea 的实际计算样式（行高、内边距）与滚动量精确计算，实测与光标行**逐像素对齐（偏差 0.00px）**；滚动采用绝对定位，目标行恒落在视口上三分之一处。
+  - 三套主题（纯白 / 深色 / 原木）均有对应配色。
+- **修复原始 HTML 图片无法显示 (Raw HTML `<img>` inside `<figure>`)**：
+  - 典型场景：从出版社 HTML 或 LaTeX 导出物粘贴 `<figure><img src="images/ch01-001.jpg">…<figcaption>…</figcaption></figure>`。
+  - **根因**：Markdown 图片语法 `![]()` 会经渲染器解析为 `asset://` 本地协议，但原始 HTML 块由 marked 原样透传，`src` 保持为裸相对路径，在 WebView 中永不加载。
+  - **修复**：新增 `resolveRawHtmlImageSources()`，在渲染管线末端统一重写原始 HTML 内的 `<img src>`，与 Markdown 图片共用同一套路径解析规则（文档相对路径、`./` 前缀、Windows 盘符、绝对路径），并跳过 `http(s):`/`data:`/`asset:`/`blob:` 等无需处理的来源。`width`/`height`/`style` 等属性完整保留。
+  - 补齐 `<figure>` / `<figcaption>` / 裸 `<img>` 的排版样式（图片居中、图注左对齐小字弱化色），并将 `figure` 纳入打印分页保护。
+
+---
 
 ### [v1.8.0] - 2026-10-01
 
@@ -401,7 +416,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.0_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.1_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -412,8 +427,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.8.0_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.0_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.8.1_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.1_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -423,7 +438,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.0_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.1_universal.dmg`
 
 ---
 
