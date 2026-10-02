@@ -254,6 +254,168 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
   );
 };
 
+/* ------------------------------------------------------------------ *
+ * Preview <-> source position mapping
+ *
+ * The preview is produced by marked, so a rendered node carries no link back
+ * to the Markdown it came from. Both directions of the Typora-style mode
+ * switch therefore work by folding the two representations down to a form that
+ * can be compared - whitespace and Markdown syntax removed - and searching for
+ * one inside the other.
+ * ------------------------------------------------------------------ */
+
+/** Characters that mark up the source but never survive into rendered text. */
+const MATCH_NOISE = /[#*_`>|[\]()!~\\=+\-]/;
+
+/** Fold a string for comparison: drop whitespace and Markdown syntax, lower-case. */
+export function foldForMatch(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t') continue;
+    if (MATCH_NOISE.test(ch)) continue;
+    out += ch.toLowerCase();
+  }
+  return out;
+}
+
+interface SourceIndex {
+  /** Source with whitespace and Markdown syntax removed, lower-cased. */
+  folded: string;
+  /** Original character offset of each character in `folded`. */
+  offsets: number[];
+}
+
+export function buildSourceIndex(content: string): SourceIndex {
+  const chars: string[] = [];
+  const offsets: number[] = [];
+  for (let i = 0; i < content.length; i++) {
+    const folded = foldForMatch(content[i]);
+    if (!folded) continue;
+    chars.push(folded);
+    offsets.push(i);
+  }
+  return { folded: chars.join(''), offsets };
+}
+
+// The index is rebuilt on every lookup, so cache it against the current text.
+let cachedIndex: { key: string; value: SourceIndex } | null = null;
+
+function getSourceIndex(content: string): SourceIndex {
+  if (cachedIndex && cachedIndex.key === content) return cachedIndex.value;
+  const value = buildSourceIndex(content);
+  cachedIndex = { key: content, value };
+  return value;
+}
+
+/**
+ * Character offset in the source where the given rendered text begins, or null
+ * when it cannot be located. Progressively shorter prefixes are tried so that a
+ * block whose tail renders differently still resolves.
+ */
+export function locateRenderedText(index: SourceIndex, text: string, hint = 0): number | null {
+  const needle = foldForMatch(text);
+  if (needle.length < 4) return null;
+  const from = Math.max(0, Math.min(hint, index.folded.length));
+
+  // Try the full prefix first, then progressively shorter ones. The coarse
+  // decrement keeps long blocks cheap, but it must always end with the short
+  // prefixes too: a table or callout renders its inline math and its caption in
+  // a different shape than the source, so only a short leading fragment (e.g.
+  // the visible cell text) will match - a step that jumps from 10 straight past
+  // 4 would skip exactly those.
+  const lengths: number[] = [];
+  const step = Math.max(1, Math.floor(needle.length / 8));
+  for (let len = needle.length; len >= 24; len -= step) lengths.push(len);
+  for (const len of [24, 16, 12, 8, 6, 4]) {
+    if (len < needle.length && !lengths.includes(len)) lengths.push(len);
+  }
+  if (!lengths.includes(needle.length)) lengths.unshift(needle.length);
+
+  for (const len of lengths) {
+    const probe = needle.slice(0, len);
+    // Prefer a hit at/after the hint: an identical sentence earlier in the
+    // document must not capture a click that happened further down.
+    const near = index.folded.indexOf(probe, from);
+    if (near !== -1) return index.offsets[near];
+    const anywhere = index.folded.indexOf(probe);
+    if (anywhere !== -1) return index.offsets[anywhere];
+  }
+  return null;
+}
+
+/**
+ * The text a rendered block should be matched against. Decorative chrome that
+ * has no counterpart in the source is dropped, and blocks whose visible form is
+ * generated (typeset math, rendered diagrams) contribute their original source.
+ */
+/**
+ * Resolve an element inside the rendered preview to a character offset in the
+ * Markdown source. Walks outward from the clicked node so that a click on an
+ * inline <code>/<strong>/<svg> resolves through its enclosing block; the
+ * outermost block that still matches wins.
+ */
+export function sourceOffsetForElement(start: HTMLElement, source: string, root: HTMLElement | null): number | null {
+  const index = getSourceIndex(source);
+  let node: HTMLElement | null = start;
+
+  // Walk outward and take the FIRST block that resolves: the innermost match is
+  // the most faithful answer to "where did I click". A click on a table cell
+  // therefore lands on that row rather than on the table header, while a click
+  // on a cell whose rendered text cannot be found (typeset math, chromeless
+  // chrome) still falls through to the enclosing row, list or paragraph.
+  while (node && node !== root) {
+    // TABLE and the list wrappers matter: clicking a table's own padding (or a
+    // <ul> gutter) must still resolve, not fall through to the article.
+    if (/^(P|H1|H2|H3|H4|H5|H6|LI|TD|TH|TR|TABLE|PRE|BLOCKQUOTE|UL|OL|DIV|ARTICLE)$/.test(node.tagName)) {
+      const probe = probeTextOf(node);
+      if (probe.trim()) {
+        const found = locateRenderedText(index, probe, 0);
+        if (found !== null) return found;
+      }
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/** The first child element of `root` whose rendered content matches `offset` or earlier. */
+export function blockForSourceOffset(root: HTMLElement, source: string, offset: number): HTMLElement | null {
+  const index = getSourceIndex(source);
+  let cursor = 0;
+  let target: HTMLElement | null = null;
+  for (const el of Array.from(root.children) as HTMLElement[]) {
+    const probe = probeTextOf(el);
+    if (!probe.trim()) continue;
+    const at = locateRenderedText(index, probe, cursor);
+    if (at === null) continue;
+    cursor = at;
+    if (at <= offset) target = el;
+    else break; // children are in document order
+  }
+  return target;
+}
+
+export function probeTextOf(el: HTMLElement): string {
+  const mathRow = el.closest('.math-equation-row');
+  if (mathRow) return mathRow.getAttribute('data-tex-source') || '';
+  // The unclosed-fence notice is generated UI with no source counterpart.
+  // Resolve it to the fence it annotates, so clicking it opens that code.
+  const hint = el.closest('.mermaid-unclosed-hint');
+  if (hint) {
+    const prev = hint.previousElementSibling as HTMLElement | null;
+    if (prev) return probeTextOf(prev);
+  }
+  const diagram = el.closest('.mermaid-diagram');
+  if (diagram) {
+    const src = diagram.querySelector('.mermaid-render-target')?.getAttribute('data-mermaid-source');
+    if (src) return src;
+  }
+  const clone = el.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('.code-block-header, .math-equation-tag, .equation-ref-missing').forEach((n) => n.remove());
+  return clone.textContent || '';
+}
+
 export const App: React.FC = () => {
   // Initial user preferences & defaults (initialized first before states depending on it)
   const initialPrefs = useRef<AppPreferences>(loadStoredPreferences());
@@ -275,6 +437,13 @@ export const App: React.FC = () => {
 
   // Mode: false for Typora WYSIWYG/Preview mode (default), true for Source mode
   const [isSourceMode, setIsSourceMode] = useState<boolean>(() => initialPrefs.current.defaultViewMode === 'source');
+
+  // Caret offset to apply when the source view opens, and the position to
+  // reveal again when the preview comes back (Typora-style continuity). The
+  // restore also records the tab and the exact Markdown it was measured
+  // against, so it can never scroll a differently-rendered document.
+  const pendingSourceCaretRef = useRef<number | null>(null);
+  const pendingPreviewScrollRef = useRef<{ tabId: string; content: string; offset: number } | null>(null);
   
   // Active dropdown menu: null | 'file' | 'edit' | 'format' | 'view' | 'fileList'
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
@@ -403,6 +572,9 @@ export const App: React.FC = () => {
   const [renderedHtml, setRenderedHtml] = useState<string>('');
   const previewRef = useRef<HTMLDivElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // The Markdown that `renderedHtml` was produced from. Rendering is async, so
+  // a position restore must wait until this matches the current document.
+  const renderedForContentRef = useRef<string | null>(null);
 
   const activeFile = openFiles.find((f) => f.id === activeFileId) || openFiles[0];
 
@@ -420,6 +592,7 @@ export const App: React.FC = () => {
     try {
       const basePath = getBasePath(currentPath);
       const html = await renderMarkdown(content, basePath);
+      renderedForContentRef.current = content;
       setRenderedHtml(html);
     } catch (error) {
       console.error('Markdown rendering error:', error);
@@ -480,6 +653,59 @@ export const App: React.FC = () => {
       renderMermaidDiagrams(previewRef.current, appTheme);
     }
   }, [renderedHtml, isSourceMode, appTheme]);
+
+  // Apply a position handed over from the preview (double-click, mode toggle).
+  // The textarea already exists because the source view was just opened.
+  useEffect(() => {
+    if (!isSourceMode) return;
+    const offset = pendingSourceCaretRef.current;
+    if (offset === null) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    pendingSourceCaretRef.current = null;
+    const pos = Math.max(0, Math.min(offset, ta.value.length));
+    // Defer one frame so the textarea has been laid out and can scroll.
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(pos, pos);
+      const lineIndex = ta.value.slice(0, pos).split('\n').length - 1;
+      const lineHeight = 28;
+      ta.scrollTop = Math.max(0, lineIndex * lineHeight - ta.clientHeight / 3);
+    });
+  }, [isSourceMode]);
+
+  // Returning from the source view: scroll the preview back to the block that
+  // holds the caret, so editing never throws the reader to the top.
+  useEffect(() => {
+    if (isSourceMode) return;
+    const pending = pendingPreviewScrollRef.current;
+    if (!pending) return;
+    // Hold the request until the preview shows this exact revision; otherwise
+    // the measurement would run against stale HTML and land in the wrong place.
+    if (renderedForContentRef.current !== pending.content) return;
+    if (pending.tabId !== activeFileIdRef.current) return;
+    pendingPreviewScrollRef.current = null;
+    const offset = pending.offset;
+
+    const article = previewRef.current;
+    const scroller = article?.closest('.typora-document-scroll') as HTMLElement | null;
+    const source = activeFile?.content || '';
+    if (!article || !scroller || !source) return;
+
+    const target = blockForSourceOffset(article, source, offset);
+    if (!target) return;
+
+    // Absolute geometry via rects: offsetTop is unreliable because neither
+    // .typora-document-scroll nor .typora-paper-article is positioned.
+    const reveal = () => {
+      const delta = target!.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTop = Math.max(0, scroller.scrollTop + delta - 24);
+    };
+    requestAnimationFrame(reveal);
+    // Re-apply once the async typesetters have reflowed the article.
+    const settle = window.setTimeout(reveal, 350);
+    return () => window.clearTimeout(settle);
+  }, [isSourceMode, renderedHtml]);
 
   // Production build fix: listen for mathjax-ready event when MathJax finishes async loading
   useEffect(() => {
@@ -600,6 +826,68 @@ export const App: React.FC = () => {
       setIsAlwaysOnTop(next);
     } catch {
       setIsAlwaysOnTop(next);
+    }
+  };
+
+  /** Enter the source view with the caret at the position double-clicked. */
+  const handlePreviewDoubleClick = (event: React.MouseEvent<HTMLElement>) => {
+    const source = activeFile?.content || '';
+    const target = event.target as HTMLElement;
+    const offset = target ? sourceOffsetForElement(target, source, previewRef.current) : null;
+    pendingSourceCaretRef.current = offset;
+    setIsSourceMode(true);
+  };
+
+  /**
+   * Source offset of the first preview block at or below the fold, i.e. what
+   * the reader is currently looking at. Used when the view is switched from the
+   * keyboard or the menu, where there is no clicked element to resolve.
+   */
+  const previewTopSourceOffset = (): number | null => {
+    const article = previewRef.current;
+    const scroller = article?.closest('.typora-document-scroll') as HTMLElement | null;
+    const source = activeFile?.content || '';
+    if (!article || !scroller || !source.trim()) return null;
+
+    const index = getSourceIndex(source);
+    const foldTop = scroller.getBoundingClientRect().top + 8;
+    let cursor = 0;
+    for (const el of Array.from(article.children) as HTMLElement[]) {
+      const probe = probeTextOf(el);
+      if (!probe.trim()) continue;
+      const at = locateRenderedText(index, probe, cursor);
+      if (at === null) continue;
+      cursor = at; // every located block advances the search, skipped or not
+      if (el.getBoundingClientRect().bottom >= foldTop) return at;
+    }
+    return null;
+  };
+
+  /** Open the source view, landing at `offset` or wherever the reader is. */
+  const enterSourceMode = (offset?: number | null) => {
+    pendingSourceCaretRef.current = offset !== undefined ? offset : previewTopSourceOffset();
+    setIsSourceMode(true);
+  };
+
+  /** Switch views, carrying the reading position across in either direction. */
+  const toggleSourceMode = () => {
+    if (isSourceMode) {
+      const ta = textareaRef.current;
+      pendingPreviewScrollRef.current = ta
+        ? { tabId: activeFileId, content: activeFile?.content || '', offset: ta.selectionStart }
+        : null;
+      // Flush the pending debounce: the restore effect measures the preview
+      // against activeFile.content, so the two must not be out of step.
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      if (activeFile) {
+        updatePreview(activeFile.content, activeFile.path);
+      }
+      setIsSourceMode(false);
+    } else {
+      enterSourceMode();
     }
   };
 
@@ -763,7 +1051,7 @@ export const App: React.FC = () => {
         // Standard Ctrl combinations
         if (e.key === '/') {
           e.preventDefault();
-          setIsSourceMode((prev) => !prev);
+          toggleSourceMode();
         } else if (e.key === 's' || e.key === 'S') {
           e.preventDefault();
           handleSaveFile();
@@ -1022,7 +1310,9 @@ export const App: React.FC = () => {
   const handlePrint = () => {
     setActiveMenu(null);
     if (isSourceMode) {
-      setIsSourceMode(false);
+      // Route through toggleSourceMode so the reading position is carried back
+      // into the preview instead of dumping the reader at the top.
+      toggleSourceMode();
       setTimeout(() => window.print(), 350);
     } else {
       window.print();
@@ -1494,7 +1784,7 @@ ${texBody}
       {/* 1. Typora Native Top Menu Bar (文件, 编辑, 段落/字体, 视图) */}
       <header className="typora-menubar">
         <div className="menubar-left">
-          <div className="app-logo-wrap" title="MarkdownX v1.7.0"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
+          <div className="app-logo-wrap" title="MarkdownX v1.8.0"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
 
           {/* 文件(F) Menu Dropdown */}
           <div className="menu-item-wrap">
@@ -1749,7 +2039,7 @@ ${texBody}
                 <div
                   className="dropdown-item"
                   onClick={() => {
-                    setIsSourceMode((prev) => !prev);
+                    toggleSourceMode();
                     setActiveMenu(null);
                   }}
                 >
@@ -2053,7 +2343,7 @@ ${texBody}
 
           <button
             className={`view-mode-toggle-btn ${isSourceMode ? 'active' : ''}`}
-            onClick={() => setIsSourceMode((prev) => !prev)}
+            onClick={toggleSourceMode}
             title="一键在 Typora 沉浸排版 与 源码 之间切换 (Ctrl + /)"
           >
             {isSourceMode ? '返回沉浸排版' : '</> 源码模式'}
@@ -2332,12 +2622,12 @@ ${texBody}
                     ref={previewRef}
                     className="academic-article"
                     dangerouslySetInnerHTML={{ __html: renderedHtml }}
-                    onDoubleClick={() => setIsSourceMode(true)}
+                    onDoubleClick={handlePreviewDoubleClick}
                   />
                 ) : (
                   <div
                     className="typora-empty-guide"
-                    onClick={() => setIsSourceMode(true)}
+                    onClick={() => enterSourceMode(null)}
                   >
                     <p className="empty-hint-main">点击此处或按 <kbd>Ctrl + /</kbd> 开始书写...</p>
                     <p className="empty-hint-sub">也可通过左上方 <strong>文件(F) ➔ 打开...</strong> 打开本地 Markdown 文档</p>
@@ -2373,7 +2663,7 @@ ${texBody}
             <span className="sep">•</span>
             <span>UTF-8</span>
             <span className="sep">•</span>
-            <span className="status-badge" onClick={() => setIsSourceMode(!isSourceMode)} style={{ cursor: 'pointer' }}>
+            <span className="status-badge" onClick={toggleSourceMode} style={{ cursor: 'pointer' }}>
               Ctrl + / 切换
             </span>
           </div>
@@ -2528,7 +2818,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.7.0 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.0 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。

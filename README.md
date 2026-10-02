@@ -1,4 +1,4 @@
-# MarkdownX (v1.7.0)
+# MarkdownX (v1.8.0)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -26,6 +26,23 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v1.8.0] - 2026-10-01
+
+#### 沉浸式双向位置连续性 (Typora-Style Position Continuity)
+- **双击预览即定位源码 (Double-Click to Source)**：
+  - 在沉浸排版视图中双击任意位置，立即切入源码模式，且光标精确落在所双击的那一段（标题、段落、表格行、公式、代码块、Mermaid 图、定理卡片均可定位）。
+  - 定位采用「渲染文本 ↔ Markdown 源码」折叠匹配：剥离空白与 Markdown 标记后比对，因此粗体、行内代码、行内公式等行内标记不会阻断定位。
+  - 表格单元格定位到所在数据行（而非表格开头）；公式定位到 `$$` 块的数学源码；Mermaid 图定位到其围栏源码；未闭合提示条回溯至对应围栏。
+- **修改后返回不再跳回顶部 (No More Scroll-to-Top)**：
+  - 从源码模式切回沉浸排版时，预览自动滚动至刚才编辑的位置，连续写作不再被打断。
+  - 切换瞬间会先刷新防抖队列，并以「渲染所依据的文档版本」为闸门校验，杜绝异步渲染竞态导致定位落到错误位置。
+  - 所有切换入口（`Ctrl + /`、视图菜单、顶栏按钮、状态栏、打印）均已统一走位置携带逻辑。
+- **实现要点**：
+  - 新增 `.math-equation-row[data-tex-source]` 属性，使已排版为 SVG 的公式仍可反查其 LaTeX 源码。
+  - 位置映射为纯函数（`foldForMatch` / `buildSourceIndex` / `locateRenderedText` / `sourceOffsetForElement` / `blockForSourceOffset`），独立于组件状态，便于测试。
+
+---
 
 ### [v1.7.0] - 2026-10-01
 
@@ -384,7 +401,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.7.0_x64-setup.exe`
+- 安装包：`src-tauri/target/release/bundle/nsis/MarkdownX_1.8.0_x64-setup.exe`
 - 绿色独立版：`src-tauri/target/release/MarkdownX.exe`
 
 ### 2. Linux / Ubuntu 环境编译（输出 `.deb` 与 `.AppImage`）
@@ -395,8 +412,8 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/deb/markdown-x_1.7.0_amd64.deb`
-- `src-tauri/target/release/bundle/appimage/MarkdownX_1.7.0_amd64.AppImage`
+- `src-tauri/target/release/bundle/deb/markdown-x_1.8.0_amd64.deb`
+- `src-tauri/target/release/bundle/appimage/MarkdownX_1.8.0_amd64.AppImage`
 
 ### 3. macOS 环境编译（输出 `.dmg`）
 在 **macOS 终端** 中运行：
@@ -406,7 +423,7 @@ pnpm install
 pnpm tauri build
 ```
 产物位置：
-- `src-tauri/target/release/bundle/dmg/MarkdownX_1.7.0_universal.dmg`
+- `src-tauri/target/release/bundle/dmg/MarkdownX_1.8.0_universal.dmg`
 
 ---
 

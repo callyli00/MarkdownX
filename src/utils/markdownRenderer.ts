@@ -504,7 +504,8 @@ function detokenizeMath(html: string, tokens: TokenStore, diagramSources: string
       const cleanId = item.labelId ? ` id="${labelToAnchorId(item.labelId)}"` : '';
       const tagHtml = item.tag ? `<span class="math-equation-tag">(${item.tag})</span>` : '';
       
-      const rowHtml = `<div class="math-equation-row"${cleanId}>` +
+      const texAttr = item.math ? ` data-tex-source="${escapeHtml(item.math)}"` : '';
+      const rowHtml = `<div class="math-equation-row"${cleanId}${texAttr}>` +
         `<div class="math-equation-content">$$${item.math}$$</div>` +
         `${tagHtml}` +
         `</div>`;
