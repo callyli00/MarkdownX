@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { renderMarkdown, triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
+import { AppIcon } from './AppIcon';
 import './App.css';
 
 interface FileTab {
@@ -37,12 +38,31 @@ interface FileEntry {
 
 
 type AppTheme = 'light' | 'dark' | 'sepia';
+// 'auto' tracks the OS light/dark setting live (sepia never auto-selects:
+// a paper tone is a deliberate taste, not a system signal).
+type ThemePreference = 'auto' | AppTheme;
 
-const THEME_OPTIONS: { id: AppTheme; name: string; icon: string }[] = [
+const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
+  { id: 'auto', name: '跟随系统 (Auto)', icon: '🖥️' },
   { id: 'light', name: '经典纯白学术 (Light)', icon: '☀️' },
   { id: 'dark', name: '夜间极客深色 (Dark)', icon: '🌙' },
   { id: 'sepia', name: '羊皮纸复古原木 (Sepia)', icon: '📜' }
 ];
+
+const THEME_CYCLE: ThemePreference[] = ['auto', 'light', 'dark', 'sepia'];
+
+function systemPrefersDark(): boolean {
+  try {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  } catch {
+    return false;
+  }
+}
+
+function resolveTheme(pref: ThemePreference): AppTheme {
+  if (pref !== 'auto') return pref;
+  return systemPrefersDark() ? 'dark' : 'light';
+}
 
 interface TypographyConfig {
   latinFont: string;
@@ -68,7 +88,7 @@ const DEFAULT_TYPOGRAPHY: TypographyConfig = {
 };
 
 interface AppPreferences {
-  defaultTheme: AppTheme;
+  defaultTheme: ThemePreference;
   defaultViewMode: 'typora' | 'source';
   defaultMathEngine?: 'svg' | 'chtml';
   autoWatchExternalChanges?: boolean;
@@ -76,7 +96,7 @@ interface AppPreferences {
 }
 
 const FACTORY_PREFERENCES: AppPreferences = {
-  defaultTheme: 'light',
+  defaultTheme: 'auto',
   defaultViewMode: 'typora',
   defaultMathEngine: 'svg',
   autoWatchExternalChanges: true,
@@ -100,7 +120,7 @@ function loadStoredPreferences(): AppPreferences {
     if (oldTheme || oldTypo) {
       return {
         ...FACTORY_PREFERENCES,
-        defaultTheme: (oldTheme === 'light' || oldTheme === 'dark' || oldTheme === 'sepia') ? oldTheme : 'light',
+        defaultTheme: (oldTheme === 'light' || oldTheme === 'dark' || oldTheme === 'sepia') ? oldTheme : 'auto',
         defaultTypography: oldTypo ? { ...DEFAULT_TYPOGRAPHY, ...JSON.parse(oldTypo) } : DEFAULT_TYPOGRAPHY
       };
     }
@@ -840,12 +860,18 @@ export const App: React.FC = () => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
 
   // Theme state: light | dark | sepia (initialized from user default)
-  const [appTheme, setAppTheme] = useState<AppTheme>(() => initialPrefs.current.defaultTheme);
-  const [defaultThemeSetting, setDefaultThemeSetting] = useState<AppTheme>(() => initialPrefs.current.defaultTheme);
+  const [themePref, setThemePref] = useState<ThemePreference>(() => initialPrefs.current.defaultTheme);
+  // The resolved theme (what the CSS and exporters actually see).
+  const [appTheme, setAppTheme] = useState<AppTheme>(() => resolveTheme(initialPrefs.current.defaultTheme));
+  const [defaultThemeSetting, setDefaultThemeSetting] = useState<ThemePreference>(() => initialPrefs.current.defaultTheme);
   const [defaultModeSetting, setDefaultModeSetting] = useState<'typora' | 'source'>(() => initialPrefs.current.defaultViewMode);
   const [defaultMathEngineSetting, setDefaultMathEngineSetting] = useState<'svg' | 'chtml'>(() => initialPrefs.current.defaultMathEngine || 'svg');
   const [autoWatchSetting, setAutoWatchSetting] = useState<boolean>(() => initialPrefs.current.autoWatchExternalChanges !== false);
   const [externalReloadNotice, setExternalReloadNotice] = useState<string | null>(null);
+  // Workbench chrome: the right-hand typography inspector, the collapsed
+  // outline groups, and which sidebar panel is shown.
+  const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(false);
+  const [collapsedOutline, setCollapsedOutline] = useState<Set<number>>(new Set());
   // External-modification conflicts are tracked PER TAB so that background
   // documents keep their conflict state until the user resolves it explicitly.
   const [fileConflicts, setFileConflicts] = useState<Record<string, FileConflict>>({});
@@ -877,7 +903,8 @@ export const App: React.FC = () => {
 
   // --- View & Sidebar States (Typora Complete Spec) ---
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
-  const [sidebarTab, setSidebarTab] = useState<'outline' | 'docs' | 'files' | 'search'>('outline');
+  const [sidebarPanel, setSidebarPanel] = useState<'workspace' | 'search'>('workspace');
+  const [outlineRegionOpen, setOutlineRegionOpen] = useState<boolean>(true);
   const [isFocusMode, setIsFocusMode] = useState<boolean>(false);
   const [isTypewriterMode, setIsTypewriterMode] = useState<boolean>(false);
   const [showStatusBar, setShowStatusBar] = useState<boolean>(true);
@@ -918,9 +945,33 @@ export const App: React.FC = () => {
   const [currentMatchIndex, setCurrentMatchIndex] = useState<number>(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // The resolved theme drives the body class (all body.theme-* rules hang off it).
   useEffect(() => {
     document.body.className = `theme-${appTheme}`;
   }, [appTheme]);
+
+  // Preference -> resolved theme. Under 'auto' this follows the OS now and keeps
+  // following it while the app is open (media-query listener).
+  useEffect(() => {
+    const apply = () => setAppTheme(resolveTheme(themePref));
+    apply();
+    // 'auto' must react while the app is open, not only at start-up.
+    let mq: MediaQueryList | null = null;
+    const onChange = () => apply();
+    try {
+      mq = window.matchMedia('(prefers-color-scheme: dark)');
+      if (mq.addEventListener) mq.addEventListener('change', onChange);
+      else mq.addListener(onChange);
+    } catch {}
+    return () => {
+      try {
+        if (mq) {
+          if (mq.removeEventListener) mq.removeEventListener('change', onChange);
+          else mq.removeListener(onChange);
+        }
+      } catch {}
+    };
+  }, [themePref]);
 
   // Global code block copy callback
   useEffect(() => {
@@ -1242,7 +1293,7 @@ export const App: React.FC = () => {
       if (typeof selected === 'string') {
         await loadWorkspaceFiles(selected);
         setIsSidebarOpen(true);
-        setSidebarTab('files');
+        setSidebarPanel('workspace');
       }
     } catch (e) {
       console.error('Select workspace error:', e);
@@ -1264,7 +1315,7 @@ export const App: React.FC = () => {
    * edited. Falls back to the plain command in preview mode, where there is no
    * editable textarea.
    */
-  const runEditorCommand = (command: 'undo' | 'redo' | 'copy' | 'paste') => {
+  const runEditorCommand = (command: 'undo' | 'redo' | 'copy' | 'paste' | 'cut') => {
     const ta = textareaRef.current;
     if (ta) ta.focus();
     try {
@@ -1275,6 +1326,49 @@ export const App: React.FC = () => {
     setActiveMenu(null);
   };
 
+  /** One-tap search: open the sidebar and switch its tree region to search. */
+  const openSearchPanel = () => {
+    setIsSidebarOpen(true);
+    setSidebarPanel('search');
+    setActiveMenu(null);
+  };
+
+  /** Theme cycle: auto -> light -> dark -> sepia -> auto. */
+  const cycleTheme = () =>
+    setThemePref((t) => THEME_CYCLE[(THEME_CYCLE.indexOf(t) + 1) % THEME_CYCLE.length]);
+
+  const themeIconName = (): 'monitor' | 'sun' | 'moon' | 'book' => {
+    if (themePref === 'auto') return 'monitor';
+    return appTheme === 'dark' ? 'moon' : (appTheme === 'sepia' ? 'book' : 'sun');
+  };
+
+  /** Outline items with the subtree of every collapsed heading filtered out. */
+  // Outline rows: a node's caret must not depend on its own collapsed state, so
+  // hasChild is computed from the FULL outline list. Descendants of a collapsed
+  // node are skipped while walking the pre-order list.
+  const outlineRows = useMemo(() => {
+    const rows: (OutlineItem & { hasChild: boolean; collapsed: boolean })[] = [];
+    let hideDeeperThan: number | null = null;
+    for (let i = 0; i < outlineList.length; i++) {
+      const it = outlineList[i];
+      if (hideDeeperThan !== null && it.level > hideDeeperThan) continue;
+      hideDeeperThan = null;
+      const hasChild = i + 1 < outlineList.length && outlineList[i + 1].level > it.level;
+      const collapsed = collapsedOutline.has(it.line);
+      rows.push({ ...it, hasChild, collapsed });
+      if (hasChild && collapsed) hideDeeperThan = it.level;
+    }
+    return rows;
+  }, [outlineList, collapsedOutline]);
+
+  const toggleOutlineNode = useCallback((line: number) => {
+    setCollapsedOutline((prev) => {
+      const next = new Set(prev);
+      if (next.has(line)) next.delete(line);
+      else next.add(line);
+      return next;
+    });
+  }, []); 
   // Window controls
   const handleToggleFullscreen = async () => {
     try {
@@ -1444,7 +1538,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     const handleGlobalClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('.menu-item-wrap') && !target.closest('.file-select-dropdown')) {
+      if (!target.closest('.menu-item-wrap') && !target.closest('.file-select-dropdown') && !target.closest('.wb-menu-host')) {
         setActiveMenu(null);
       }
     };
@@ -1489,23 +1583,19 @@ export const App: React.FC = () => {
             return;
           } else if (e.key === '1' || e.key === '!') {
             e.preventDefault();
+            // outline lives inside the workspace panel
             setIsSidebarOpen(true);
-            setSidebarTab('outline');
+            setSidebarPanel('workspace');
+            setOutlineRegionOpen(true);
             return;
           } else if (e.key === '2' || e.key === '@') {
             e.preventDefault();
-            setIsSidebarOpen(true);
-            setSidebarTab('docs');
-            return;
-          } else if (e.key === '3' || e.key === '#') {
-            e.preventDefault();
-            setIsSidebarOpen(true);
-            setSidebarTab('files');
+            setIsInspectorOpen((v) => !v);
             return;
           } else if (e.key === 'F' || e.key === 'f') {
             e.preventDefault();
             setIsSidebarOpen(true);
-            setSidebarTab('search');
+            setSidebarPanel('search');
             return;
           } else if (e.key === '9' || e.key === '(') {
             e.preventDefault();
@@ -1775,7 +1865,7 @@ export const App: React.FC = () => {
       localStorage.removeItem('markdownx_app_preferences_v140');
       localStorage.removeItem('markdownx_math_engine');
       setTypography(FACTORY_PREFERENCES.defaultTypography);
-      setAppTheme(FACTORY_PREFERENCES.defaultTheme);
+      setThemePref(FACTORY_PREFERENCES.defaultTheme);
       setDefaultThemeSetting(FACTORY_PREFERENCES.defaultTheme);
       setDefaultModeSetting(FACTORY_PREFERENCES.defaultViewMode);
       setDefaultMathEngineSetting(FACTORY_PREFERENCES.defaultMathEngine || 'svg');
@@ -2260,37 +2350,42 @@ ${texBody}
 
   return (
     <div className="typora-shell" onDragOver={handleHtml5DragOver} onDragLeave={handleHtml5DragLeave} onDrop={handleHtml5Drop}>
-      {/* 1. Typora Native Top Menu Bar (文件, 编辑, 段落/字体, 视图) */}
-      <header className="typora-menubar">
-        <div className="menubar-left">
-          <div className="app-logo-wrap" title="MarkdownX v1.8.8"><MarkdownXLogo size={22} /><span className="app-name-label">MarkdownX</span></div>
-
-          {/* 文件(F) Menu Dropdown */}
-          <div className="menu-item-wrap">
+      {/* 1. Workbench top bar: identity + document, view tabs, edit cluster, menus */}
+      <header className="wb-topbar">
+        <div className="wb-tb-left">
+          <button
+            className="wb-icon-btn"
+            onClick={() => setIsSidebarOpen((prev) => !prev)}
+            title={`显示 / 隐藏侧边栏 (Ctrl+Shift+L)`}
+          >
+            <AppIcon name="sidebar-left" size={16} />
+          </button>
+          <MarkdownXLogo size={18} />
+          <span className="wb-doc-name" title={activeFile?.path || '未保存'}>
+            {activeFile?.name || 'MarkdownX'}
+            {activeFile?.isModified ? <span className="wb-dirty-dot">•</span> : null}
+          </span>
+          <div className="wb-menu-host">
             <button
-              className={`menu-top-btn ${activeMenu === 'file' ? 'active' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveMenu(activeMenu === 'file' ? null : 'file');
-              }}
+              className={`wb-icon-btn ${activeMenu === 'mainmenu' ? 'active' : ''}`}
+              onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu === 'mainmenu' ? null : 'mainmenu'); }}
+              title="菜单（文件 / 视图 / 主题 / 帮助）"
             >
-              文件(F)
+              <AppIcon name="list-tree" size={16} />
             </button>
-            {activeMenu === 'file' && (
-              <div className="typora-dropdown-menu">
+            {activeMenu === 'mainmenu' && (
+              <div className="typora-dropdown-menu wb-dropdown">
                 <div className="dropdown-item" onClick={handleNewFile}>
-                  <span>新建</span>
-                  <span className="shortcut">Ctrl+N</span>
+                  <span>新建文档</span><span className="shortcut">Ctrl+N</span>
                 </div>
                 <div className="dropdown-item" onClick={() => handleOpenFile()}>
-                  <span>打开...</span>
-                  <span className="shortcut">Ctrl+O</span>
+                  <span>打开文件...</span><span className="shortcut">Ctrl+O</span>
                 </div>
-                
-                {/* Recent files submenu */}
+                <div className="dropdown-item" onClick={handleSelectWorkspace}>
+                  <span>打开文件夹...</span>
+                </div>
                 <div className="dropdown-item has-submenu">
-                  <span>打开最近文件</span>
-                  <span className="arrow">›</span>
+                  <span>打开最近文件</span><span className="arrow">›</span>
                   <div className="typora-submenu recent-files-submenu">
                     {recentFiles.length === 0 ? (
                       <div className="dropdown-item disabled">无最近文件</div>
@@ -2304,511 +2399,148 @@ ${texBody}
                     )}
                   </div>
                 </div>
-
                 <div className="dropdown-divider" />
                 <div className="dropdown-item" onClick={handleSaveFile}>
-                  <span>保存</span>
-                  <span className="shortcut">Ctrl+S</span>
+                  <span>保存</span><span className="shortcut">Ctrl+S</span>
                 </div>
                 <div className="dropdown-item" onClick={handleSaveFileAs}>
-                  <span>另存为...</span>
-                  <span className="shortcut">Ctrl+Shift+S</span>
+                  <span>另存为...</span><span className="shortcut">Ctrl+Shift+S</span>
                 </div>
-                <div className="dropdown-divider" />
-
-                {/* 导出 › (Export Submenu - Matches Typora Structure) */}
                 <div className="dropdown-item has-submenu">
-                  <span>导出</span>
-                  <span className="arrow">›</span>
+                  <span>导出</span><span className="arrow">›</span>
                   <div className="typora-submenu export-submenu">
                     <div className="dropdown-item" onClick={handlePrint}>
-                      <span>PDF...</span>
-                      <span className="shortcut">Ctrl+P · 出版级</span>
+                      <span>PDF / 打印...</span><span className="shortcut">Ctrl+P</span>
                     </div>
                     <div className="dropdown-item" onClick={handleExportHtmlWithStyles}>
                       <span>HTML (带完整样式)...</span>
-                      <span className="shortcut">单文件网页</span>
                     </div>
                     <div className="dropdown-item" onClick={handleExportHtmlPlain}>
-                      <span>HTML (without styles)...</span>
-                      <span className="shortcut">纯净片段</span>
+                      <span>HTML (纯净片段)...</span>
                     </div>
                     <div className="dropdown-divider" />
                     <div className="dropdown-item" onClick={handleExportWord}>
                       <span>Word (.docx)...</span>
-                      <span className="shortcut">微软文档</span>
                     </div>
                     <div className="dropdown-item" onClick={handleExportLatex}>
                       <span>LaTeX (.tex)...</span>
-                      <span className="shortcut">学术手稿</span>
                     </div>
                   </div>
                 </div>
-
                 <div className="dropdown-divider" />
                 <div className="dropdown-item" onClick={() => { setSettingsModalView('preferences'); setShowTypographyModal(true); setActiveMenu(null); }}>
-                  <span>偏好设置...</span>
-                  <span className="shortcut">Ctrl+,</span>
+                  <span>偏好设置...</span><span className="shortcut">Ctrl+,</span>
                 </div>
-                <div className="dropdown-divider" />
-                <div className="dropdown-item" onClick={() => handleCloseFile(activeFileId)}>
-                  <span>关闭</span>
-                  <span className="shortcut">Ctrl+W</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 编辑(E) Menu */}
-          <div className="menu-item-wrap">
-            <button
-              className={`menu-top-btn ${activeMenu === 'edit' ? 'active' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveMenu(activeMenu === 'edit' ? null : 'edit');
-              }}
-            >
-              编辑(E)
-            </button>
-            {activeMenu === 'edit' && (
-              <div className="typora-dropdown-menu">
-                <div className="dropdown-item" onClick={() => runEditorCommand('undo')}>
-                  <span>撤销</span>
-                  <span className="shortcut">Ctrl+Z</span>
-                </div>
-                <div className="dropdown-item" onClick={() => runEditorCommand('redo')}>
-                  <span>重做</span>
-                  <span className="shortcut">Ctrl+Y</span>
-                </div>
-                <div className="dropdown-divider" />
-                <div className="dropdown-item" onClick={() => runEditorCommand('copy')}>
-                  <span>复制</span>
-                  <span className="shortcut">Ctrl+C</span>
-                </div>
-                <div className="dropdown-item" onClick={() => runEditorCommand('paste')}>
-                  <span>粘贴</span>
-                  <span className="shortcut">Ctrl+V</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 段落与格式(O) Menu */}
-          <div className="menu-item-wrap">
-            <button
-              className={`menu-top-btn ${activeMenu === 'format' ? 'active' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveMenu(activeMenu === 'format' ? null : 'format');
-              }}
-            >
-              段落/格式(O)
-            </button>
-            {activeMenu === 'format' && (
-              <div className="typora-dropdown-menu">
-                <div className="dropdown-item" onClick={() => { setSettingsModalView('typography'); setShowTypographyModal(true); setActiveMenu(null); }}>
-                  <span>⚙️ 自定义排版与字体设置...</span>
-                  <span className="shortcut">详细</span>
-                </div>
-                <div className="dropdown-divider" />
-                <div className="menu-header-caption">段落对齐方式</div>
-                <div className="dropdown-item" onClick={() => setTypography((t) => ({ ...t, textAlign: 'justify' }))}>
-                  <span>{typography.textAlign === 'justify' ? '✓ ' : '  '}两端对齐 (末行靠左)</span>
-                  <span className="shortcut">学术标准</span>
-                </div>
-                <div className="dropdown-item" onClick={() => setTypography((t) => ({ ...t, textAlign: 'left' }))}>
-                  <span>{typography.textAlign === 'left' ? '✓ ' : '  '}左对齐 (自然排版)</span>
-                </div>
-                <div className="dropdown-divider" />
-                <div className="dropdown-item" onClick={() => setTypography((t) => ({ ...t, firstLineIndent: !t.firstLineIndent }))}>
-                  <span>{typography.firstLineIndent ? '✓ ' : '  '}段落首行缩进 2 字符</span>
-                </div>
-                <div className="dropdown-divider" />
-                <div className="dropdown-item" onClick={() => setTypography((t) => ({ ...t, fontSize: Math.min(t.fontSize + 1, 26) }))}>
-                  <span>放大字号 ({typography.fontSize}px)</span>
-                  <span className="shortcut">Ctrl+=</span>
-                </div>
-                <div className="dropdown-item" onClick={() => setTypography((t) => ({ ...t, fontSize: Math.max(t.fontSize - 1, 12) }))}>
-                  <span>缩小字号</span>
-                  <span className="shortcut">Ctrl+-</span>
-                </div>
-                <div className="dropdown-item" onClick={() => setTypography(DEFAULT_TYPOGRAPHY)}>
-                  <span>恢复默认排版参数</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 视图(V) Menu */}
-          <div className="menu-item-wrap">
-            <button
-              className={`menu-top-btn ${activeMenu === 'view' ? 'active' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveMenu(activeMenu === 'view' ? null : 'view');
-              }}
-            >
-              视图(V)
-            </button>
-            {activeMenu === 'view' && (
-              <div className="typora-dropdown-menu">
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setIsSidebarOpen((prev) => !prev);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>{isSidebarOpen ? '✓ 显示 / 隐藏侧边栏' : '显示 / 隐藏侧边栏'}</span>
-                  <span className="shortcut">Ctrl+Shift+L</span>
-                </div>
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setIsSidebarOpen(true);
-                    setSidebarTab('outline');
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>大纲</span>
-                  <span className="shortcut">Ctrl+Shift+1</span>
-                </div>
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setIsSidebarOpen(true);
-                    setSidebarTab('docs');
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>文档列表</span>
-                  <span className="shortcut">Ctrl+Shift+2</span>
-                </div>
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setIsSidebarOpen(true);
-                    setSidebarTab('files');
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>文件树</span>
-                  <span className="shortcut">Ctrl+Shift+3</span>
-                </div>
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setIsSidebarOpen(true);
-                    setSidebarTab('search');
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>搜索</span>
-                  <span className="shortcut">Ctrl+Shift+F</span>
-                </div>
-
-                <div className="dropdown-divider" />
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    toggleSourceMode();
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>{isSourceMode ? '✓ 源代码模式' : '源代码模式'}</span>
-                  <span className="shortcut">Ctrl+/</span>
-                </div>
-
-                <div className="dropdown-divider" />
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setIsFocusMode((prev) => !prev);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>{isFocusMode ? '✓ 专注模式' : '专注模式'}</span>
-                  <span className="shortcut">F8</span>
-                </div>
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setIsTypewriterMode((prev) => !prev);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>{isTypewriterMode ? '✓ 打字机模式' : '打字机模式'}</span>
-                  <span className="shortcut">F9</span>
-                </div>
-
-                <div className="dropdown-divider" />
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setShowStatusBar((prev) => !prev);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>{showStatusBar ? '✓ 显示状态栏' : '显示状态栏'}</span>
-                </div>
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setShowWordCountModal(true);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>字数统计窗口</span>
-                </div>
-
-                <div className="dropdown-divider" />
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    handleToggleFullscreen();
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>{isFullscreen ? '✓ 退出全屏' : '切换全屏'}</span>
-                  <span className="shortcut">F11</span>
-                </div>
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    handleToggleAlwaysOnTop();
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>{isAlwaysOnTop ? '✓ 保持窗口在最前端' : '保持窗口在最前端'}</span>
-                </div>
-
-                <div className="dropdown-divider" />
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setZoomLevel(1.0);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>{zoomLevel === 1.0 ? '✓ 实际大小' : `实际大小 (${Math.round(zoomLevel * 100)}%)`}</span>
-                  <span className="shortcut">Ctrl+Shift+9</span>
-                </div>
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setZoomLevel((z) => Math.min(2.0, Number((z + 0.1).toFixed(1))));
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>放大</span>
-                  <span className="shortcut">Ctrl+Shift+=</span>
-                </div>
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setZoomLevel((z) => Math.max(0.6, Number((z - 0.1).toFixed(1))));
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>缩小</span>
-                  <span className="shortcut">Ctrl+Shift+-</span>
-                </div>
-
-                <div className="dropdown-divider" />
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    handleCycleTab();
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>应用内窗口切换</span>
-                  <span className="shortcut">Ctrl+Tab</span>
-                </div>
-
-                <div className="dropdown-divider" />
-
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    handleOpenDevTools();
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>开发者工具</span>
-                  <span className="shortcut">Shift+F12</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 主题(T) Menu */}
-          <div className="menu-item-wrap">
-            <button
-              className={`menu-top-btn ${activeMenu === 'theme' ? 'active' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveMenu(activeMenu === 'theme' ? null : 'theme');
-              }}
-            >
-              主题(T)
-            </button>
-            {activeMenu === 'theme' && (
-              <div className="typora-dropdown-menu">
-                {THEME_OPTIONS.map((thm) => (
-                  <div
-                    key={thm.id}
-                    className="dropdown-item"
-                    onClick={() => {
-                      setAppTheme(thm.id);
-                      setActiveMenu(null);
-                    }}
-                  >
-                    <span>{appTheme === thm.id ? `✓ ${thm.icon} ${thm.name}` : `  ${thm.icon} ${thm.name}`}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* 帮助(H) Menu */}
-          <div className="menu-item-wrap">
-            <button
-              className={`menu-top-btn ${activeMenu === 'help' ? 'active' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveMenu(activeMenu === 'help' ? null : 'help');
-              }}
-            >
-              帮助(H)
-            </button>
-            {activeMenu === 'help' && (
-              <div className="typora-dropdown-menu">
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setShowHelpModal(true);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>⌨️ 快捷键速查表...</span>
-                </div>
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setShowMathHelpModal(true);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>📐 LaTeX 公式与排版指南...</span>
-                </div>
-                <div className="dropdown-divider" />
-                <div
-                  className="dropdown-item"
-                  onClick={() => {
-                    setShowAboutModal(true);
-                    setActiveMenu(null);
-                  }}
-                >
-                  <span>ℹ️ 关于 MarkdownX...</span>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* 2. Open Files Dropdown Manager in Header */}
-        <div className="menubar-center">
-          <div className="file-select-dropdown">
-            <button
-              className="current-file-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveMenu(activeMenu === 'fileList' ? null : 'fileList');
-              }}
-              title="点击查看并切换所有已打开的文档"
-            >
-              <MarkdownXLogo size={16} />
-              <span className="current-file-name">
-                {activeFile?.name}
-                {activeFile?.isModified ? ' •' : ''}
-              </span>
-              <span className="dropdown-caret">▾</span>
-            </button>
-
-            {activeMenu === 'fileList' && (
-              <div className="open-files-menu">
-                <div className="menu-header-caption">已打开的文档列表 ({openFiles.length})</div>
-                {openFiles.map((file) => (
-                  <div
-                    key={file.id}
-                    className={`open-file-item ${file.id === activeFileId ? 'active' : ''}`}
-                    onClick={() => {
-                      setActiveFileId(file.id);
-                      setActiveMenu(null);
-                    }}
-                  >
-                    <div className="item-title-col">
-                      <span className="item-name">{file.name}{fileConflicts[file.id] ? ' ⚠️' : ''}</span>
-                      <span className="item-path">{file.path || '未保存于磁盘'}</span>
+                <div className="dropdown-item has-submenu">
+                  <span>视图</span><span className="arrow">›</span>
+                  <div className="typora-submenu">
+                    <div className="dropdown-item" onClick={() => { setShowStatusBar((v) => !v); setActiveMenu(null); }}>
+                      <span>{showStatusBar ? '✓ 显示状态栏' : '显示状态栏'}</span>
                     </div>
-                    <button
-                      className="tab-close-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleCloseFile(file.id);
-                      }}
-                      title="关闭文档"
-                    >
-                      ×
-                    </button>
+                    <div className="dropdown-item" onClick={() => { setIsTypewriterMode((v) => !v); setActiveMenu(null); }}>
+                      <span>{isTypewriterMode ? '✓ 打字机模式' : '打字机模式'}</span><span className="shortcut">F9</span>
+                    </div>
+                    <div className="dropdown-item" onClick={() => { handleToggleAlwaysOnTop(); setActiveMenu(null); }}>
+                      <span>{isAlwaysOnTop ? '✓ 窗口置顶' : '窗口置顶'}</span>
+                    </div>
+                    <div className="dropdown-divider" />
+                    <div className="dropdown-item" onClick={() => { setZoomLevel((z) => Math.min(2.0, Number((z + 0.1).toFixed(1)))); setActiveMenu(null); }}>
+                      <span>放大界面</span><span className="shortcut">Ctrl+Shift+=</span>
+                    </div>
+                    <div className="dropdown-item" onClick={() => { setZoomLevel((z) => Math.max(0.6, Number((z - 0.1).toFixed(1)))); setActiveMenu(null); }}>
+                      <span>缩小界面</span><span className="shortcut">Ctrl+Shift+-</span>
+                    </div>
+                    <div className="dropdown-item" onClick={() => { setZoomLevel(1.0); setActiveMenu(null); }}>
+                      <span>实际大小 {Math.round(zoomLevel * 100)}%</span><span className="shortcut">Ctrl+Shift+9</span>
+                    </div>
+                    <div className="dropdown-divider" />
+                    <div className="dropdown-item" onClick={() => { handleToggleFullscreen(); setActiveMenu(null); }}>
+                      <span>{isFullscreen ? '退出全屏' : '进入全屏'}</span><span className="shortcut">F11</span>
+                    </div>
+                    <div className="dropdown-item" onClick={() => { handleOpenDevTools(); setActiveMenu(null); }}>
+                      <span>开发者工具</span><span className="shortcut">Shift+F12</span>
+                    </div>
                   </div>
-                ))}
+                </div>
+                <div className="dropdown-item has-submenu">
+                  <span>主题</span><span className="arrow">›</span>
+                  <div className="typora-submenu">
+                    {THEME_OPTIONS.map((thm) => (
+                      <div key={thm.id} className="dropdown-item" onClick={() => { setThemePref(thm.id); setActiveMenu(null); }}>
+                        <span>{themePref === thm.id ? `✓ ${thm.icon} ${thm.name}` : `  ${thm.icon} ${thm.name}`}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="dropdown-item has-submenu">
+                  <span>帮助</span><span className="arrow">›</span>
+                  <div className="typora-submenu">
+                    <div className="dropdown-item" onClick={() => { setShowHelpModal(true); setActiveMenu(null); }}>
+                      <span>快捷键速查表</span>
+                    </div>
+                    <div className="dropdown-item" onClick={() => { setShowMathHelpModal(true); setActiveMenu(null); }}>
+                      <span>LaTeX 公式与排版指南</span>
+                    </div>
+                    <div className="dropdown-divider" />
+                    <div className="dropdown-item" onClick={() => { setShowAboutModal(true); setActiveMenu(null); }}>
+                      <span>关于 MarkdownX</span>
+                    </div>
+                  </div>
+                </div>
                 <div className="dropdown-divider" />
-                <div className="dropdown-item" onClick={handleNewFile}>
-                  <span>＋ 新建空白文档</span>
+                <div className="dropdown-item" onClick={() => { handleCloseFile(activeFileId); setActiveMenu(null); }}>
+                  <span>关闭当前文档</span><span className="shortcut">Ctrl+W</span>
                 </div>
               </div>
             )}
           </div>
         </div>
 
-        <div className="menubar-right">
-          {/* Sidebar quick toggle button */}
-          <button
-            className={`quick-font-btn ${isSidebarOpen ? 'active' : ''}`}
-            onClick={() => setIsSidebarOpen((prev) => !prev)}
-            title="显示 / 隐藏侧边栏 (Ctrl + Shift + L)"
-          >
-            <span>◧ 侧边栏</span>
-          </button>
+        <div className="wb-tb-center">
+          <div className="wb-view-tabs">
+            <button className={`wb-view-tab ${!isSourceMode ? 'active' : ''}`} onClick={() => { if (isSourceMode) toggleSourceMode(); }} title="沉浸排版视图 (Ctrl+/)">
+              排版
+            </button>
+            <button className={`wb-view-tab ${isSourceMode ? 'active' : ''}`} onClick={() => { if (!isSourceMode) toggleSourceMode(); }} title="源码模式 (Ctrl+/)">
+              源码
+            </button>
+          </div>
+        </div>
 
-          {/* Quick Theme Switcher Button */}
+        <div className="wb-tb-right">
+          {/* Edit cluster - kept visible by user decision, as icon buttons */}
+          <div className="wb-edit-cluster">
+            <button className="wb-icon-btn" onClick={() => runEditorCommand('undo')} title="撤销 (Ctrl+Z)"><AppIcon name="undo" size={15} /></button>
+            <button className="wb-icon-btn" onClick={() => runEditorCommand('redo')} title="重做 (Ctrl+Y)"><AppIcon name="redo" size={15} /></button>
+            <span className="wb-cluster-sep" />
+            <button className="wb-icon-btn" onClick={() => runEditorCommand('cut')} title="剪切 (Ctrl+X)"><AppIcon name="scissors" size={15} /></button>
+            <button className="wb-icon-btn" onClick={() => runEditorCommand('copy')} title="复制 (Ctrl+C)"><AppIcon name="copy" size={15} /></button>
+            <button className="wb-icon-btn" onClick={() => runEditorCommand('paste')} title="粘贴 (Ctrl+V)"><AppIcon name="clipboard" size={15} /></button>
+          </div>
+          <span className="wb-cluster-sep" />
           <button
-            className="quick-font-btn"
-            onClick={() => setAppTheme(t => t === 'light' ? 'dark' : (t === 'dark' ? 'sepia' : 'light'))}
-            title="一键循环切换主题：纯白 / 夜间深色 / 复古原木"
+            className={`wb-icon-btn ${isFocusMode ? 'active' : ''}`}
+            onClick={() => setIsFocusMode((v) => !v)}
+            title={`专注模式 (F8)`}
           >
-            <span>{appTheme === 'light' ? '☀️ 浅色' : (appTheme === 'dark' ? '🌙 深色' : '📜 原木')}</span>
+            <AppIcon name="target" size={15} />
           </button>
-
           <button
-            className={`view-mode-toggle-btn ${isSourceMode ? 'active' : ''}`}
-            onClick={toggleSourceMode}
-            title="一键在 Typora 沉浸排版 与 源码 之间切换 (Ctrl + /)"
+            className={`wb-icon-btn ${isInspectorOpen ? 'active' : ''}`}
+            onClick={() => setIsInspectorOpen((v) => !v)}
+            title="排版检查器 (Ctrl+Shift+2)"
           >
-            {isSourceMode ? '返回沉浸排版' : '</> 源码模式'}
+            <AppIcon name="type" size={15} />
+          </button>
+          <button className="wb-icon-btn" onClick={cycleTheme} title={`主题：${themePref === 'auto' ? '跟随系统' : appTheme}（点击循环）`}>
+            <AppIcon name={themeIconName()} size={15} />
+          </button>
+          <button
+            className="wb-icon-btn"
+            onClick={() => { setShowHelpModal(true); }}
+            title="快捷键速查"
+          >
+            <AppIcon name="help" size={15} />
           </button>
         </div>
       </header>
@@ -2872,139 +2604,24 @@ ${texBody}
         {/* Collapsible Sidebar */}
         {isSidebarOpen && (
           <aside className="typora-sidebar">
-            <div className="sidebar-header">
-              <div className="sidebar-tabs">
-                <button
-                  className={`sidebar-tab-btn ${sidebarTab === 'outline' ? 'active' : ''}`}
-                  onClick={() => setSidebarTab('outline')}
-                  title="大纲目录 (Ctrl+Shift+1)"
-                >
-                  📑 大纲
-                </button>
-                <button
-                  className={`sidebar-tab-btn ${sidebarTab === 'docs' ? 'active' : ''}`}
-                  onClick={() => setSidebarTab('docs')}
-                  title="打开文档列表 (Ctrl+Shift+2)"
-                >
-                  📄 文档
-                </button>
-                <button
-                  className={`sidebar-tab-btn ${sidebarTab === 'files' ? 'active' : ''}`}
-                  onClick={() => setSidebarTab('files')}
-                  title="目录文件树 (Ctrl+Shift+3)"
-                >
-                  📁 文件树
-                </button>
-                <button
-                  className={`sidebar-tab-btn ${sidebarTab === 'search' ? 'active' : ''}`}
-                  onClick={() => setSidebarTab('search')}
-                  title="文档内搜索与替换 (Ctrl+Shift+F)"
-                >
-                  🔍 搜索
-                </button>
-              </div>
-              <button
-                className="sidebar-close-btn"
-                onClick={() => setIsSidebarOpen(false)}
-                title="关闭侧边栏 (Ctrl+Shift+L)"
-              >
-                ×
-              </button>
+            <div className="sb-brand">
+              <MarkdownXLogo size={22} />
+              <span className="sb-brand-name">MarkdownX</span>
+              <span className="sb-badge">v1.9</span>
             </div>
 
-            <div className="sidebar-content-pane">
-              {/* Tab 1: Outline / TOC */}
-              {sidebarTab === 'outline' && (
-                <div className="outline-view">
-                  <div className="sidebar-pane-title">文档大纲 (TOC)</div>
-                  {outlineList.length === 0 ? (
-                    <div className="sidebar-empty-hint">当前文档暂无标题大纲</div>
-                  ) : (
-                    outlineList.map((item, idx) => (
-                      <div
-                        key={idx}
-                        className={`outline-item level-${item.level}`}
-                        style={{ paddingLeft: `${(item.level - 1) * 12 + 10}px` }}
-                        onClick={() => handleOutlineClick(item)}
-                        title={`跳转到: ${item.title}`}
-                      >
-                        <span className="outline-prefix">{'#'.repeat(item.level)}</span>
-                        <span className="outline-title">{item.title}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
+            <button className="sb-newdoc" onClick={handleNewFile}>
+              <AppIcon name="plus-circle" size={15} />
+              <span>新建文档</span>
+            </button>
 
-              {/* Tab 2: Document List */}
-              {sidebarTab === 'docs' && (
-                <div className="docs-view">
-                  <div className="sidebar-pane-title">打开的文档列表</div>
-                  <div className="sidebar-docs-list">
-                    {openFiles.map((file) => (
-                      <div
-                        key={file.id}
-                        className={`sidebar-doc-item ${file.id === activeFileId ? 'active' : ''}`}
-                        onClick={() => setActiveFileId(file.id)}
-                      >
-                        <span className="doc-icon">📄</span>
-                        <span className="doc-name">{file.name}{fileConflicts[file.id] ? ' ⚠️' : ''}</span>
-                        {file.isModified && <span className="doc-modified-dot" title="未保存更改">•</span>}
-                        <button
-                          className="doc-close-btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCloseFile(file.id);
-                          }}
-                          title="关闭文档"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  <button className="sidebar-new-btn" onClick={handleNewFile}>
-                    ＋ 新建空白文档
-                  </button>
-                </div>
-              )}
+            <div className="sb-searchbar" onClick={openSearchPanel}>
+              <AppIcon name="search" size={14} />
+              <span>{sidebarPanel === 'search' ? '文档查找与替换...' : '搜索 / 替换  (Ctrl+Shift+F)'}</span>
+            </div>
 
-              {/* Tab 3: File Tree (N-level recursive tree) */}
-              {sidebarTab === 'files' && (
-                <div className="files-view">
-                  <div className="files-view-header">
-                    <span className="folder-name" title={workspaceDir || '未选择文件夹'}>
-                      📁 {workspaceDir ? workspaceDir.split(/[\/]/).pop() : '未选择文件夹'}
-                    </span>
-                    <button className="folder-open-btn" onClick={handleSelectWorkspace} title="选择本地工作区目录">
-                      打开...
-                    </button>
-                  </div>
-                  <div className="file-tree-list">
-                    {workspaceFiles.length === 0 ? (
-                      <div className="sidebar-empty-hint">
-                        {workspaceDir ? '当前文件夹内未发现 Markdown 或支持的文件' : '点击上方“打开...”选择本地文件夹'}
-                      </div>
-                    ) : (
-                      workspaceFiles.map((item) => (
-                        <FileTreeNode
-                          key={item.path}
-                          item={item}
-                          level={0}
-                          activePath={activeFile?.path || null}
-                          expandedDirs={expandedDirs}
-                          dirChildrenCache={dirChildrenCache}
-                          onToggleDir={handleToggleDirectory}
-                          onOpenFile={openFileByPath}
-                        />
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Tab 4: Search & Replace */}
-              {sidebarTab === 'search' && (
+            <div className="sb-scroll">
+              {sidebarPanel === 'search' ? (
                 <div className="search-view">
                   <div className="sidebar-pane-title">文档全文查找与替换</div>
                   <div className="search-box">
@@ -3012,6 +2629,7 @@ ${texBody}
                       type="text"
                       className="search-input"
                       placeholder="查找内容..."
+                      autoFocus
                       value={searchQuery}
                       onChange={(e) => handleSearch(e.target.value)}
                     />
@@ -3039,8 +2657,249 @@ ${texBody}
                       <button className="replace-action-btn" onClick={handleReplaceAll}>全部替换</button>
                     </div>
                   </div>
+
+                  <button className="sb-back-link" onClick={() => setSidebarPanel('workspace')}>
+                    ← 返回工作区
+                  </button>
                 </div>
+              ) : (
+                <>
+                  {/* 大纲（树状，可逐节点折叠） */}
+                  <div className="sb-region">
+                    <div
+                      className="sb-region-head"
+                      onClick={() => setOutlineRegionOpen((v) => !v)}
+                      title="点击折叠 / 展开此区域"
+                    >
+                      <span className={`sb-region-arrow ${outlineRegionOpen ? 'open' : ''}`}>▸</span>
+                      <span className="sb-region-title">大纲 · OUTLINE</span>
+                    </div>
+                    {outlineRegionOpen && (
+                      <div className="sb-region-body">
+                        {outlineList.length === 0 ? (
+                          <div className="sidebar-empty-hint">当前文档暂无标题</div>
+                        ) : (
+                          outlineRows.map((item, idx) => (
+                            <div
+                              key={`${item.line}-${idx}`}
+                              className={`outline-item level-${item.level}${item.hasChild && item.collapsed ? ' has-collapsed' : ''}`}
+                              style={{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }}
+                              title={`跳转到: ${item.title}`}
+                            >
+                              {item.hasChild ? (
+                                <span
+                                  className="outline-caret"
+                                  onClick={(e) => { e.stopPropagation(); toggleOutlineNode(item.line); }}
+                                  title={item.collapsed ? '展开子标题' : '折叠子标题'}
+                                >
+                                  {item.collapsed ? '▸' : '▾'}
+                                </span>
+                              ) : (
+                                <span className="outline-caret-sp" />
+                              )}
+                              <span
+                                className="outline-title"
+                                onClick={() => handleOutlineClick(item)}
+                              >
+                                {item.title}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 已打开文档 */}
+                  <div className="sb-region">
+                    <div className="sb-region-head static">
+                      <span className="sb-region-title">已打开 · DOCUMENTS ({openFiles.length})</span>
+                    </div>
+                    <div className="sb-region-body">
+                      {openFiles.map((file) => (
+                        <div
+                          key={file.id}
+                          className={`sidebar-doc-item ${file.id === activeFileId ? 'active' : ''}`}
+                          onClick={() => setActiveFileId(file.id)}
+                          title={file.path || '未保存于磁盘'}
+                        >
+                          <AppIcon name="file-text" size={14} className="doc-icon-2" />
+                          <span className="doc-name">{file.name}{fileConflicts[file.id] ? ' ⚠️' : ''}</span>
+                          {file.isModified && <span className="doc-modified-dot" title="未保存更改">•</span>}
+                          <button
+                            className="doc-close-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCloseFile(file.id);
+                            }}
+                            title="关闭文档"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 工作区文件树 */}
+                  <div className="sb-region">
+                    <div className="sb-region-head static">
+                      <span className="sb-region-title">工作区 · WORKSPACE</span>
+                      <button className="sb-mini-btn" onClick={handleSelectWorkspace} title="打开本地文件夹作为工作区">
+                        <AppIcon name="folder-open" size={13} />
+                      </button>
+                    </div>
+                    <div className="sb-region-body">
+                      {workspaceFiles.length === 0 ? (
+                        <div className="sidebar-empty-hint">
+                          {workspaceDir ? '该文件夹内暂无 Markdown 文件' : '点击上方图标选择本地文件夹'}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="sb-ws-root" title={workspaceDir || ''}>
+                            {workspaceDir ? workspaceDir.split(/[\\/]/).pop() : ''}
+                          </div>
+                          {workspaceFiles.map((item) => (
+                            <FileTreeNode
+                              key={item.path}
+                              item={item}
+                              level={0}
+                              activePath={activeFile?.path || null}
+                              expandedDirs={expandedDirs}
+                              dirChildrenCache={dirChildrenCache}
+                              onToggleDir={handleToggleDirectory}
+                              onOpenFile={openFileByPath}
+                            />
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 最近文件 */}
+                  {recentFiles.length > 0 && (
+                    <div className="sb-region">
+                      <div className="sb-region-head static">
+                        <span className="sb-region-title">最近 · RECENT</span>
+                      </div>
+                      <div className="sb-region-body">
+                        {recentFiles.slice(0, 6).map((rf, idx) => (
+                          <div key={idx} className="sidebar-doc-item" onClick={() => handleOpenFile(rf.path)} title={rf.path}>
+                            <AppIcon name="file-text" size={14} className="doc-icon-2" />
+                            <span className="doc-name">{rf.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
+            </div>
+
+            <div className="sb-foot">
+              <span>UTF-8</span>
+              <span>{activeFile?.path || '未保存'}</span>
+            </div>
+          </aside>
+        )}
+
+        {isInspectorOpen && !isSourceMode && (
+          <aside className="typo-inspector">
+            <div className="insp-head">
+              <span className="insp-title">排版检查器</span>
+              <button className="sb-mini-btn" onClick={() => setIsInspectorOpen(false)} title="关闭">
+                <AppIcon name="close" size={13} />
+              </button>
+            </div>
+            <div className="insp-body">
+              <div className="insp-group">
+                <div className="insp-label">对齐方式</div>
+                <div className="typo-radio-toggle">
+                  <button
+                    className={`typo-radio-btn ${typography.textAlign === 'justify' ? 'active' : ''}`}
+                    onClick={() => setTypography((t) => ({ ...t, textAlign: 'justify' }))}
+                    title="两端对齐，末行靠左"
+                  >
+                    <AppIcon name="align-justify" size={14} />
+                  </button>
+                  <button
+                    className={`typo-radio-btn ${typography.textAlign === 'left' ? 'active' : ''}`}
+                    onClick={() => setTypography((t) => ({ ...t, textAlign: 'left' }))}
+                    title="自然左对齐"
+                  >
+                    <AppIcon name="align-left" size={14} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="insp-group">
+                <div className="insp-label">首行缩进</div>
+                <div className="typo-radio-toggle">
+                  <button
+                    className={`typo-radio-btn ${!typography.firstLineIndent ? 'active' : ''}`}
+                    onClick={() => setTypography((t) => ({ ...t, firstLineIndent: false }))}
+                  >
+                    顶格
+                  </button>
+                  <button
+                    className={`typo-radio-btn ${typography.firstLineIndent ? 'active' : ''}`}
+                    onClick={() => setTypography((t) => ({ ...t, firstLineIndent: true }))}
+                  >
+                    2 字符
+                  </button>
+                </div>
+              </div>
+
+              <div className="insp-group">
+                <div className="insp-label">正文字号 <span className="insp-val">{typography.fontSize}px</span></div>
+                <input
+                  type="range" min={12} max={26} step={1}
+                  className="typo-slider"
+                  value={typography.fontSize}
+                  onChange={(e) => setTypography((t) => ({ ...t, fontSize: Number(e.target.value) }))}
+                />
+              </div>
+
+              <div className="insp-group">
+                <div className="insp-label">行高 <span className="insp-val">{typography.lineHeight}</span></div>
+                <input
+                  type="range" min={1.4} max={2.5} step={0.05}
+                  className="typo-slider"
+                  value={typography.lineHeight}
+                  onChange={(e) => setTypography((t) => ({ ...t, lineHeight: Number(e.target.value) }))}
+                />
+              </div>
+
+              <div className="insp-group">
+                <div className="insp-label">段间距 <span className="insp-val">{typography.paragraphMargin}em</span></div>
+                <input
+                  type="range" min={0.5} max={2.5} step={0.1}
+                  className="typo-slider"
+                  value={typography.paragraphMargin}
+                  onChange={(e) => setTypography((t) => ({ ...t, paragraphMargin: Number(e.target.value) }))}
+                />
+              </div>
+
+              <div className="insp-group">
+                <div className="insp-label">版心宽度</div>
+                <select
+                  className="typo-select"
+                  value={typography.maxWidth}
+                  onChange={(e) => setTypography((t) => ({ ...t, maxWidth: e.target.value }))}
+                >
+                  {MAX_WIDTH_OPTIONS.map((opt, i) => (
+                    <option key={i} value={opt.value}>{opt.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                className="typo-radio-btn insp-reset"
+                onClick={() => setTypography(DEFAULT_TYPOGRAPHY)}
+                title="恢复默认排版参数"
+              >
+                恢复默认排版
+              </button>
             </div>
           </aside>
         )}
@@ -3295,7 +3154,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.8.8 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.9.0 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。
@@ -3424,20 +3283,27 @@ $$`}
                   <span className="typo-label">启动默认主题 (Default Theme):</span>
                   <div className="typo-radio-toggle">
                     <button
+                      className={`typo-radio-btn ${defaultThemeSetting === 'auto' ? 'active' : ''}`}
+                      onClick={() => { setDefaultThemeSetting('auto'); setThemePref('auto'); }}
+                      title="跟随操作系统：系统浅色→纯白，系统深色→极客深色"
+                    >
+                      🖥️ 跟随系统
+                    </button>
+                    <button
                       className={`typo-radio-btn ${defaultThemeSetting === 'light' ? 'active' : ''}`}
-                      onClick={() => { setDefaultThemeSetting('light'); setAppTheme('light'); }}
+                      onClick={() => { setDefaultThemeSetting('light'); setThemePref('light'); }}
                     >
                       ☀️ 纯白
                     </button>
                     <button
                       className={`typo-radio-btn ${defaultThemeSetting === 'dark' ? 'active' : ''}`}
-                      onClick={() => { setDefaultThemeSetting('dark'); setAppTheme('dark'); }}
+                      onClick={() => { setDefaultThemeSetting('dark'); setThemePref('dark'); }}
                     >
                       🌙 深色
                     </button>
                     <button
                       className={`typo-radio-btn ${defaultThemeSetting === 'sepia' ? 'active' : ''}`}
-                      onClick={() => { setDefaultThemeSetting('sepia'); setAppTheme('sepia'); }}
+                      onClick={() => { setDefaultThemeSetting('sepia'); setThemePref('sepia'); }}
                     >
                       📜 原木
                     </button>

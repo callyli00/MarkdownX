@@ -5,17 +5,28 @@
   --font-serif: 'Times New Roman', Cambria, 'Songti SC', 'SimSun', 'Noto Serif CJK SC', 'Source Han Serif SC', serif;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
   
-  --bg-app: #fbfbfb;
+  /* ---- Workbench chrome tokens (two-tier surfaces, flat, rounded) ---- */
+  --wb-side: #eceef2;      /* sidebar + top bar slate */
+  --wb-main: #f7f8fa;      /* workspace background */
+  --wb-card: #ffffff;      /* raised cards, menus, modals */
+  --wb-line: #e2e5ea;      /* hairline separators */
+  --wb-fg: #1c2027;
+  --wb-fg2: #5b6472;
+  --wb-fg3: #8a93a3;
+  --wb-sel: #e1e5ec;       /* selected color block (no borders) */
+  --wb-accent: #2f6fed;
+
+  --bg-app: #f7f8fa;
   --bg-surface: #ffffff;
-  --bg-code: #f6f8fa;
-  --border-subtle: #e5e7eb;
-  --border-strong: #d1d5db;
-  --text-main: #24292f;
-  --text-muted: #57606a;
-  --text-faint: #8c959f;
-  --color-primary: #0969da;
-  --color-primary-hover: #0860ca;
-  --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --bg-code: #f4f6f9;
+  --border-subtle: #e2e5ea;
+  --border-strong: #cfd4dc;
+  --text-main: #1c2027;
+  --text-muted: #5b6472;
+  --text-faint: #8a93a3;
+  --color-primary: #2f6fed;
+  --color-primary-hover: #2258c9;
+  --shadow-menu: 0 10px 30px -12px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(15, 23, 42, 0.06);
 }
 
 * {
@@ -474,7 +485,7 @@ body.theme-sepia .jump-target-flash {
   flex: 1;
   height: 100%;
   overflow-y: auto;
-  background-color: var(--bg-surface);
+  background-color: var(--wb-main);
 }
 
 .typora-paper-article {
@@ -1282,125 +1293,120 @@ body.theme-light {
 }
 
 body.theme-dark {
-  --bg-app: #090d16;
-  --bg-surface: #0f172a;
-  --bg-code: #1e293b;
-  --border-subtle: #334155;
-  --border-strong: #475569;
-  --text-main: #f1f5f9;
-  --text-muted: #94a3b8;
-  --text-faint: #64748b;
-  --color-primary: #38bdf8;
-  --color-primary-hover: #0284c7;
+  /* Two-tier dark: slate sidebar over a near-black workspace (reference style) */
+  --wb-side: #1e2531;
+  --wb-main: #0f1217;
+  --wb-card: #171c24;
+  --wb-line: #2a3038;
+  --wb-fg: #e8eaf0;
+  --wb-fg2: #9aa3b2;
+  --wb-fg3: #6b7383;
+  --wb-sel: #2a3242;
+  --wb-accent: #5b8def;
+
+  --bg-app: #0f1217;
+  --bg-surface: #131820;
+  --bg-code: #171c24;
+  --border-subtle: #2a3038;
+  --border-strong: #3a4250;
+  --text-main: #e8eaf0;
+  --text-muted: #9aa3b2;
+  --text-faint: #6b7383;
+  --color-primary: #5b8def;
+  --color-primary-hover: #7ba4f5;
   --table-border-top: #cbd5e1;
-  --table-border-mid: #94a3b8;
-  --table-th-bg: #1e293b;
-  --table-stripe: #131d31;
+  --table-border-mid: #7c8798;
+  --table-th-bg: #171c24;
+  --table-stripe: #141920;
+  --shadow-menu: 0 14px 38px -14px rgba(0, 0, 0, 0.75), 0 2px 10px rgba(0, 0, 0, 0.5);
 }
 
-body.theme-dark .typora-menubar,
 body.theme-dark .typora-statusbar,
 body.theme-dark .typora-dropdown-menu,
 body.theme-dark .typora-submenu,
-body.theme-dark .open-files-menu,
 body.theme-dark .typo-modal-box {
-  background-color: #0f172a !important;
-  color: #f1f5f9 !important;
-  border-color: #334155 !important;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.7), 0 8px 10px -6px rgba(0, 0, 0, 0.7) !important;
+  background-color: var(--wb-card) !important;
+  color: var(--wb-fg) !important;
+  border-color: var(--wb-line) !important;
 }
 
-body.theme-dark .dropdown-item {
-  color: #f1f5f9 !important;
+body.theme-dark .typora-menubar {
+  background-color: var(--wb-side) !important;
+  border-color: var(--wb-line) !important;
 }
+
+body.theme-dark .dropdown-item { color: var(--wb-fg) !important; }
 
 body.theme-dark .menu-top-btn:hover,
 body.theme-dark .menu-top-btn.active,
 body.theme-dark .dropdown-item:hover,
 body.theme-dark .open-file-item:hover {
-  background-color: #1e293b !important;
-  color: #38bdf8 !important;
+  background-color: var(--wb-sel) !important;
+  color: var(--wb-accent) !important;
 }
 
-body.theme-dark .dropdown-item .shortcut {
-  color: #94a3b8 !important;
-}
-
-body.theme-dark .dropdown-item:hover .shortcut {
-  color: #38bdf8 !important;
-}
-
-body.theme-dark .dropdown-divider {
-  background-color: #334155 !important;
-}
-
-body.theme-dark .dropdown-item .arrow {
-  color: #94a3b8 !important;
-}
-
-body.theme-dark .typora-submenu .file-name {
-  color: #f1f5f9 !important;
-}
-
-body.theme-dark .typora-submenu .file-subpath {
-  color: #64748b !important;
-}
+body.theme-dark .dropdown-item .shortcut { color: var(--wb-fg3) !important; }
+body.theme-dark .dropdown-item:hover .shortcut { color: var(--wb-accent) !important; }
+body.theme-dark .dropdown-divider { background-color: var(--wb-line) !important; }
+body.theme-dark .dropdown-item .arrow { color: var(--wb-fg3) !important; }
+body.theme-dark .typora-submenu .file-name { color: var(--wb-fg) !important; }
+body.theme-dark .typora-submenu .file-subpath { color: var(--wb-fg3) !important; }
 
 body.theme-dark .typora-btn,
 body.theme-dark .view-mode-toggle-btn,
 body.theme-dark .quick-font-btn,
 body.theme-dark .current-file-btn {
-  background-color: #1e293b !important;
-  color: #f1f5f9 !important;
-  border-color: #334155 !important;
+  background-color: var(--wb-card) !important;
+  color: var(--wb-fg) !important;
+  border-color: var(--wb-line) !important;
 }
 
 body.theme-dark .typora-btn:hover,
-body.theme-dark .current-file-btn:hover {
-  background-color: #334155 !important;
-}
+body.theme-dark .current-file-btn:hover { background-color: var(--wb-sel) !important; }
 
 body.theme-dark .typo-modal-header,
 body.theme-dark .typo-modal-footer {
-  background-color: #131d31 !important;
-  border-color: #334155 !important;
+  background-color: #141920 !important;
+  border-color: var(--wb-line) !important;
 }
 
 body.theme-dark .typo-select,
 body.theme-dark .typo-radio-toggle {
-  background-color: #1e293b !important;
-  color: #f1f5f9 !important;
-  border-color: #475569 !important;
+  background-color: var(--wb-card) !important;
+  color: var(--wb-fg) !important;
+  border-color: var(--wb-line) !important;
 }
 
 body.theme-dark .typora-fullscreen-textarea {
-  color: #f1f5f9 !important;
-  background-color: #090d16 !important;
+  color: var(--wb-fg) !important;
+  background-color: var(--wb-main) !important;
 }
 
-body.theme-dark .source-fullscreen-pane {
-  background-color: #090d16 !important;
-}
-
-body.theme-dark .app-name-label {
-  color: #f1f5f9 !important;
-}
+body.theme-dark .source-fullscreen-pane { background-color: var(--wb-main) !important; }
+body.theme-dark .app-name-label { color: var(--wb-fg) !important; }
 
 /* Dark mode MathJax formula inversion */
-body.theme-dark mjx-container {
-  color: #f8fafc !important;
-}
-body.theme-dark .math-equation-tag {
-  color: #94a3b8 !important;
-}
+body.theme-dark mjx-container { color: #f8fafc !important; }
+body.theme-dark .math-equation-tag { color: var(--wb-fg2) !important; }
 
 /* Theme: Sepia (Warm Paper) */
 body.theme-sepia {
-  --bg-app: #f4ede1;
+  /* Warm paper workbench: parchment surfaces, amber accent */
+  --wb-side: #ece0c9;
+  --wb-main: #f6efe2;
+  --wb-card: #fbf6ec;
+  --wb-line: #e0d2b8;
+  --wb-fg: #3d352a;
+  --wb-fg2: #6b5d4d;
+  --wb-fg3: #928370;
+  --wb-sel: #e6d9c0;
+  --wb-accent: #b45309;
+
+  --bg-app: #f6efe2;
   --bg-surface: #fbf6ec;
-  --bg-code: #efe4d3;
-  --border-subtle: #e6dac6;
-  --border-strong: #d5c4aa;
+  --bg-code: #f1e7d6;
+  --border-subtle: #e0d2b8;
+  --border-strong: #cdbb9c;
   --text-main: #3d352a;
   --text-muted: #6b5d4d;
   --text-faint: #928370;
@@ -1410,57 +1416,38 @@ body.theme-sepia {
   --table-border-mid: #6b5d4d;
   --table-th-bg: #f2e7d7;
   --table-stripe: #f8f1e5;
+  --shadow-menu: 0 12px 32px -14px rgba(61, 53, 42, 0.28), 0 2px 8px rgba(61, 53, 42, 0.10);
 }
 
-body.theme-sepia .typora-menubar,
 body.theme-sepia .typora-statusbar,
 body.theme-sepia .typora-dropdown-menu,
 body.theme-sepia .typora-submenu,
-body.theme-sepia .open-files-menu,
 body.theme-sepia .typo-modal-box {
-  background-color: #fbf6ec !important;
-  color: #3d352a !important;
-  border-color: #e6dac6 !important;
-  box-shadow: 0 10px 25px -5px rgba(60, 40, 20, 0.15) !important;
+  background-color: var(--wb-card) !important;
+  color: var(--wb-fg) !important;
+  border-color: var(--wb-line) !important;
 }
 
-body.theme-sepia .dropdown-item {
-  color: #3d352a !important;
+body.theme-sepia .typora-menubar {
+  background-color: var(--wb-side) !important;
+  border-color: var(--wb-line) !important;
 }
+
+body.theme-sepia .dropdown-item { color: var(--wb-fg) !important; }
 
 body.theme-sepia .menu-top-btn:hover,
 body.theme-sepia .dropdown-item:hover {
-  background-color: #efe4d3 !important;
-  color: #b45309 !important;
+  background-color: var(--wb-sel) !important;
+  color: var(--wb-accent) !important;
 }
 
-body.theme-sepia .dropdown-item .shortcut {
-  color: #928370 !important;
-}
-
-body.theme-sepia .dropdown-item:hover .shortcut {
-  color: #b45309 !important;
-}
-
-body.theme-sepia .dropdown-divider {
-  background-color: #e6dac6 !important;
-}
-
-body.theme-sepia .dropdown-item .arrow {
-  color: #928370 !important;
-}
-
-body.theme-sepia .typora-submenu .file-name {
-  color: #3d352a !important;
-}
-
-body.theme-sepia .typora-submenu .file-subpath {
-  color: #928370 !important;
-}
-
-body.theme-sepia mjx-container {
-  color: #3d352a !important;
-}
+body.theme-sepia .dropdown-item .shortcut { color: var(--wb-fg3) !important; }
+body.theme-sepia .dropdown-item:hover .shortcut { color: var(--wb-accent) !important; }
+body.theme-sepia .dropdown-divider { background-color: var(--wb-line) !important; }
+body.theme-sepia .dropdown-item .arrow { color: var(--wb-fg3) !important; }
+body.theme-sepia .typora-submenu .file-name { color: var(--wb-fg) !important; }
+body.theme-sepia .typora-submenu .file-subpath { color: var(--wb-fg3) !important; }
+body.theme-sepia mjx-container { color: #3d352a !important; }
 
 /* =========================================
    Academic Three-Line Table (Booktabs)
@@ -2451,4 +2438,409 @@ body.theme-sepia .mermaid-unclosed-hint {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   z-index: 1000;
   pointer-events: none;
+}
+
+/* ==========================================================================
+   v1.9.0 WORKBENCH CHROME
+   Two-tier surfaces (slate chrome over a quiet workspace), flat, rounded,
+   selection shown by a colour block rather than a border. Icon language: the
+   line-icon set in AppIcon.tsx.
+   ========================================================================== */
+
+/* Shell: the workspace must fill the leftover height on its own. */
+.typora-shell { background-color: var(--wb-main); }
+.typora-main-layout {
+  height: auto !important;
+  flex: 1 1 auto;
+  min-height: 0;
+  background-color: var(--wb-main);
+}
+
+/* ---------- 1. Top bar ---------- */
+.wb-topbar {
+  height: 46px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px;
+  background-color: var(--wb-side);
+  border-bottom: 1px solid var(--wb-line);
+  user-select: none;
+  z-index: 60;
+}
+.wb-tb-left, .wb-tb-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.wb-tb-left { flex: 1 1 auto; }
+.wb-tb-right { flex: 0 0 auto; }
+.wb-tb-center { flex: 0 0 auto; display: flex; align-items: center; }
+
+.wb-doc-name {
+  margin-left: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wb-fg);
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-dirty-dot { color: var(--wb-accent); margin-left: 6px; font-weight: 700; }
+
+.wb-icon-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--wb-fg2);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.wb-icon-btn:hover { background: var(--wb-sel); color: var(--wb-fg); }
+.wb-icon-btn.active { background: var(--wb-sel); color: var(--wb-accent); }
+.wb-cluster-sep { width: 1px; height: 18px; margin: 0 6px; background: var(--wb-line); }
+
+.wb-edit-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wb-card) 55%, transparent);
+}
+.wb-edit-cluster .wb-icon-btn { width: 28px; height: 28px; border-radius: 7px; }
+
+.wb-view-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--wb-card);
+  border: 1px solid var(--wb-line);
+}
+.wb-view-tab {
+  border: none;
+  background: transparent;
+  color: var(--wb-fg3);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.wb-view-tab:hover { color: var(--wb-fg); }
+.wb-view-tab.active { background: var(--wb-sel); color: var(--wb-fg); }
+
+/* Workbench dropdown (anchored under the top bar) */
+.wb-menu-host { position: relative; }
+.wb-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 232px;
+  z-index: 200;
+}
+
+/* ---------- 2. Sidebar ---------- */
+.typora-sidebar {
+  width: 252px !important;
+  min-width: 252px !important;
+  max-width: 252px !important;
+  background-color: var(--wb-side) !important;
+  border-right: 1px solid var(--wb-line) !important;
+  padding: 12px 10px 8px;
+  gap: 10px;
+}
+
+.sb-brand { display: flex; align-items: center; gap: 9px; padding: 0 6px 2px; }
+.sb-brand-name { font-size: 14px; font-weight: 700; letter-spacing: 0.2px; color: var(--wb-fg); }
+.sb-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--wb-card);
+  color: var(--wb-accent);
+  border: 1px solid var(--wb-line);
+}
+
+.sb-newdoc {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.sb-newdoc:hover { background: var(--wb-sel); color: var(--wb-accent); }
+
+.sb-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 11px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--wb-card) 60%, transparent);
+  color: var(--wb-fg3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.sb-searchbar:hover { background: var(--wb-sel); color: var(--wb-fg2); }
+
+.sb-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
+.sb-scroll::-webkit-scrollbar { width: 8px; }
+.sb-scroll::-webkit-scrollbar-thumb { background: var(--wb-line); border-radius: 4px; }
+
+.sb-region { margin-bottom: 10px; }
+.sb-region-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  color: var(--wb-fg3);
+  cursor: pointer;
+  user-select: none;
+}
+.sb-region-head:hover { background: var(--wb-sel); color: var(--wb-fg2); }
+.sb-region-head.static { cursor: default; }
+.sb-region-head.static:hover { background: transparent; color: var(--wb-fg3); }
+.sb-region-arrow { display: inline-block; transition: transform 0.15s ease; font-size: 10px; }
+.sb-region-arrow.open { transform: rotate(90deg); }
+.sb-region-title { flex: 1 1 auto; }
+.sb-region-body { padding: 2px 0 2px 2px; }
+
+.sb-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--wb-fg3);
+  cursor: pointer;
+}
+.sb-mini-btn:hover { background: var(--wb-sel); color: var(--wb-accent); }
+
+.sb-ws-root {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--wb-fg2);
+  padding: 2px 8px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-foot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-line);
+  font-size: 10.5px;
+  color: var(--wb-fg3);
+}
+.sb-foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-back-link {
+  margin-top: 10px;
+  border: none;
+  background: transparent;
+  color: var(--wb-accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 2px;
+}
+.sb-back-link:hover { text-decoration: underline; }
+
+/* Outline: colour-block selection, caret per branch */
+.outline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 5px 8px 5px 4px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--wb-fg2);
+  cursor: default;
+  line-height: 1.5;
+}
+.outline-item:hover { background: var(--wb-sel); color: var(--wb-fg); }
+.outline-item.has-collapsed { color: var(--wb-fg3); }
+.outline-caret {
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 10px;
+  color: var(--wb-fg3);
+  cursor: pointer;
+  border-radius: 4px;
+  user-select: none;
+}
+.outline-caret:hover { color: var(--wb-accent); }
+.outline-caret-sp { width: 14px; flex-shrink: 0; }
+.outline-title { flex: 1 1 auto; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Documents list (reuses old classes, retinted) */
+.typora-sidebar .sidebar-doc-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--wb-fg2);
+  cursor: pointer;
+  border: none !important;
+}
+.typora-sidebar .sidebar-doc-item:hover { background: var(--wb-sel); color: var(--wb-fg); }
+.typora-sidebar .sidebar-doc-item.active { background: var(--wb-sel); color: var(--wb-fg); font-weight: 600; }
+.typora-sidebar .doc-icon-2 { color: var(--wb-fg3); flex-shrink: 0; }
+.typora-sidebar .sidebar-doc-item.active .doc-icon-2 { color: var(--wb-accent); }
+.typora-sidebar .doc-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.typora-sidebar .doc-modified-dot { color: var(--wb-accent); font-weight: 700; }
+.typora-sidebar .doc-close-btn {
+  width: 18px; height: 18px; line-height: 1;
+  border: none; border-radius: 5px;
+  background: transparent; color: var(--wb-fg3);
+  cursor: pointer; font-size: 13px; opacity: 0;
+}
+.typora-sidebar .sidebar-doc-item:hover .doc-close-btn { opacity: 1; }
+.typora-sidebar .doc-close-btn:hover { background: var(--wb-card); color: #e54848; }
+.typora-sidebar .sidebar-empty-hint {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--wb-fg3);
+}
+.typora-sidebar .sidebar-pane-title {
+  padding: 4px 8px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  color: var(--wb-fg3);
+}
+
+/* File tree inside the workbench sidebar */
+.file-tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--wb-fg2);
+  cursor: pointer;
+}
+.file-tree-item:hover { background: var(--wb-sel); color: var(--wb-fg); }
+.file-tree-item.active { background: var(--wb-sel); color: var(--wb-fg); font-weight: 600; }
+.file-tree-item .tree-arrow { font-size: 9px; color: var(--wb-fg3); width: 10px; }
+.file-tree-item .file-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 3. Typography inspector (right rail) ---------- */
+.typo-inspector {
+  width: 248px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--wb-side);
+  border-left: 1px solid var(--wb-line);
+  animation: inspSlideIn 0.16s ease-out;
+}
+@keyframes inspSlideIn {
+  from { transform: translateX(12px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.insp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--wb-line);
+}
+.insp-title { font-size: 11.5px; font-weight: 700; letter-spacing: 0.7px; color: var(--wb-fg2); }
+.insp-body { flex: 1 1 auto; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 16px; }
+.insp-group { display: flex; flex-direction: column; gap: 7px; }
+.insp-label { font-size: 12px; color: var(--wb-fg2); display: flex; justify-content: space-between; }
+.insp-val { color: var(--wb-accent); font-variant-numeric: tabular-nums; }
+.insp-group .typo-radio-toggle { background: var(--wb-card); border-color: var(--wb-line); }
+.insp-group .typo-slider { width: 100%; accent-color: var(--wb-accent); }
+.insp-group .typo-select {
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.insp-reset {
+  margin-top: auto;
+  padding: 8px;
+  border-radius: 9px;
+  border: 1px solid var(--wb-line);
+  background: var(--wb-card);
+  color: var(--wb-fg2);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.insp-reset:hover { background: var(--wb-sel); color: var(--wb-accent); }
+
+/* ---------- 4. Status bar retint ---------- */
+.typora-statusbar {
+  background-color: var(--wb-side) !important;
+  border-top: 1px solid var(--wb-line) !important;
+  color: var(--wb-fg3) !important;
+  height: 28px;
+}
+.typora-statusbar .status-badge {
+  background: var(--wb-sel) !important;
+  color: var(--wb-fg2) !important;
+  border-radius: 20px;
+  padding: 2px 9px;
+}
+.typora-statusbar .status-left .sep,
+.typora-statusbar .status-right .sep { color: var(--wb-line); }
+
+/* Workspace surface */
+.typora-workspace { background-color: var(--wb-main); }
+.source-fullscreen-pane { background-color: var(--wb-main) !important; }
+.typora-fullscreen-textarea { background-color: var(--wb-main); color: var(--wb-fg); }
+
+/* Paper surface follows the workbench tier: in dark the article writes straight
+   onto the near-black canvas (reference style); light/sepia keep a soft card. */
+body.theme-light .typora-paper-article {
+  background: var(--wb-card);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  margin: 20px auto;
+  min-height: calc(100% - 40px);
+}
+body.theme-sepia .typora-paper-article {
+  background: var(--wb-card);
+  border-radius: 14px;
+  margin: 20px auto;
+  min-height: calc(100% - 40px);
 }
