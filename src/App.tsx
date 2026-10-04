@@ -51,11 +51,18 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.5';
+const APP_VERSION = 'v1.9.6';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.6',
+    date: '2026-10-04',
+    items: [
+      '源码模式点击大纲：光标落在标题行首（可直接编辑 ## 前缀），且不选中任何内容'
+    ]
+  },
   {
     version: 'v1.9.5',
     date: '2026-10-04',
@@ -1309,11 +1316,10 @@ export const App: React.FC = () => {
         charIndex += lines[i].length + 1;
       }
       const pos = Math.max(0, Math.min(charIndex, ta.value.length));
-      // Land the caret on the heading TEXT (skip the leading #'s and spaces) and
-      // select nothing: the jump must not paint the whole title as selected.
-      const lineText = lines[item.line] || '';
-      const lead = (lineText.match(/^#+\s*/) || [''])[0].length;
-      const caretAt = Math.max(0, Math.min(pos + lead, ta.value.length));
+      // Land the caret at the very START of the heading line and select nothing:
+      // the jump must not paint the whole title as selected, and the author must
+      // be able to edit the '#' prefix right away (so the marker is NOT skipped).
+      const caretAt = pos;
       ta.focus();
       ta.setSelectionRange(caretAt, caretAt);
       // A fixed line height cannot address the target: wrapped lines make the
