@@ -51,11 +51,19 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.7';
+const APP_VERSION = 'v1.9.8';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.8',
+    date: '2026-10-04',
+    items: [
+      '修复 v1.9.7 回归：上半屏公式未排版（分片渲染在“首次挂载/从源码切回”时只排了最后一片）',
+      '追加仍为增量排版；全新挂载整篇排一次，并加自愈兜底扫描'
+    ]
+  },
   {
     version: 'v1.9.7',
     date: '2026-10-04',
@@ -1259,22 +1267,55 @@ export const App: React.FC = () => {
   }, []);
 
   /**
-   * Typeset + draw ONLY the chunk that was just appended. Re-running the engine
-   * over the whole article on every append would make the cost quadratic - the
-   * earlier chunks keep their typeset DOM (React reconciles by index, so previous
-   * chunk nodes are never recreated).
+   * Typeset + draw the chunks that need it.
+   *
+   * Two cases must be distinguished, and conflating them is how a preview can show
+   * raw TeX: a plain APPEND only needs the new tail (re-running the engine over the
+   * whole article per append is quadratic), but a FRESH MOUNT - the first mount, or
+   * coming back from the source view - means every chunk lost its typeset DOM, so
+   * all of them must be processed again.
    */
+  const previewMountRef = useRef(false);
   useEffect(() => {
-    if (isSourceMode) return;
+    if (isSourceMode) {
+      previewMountRef.current = false;
+      return;
+    }
     const root = previewRef.current;
     if (!root) return;
-    const chunks = root.querySelectorAll('.render-chunk');
-    const last = chunks[chunks.length - 1] as HTMLElement | undefined;
-    if (!last) return;
-    triggerMathJax(last);
-    renderMermaidDiagrams(last, appTheme);
+    const chunks = Array.from(root.querySelectorAll('.render-chunk')) as HTMLElement[];
+    if (!chunks.length) return;
+    const freshMount = !previewMountRef.current;
+    previewMountRef.current = true;
+    // ONE engine call per pass: triggerMathJax() runs a global texReset() before
+    // typesetting, so issuing several calls concurrently lets those resets
+    // interleave with the queued typeset promises.
+    if (freshMount) {
+      triggerMathJax(root);
+      renderMermaidDiagrams(root, appTheme);
+    } else {
+      const last = chunks[chunks.length - 1];
+      triggerMathJax(last);
+      renderMermaidDiagrams(last, appTheme);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderChunks.length, isSourceMode]);
+
+  // Safety net: once the document has finished streaming, typeset any chunk that
+  // still holds unprocessed math. Catches races between an append and engine
+  // readiness without paying for a full pass on the healthy path.
+  useEffect(() => {
+    if (isSourceMode || renderProgress) return;
+    const root = previewRef.current;
+    if (!root) return;
+    const raw = Array.from(root.querySelectorAll('.render-chunk')).filter(
+      (chunk) =>
+        (chunk.querySelector('.math-equation-row') || chunk.querySelector('.math-inline')) &&
+        !chunk.querySelector('mjx-container')
+    ) as HTMLElement[];
+    if (raw.length) triggerMathJax(root);   // single call keeps texReset from interleaving
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderProgress, isSourceMode]);
 
   // A theme change DOES require repainting every diagram (mermaid bakes colours in).
   useEffect(() => {
