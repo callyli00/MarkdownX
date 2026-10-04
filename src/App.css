@@ -2949,3 +2949,40 @@ body.theme-sepia .typora-paper-article {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---------- About dialog ---------- */
+.about-modal-box { max-width: 520px; }
+.about-body { padding: 20px 24px; max-height: 62vh; overflow-y: auto; }
+.about-head { text-align: center; }
+.about-name { margin: 12px 0 4px; font-size: 19px; }
+.about-version { margin: 0; font-size: 12.5px; color: var(--text-muted); }
+.about-version strong { color: var(--wb-accent); font-size: 13.5px; }
+.about-dim { color: var(--text-faint); }
+.about-tagline { margin: 10px 0 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.65; }
+.about-section-title {
+  margin: 20px 0 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+.about-notes { margin: 0; padding-left: 18px; }
+.about-notes li { font-size: 12.5px; color: var(--text-muted); line-height: 1.75; }
+.about-releases { display: flex; flex-direction: column; gap: 10px; }
+.about-release-head { display: flex; align-items: baseline; gap: 8px; }
+.about-release-ver { font-size: 12.5px; font-weight: 600; color: var(--text-main); }
+.about-release-date { font-size: 11px; color: var(--text-faint); }
+.about-release .about-notes { margin-top: 2px; }
+.about-meta {
+  margin-top: 18px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.about-meta-row { display: flex; gap: 12px; font-size: 12.5px; }
+.about-meta-key { flex: 0 0 68px; color: var(--text-faint); }
+.about-meta-val { color: var(--text-muted); }

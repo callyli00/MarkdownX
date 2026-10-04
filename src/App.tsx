@@ -49,6 +49,41 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
   { id: 'sepia', name: '羊皮纸复古原木 (Sepia)', icon: '📜' }
 ];
 
+
+/** Shown in the About dialog (version, build date, licence, recent notes). */
+const APP_VERSION = 'v1.9.5';
+const APP_BUILD_DATE = '2026-10-04';
+const APP_LICENSE = 'MIT License';
+const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
+const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.5',
+    date: '2026-10-04',
+    items: [
+      '顶栏 “?” 改为「关于」：展示版本号、本次更新、许可证与构建时间',
+      '快捷键速查表统一收纳进 ⋯ 菜单 → 帮助',
+      '源码模式点击大纲不再全选标题：仅定位光标并高亮该行'
+    ]
+  },
+  {
+    version: 'v1.9.4',
+    date: '2026-10-04',
+    items: [
+      '修复最近文件子菜单的长路径溢出面板（改为省略号裁切）',
+      '修复源码模式点击大纲不跳转（改用真实 caret 几何定位）'
+    ]
+  },
+  {
+    version: 'v1.9.3',
+    date: '2026-10-04',
+    items: ['修复二级菜单不向右弹出、菜单底部出现水平滚动条']
+  },
+  {
+    version: 'v1.9.2',
+    date: '2026-10-04',
+    items: ['修复窗口三键失效（补齐 Tauri v2 窗口命令能力白名单）']
+  }
+];
 const THEME_CYCLE: ThemePreference[] = ['auto', 'light', 'dark', 'sepia'];
 
 function systemPrefersDark(): boolean {
@@ -1274,14 +1309,18 @@ export const App: React.FC = () => {
         charIndex += lines[i].length + 1;
       }
       const pos = Math.max(0, Math.min(charIndex, ta.value.length));
-      const lineLen = Math.max(0, Math.min(lines[item.line]?.length || 0, ta.value.length - pos));
+      // Land the caret on the heading TEXT (skip the leading #'s and spaces) and
+      // select nothing: the jump must not paint the whole title as selected.
+      const lineText = lines[item.line] || '';
+      const lead = (lineText.match(/^#+\s*/) || [''])[0].length;
+      const caretAt = Math.max(0, Math.min(pos + lead, ta.value.length));
       ta.focus();
-      ta.setSelectionRange(pos, pos + lineLen);
+      ta.setSelectionRange(caretAt, caretAt);
       // A fixed line height cannot address the target: wrapped lines make the
       // real pixel offset diverge from `line * lineHeight`. Measure the caret
       // geometry instead (same machinery as the preview double-click landing).
       requestAnimationFrame(() => {
-        const caret = measureTextareaCaret(ta, pos);
+        const caret = measureTextareaCaret(ta, caretAt);
         ta.scrollTop = Math.max(0, caret.top - ta.clientHeight / 3);
         const pane = ta.parentElement;
         if (pane) {
@@ -2630,11 +2669,13 @@ ${texBody}
           <button className="wb-icon-btn" data-optional="true" onClick={cycleTheme} title={`主题：${themePref === 'auto' ? '跟随系统' : appTheme}（点击循环）`}>
             <AppIcon name={themeIconName()} size={15} />
           </button>
+          {/* About: version, release notes, licence, build date. The keyboard
+              cheat sheet lives in the ⋯ menu (帮助 → 快捷键速查表). */}
           <button
             className="wb-icon-btn"
-            onClick={() => { setShowHelpModal(true); }}
+            onClick={() => { setShowAboutModal(true); }}
             data-optional="true"
-            title="快捷键速查"
+            title="关于 MarkdownX"
           >
             <AppIcon name="help" size={15} />
           </button>
@@ -3262,20 +3303,70 @@ $$`}
         </div>
       )}
 
-      {/* About Modal */}
+      {/* About Modal — version, release notes, licence, build date, tech stack */}
       {showAboutModal && (
         <div className="typo-modal-overlay" onClick={() => setShowAboutModal(false)}>
-          <div className="typo-modal-box" style={{ maxWidth: '440px', textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
-            <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
-              <MarkdownXLogo size={56} />
-              <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.9.4 (2026.10)</p>
-              <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
-                支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。
-              </p>
+          <div className="typo-modal-box about-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="typo-modal-header">
+              <div className="typo-modal-title">
+                <span>关于 MarkdownX</span>
+              </div>
+              <button className="typo-modal-close-btn" onClick={() => setShowAboutModal(false)}>×</button>
             </div>
-            <div className="typo-modal-footer" style={{ display: 'flex', justifyContent: 'center' }}>
+            <div className="typo-modal-body about-body">
+              <div className="about-head">
+                <MarkdownXLogo size={52} />
+                <h2 className="about-name">MarkdownX</h2>
+                <p className="about-version">
+                  <strong>{APP_VERSION}</strong>
+                  <span className="about-dim"> · 构建于 {APP_BUILD_DATE}</span>
+                </p>
+                <p className="about-tagline">
+                  专为计算力学与科研论文打造的轻量级 Markdown 写作软件。<br />
+                  支持原生公式排版、三线表规范、多级大纲与科研级多格式导出。
+                </p>
+              </div>
+
+              <div className="about-section-title">本次更新 · {RELEASE_NOTES[0].version}（{RELEASE_NOTES[0].date}）</div>
+              <ul className="about-notes">
+                {RELEASE_NOTES[0].items.map((it, i) => (
+                  <li key={i}>{it}</li>
+                ))}
+              </ul>
+
+              <div className="about-section-title">近期版本</div>
+              <div className="about-releases">
+                {RELEASE_NOTES.slice(1).map((rel) => (
+                  <div key={rel.version} className="about-release">
+                    <div className="about-release-head">
+                      <span className="about-release-ver">{rel.version}</span>
+                      <span className="about-release-date">{rel.date}</span>
+                    </div>
+                    <ul className="about-notes">
+                      {rel.items.map((it, i) => (
+                        <li key={i}>{it}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+
+              <div className="about-meta">
+                <div className="about-meta-row">
+                  <span className="about-meta-key">许可证</span>
+                  <span className="about-meta-val">{APP_LICENSE}</span>
+                </div>
+                <div className="about-meta-row">
+                  <span className="about-meta-key">更新时间</span>
+                  <span className="about-meta-val">{APP_BUILD_DATE}</span>
+                </div>
+                <div className="about-meta-row">
+                  <span className="about-meta-key">技术栈</span>
+                  <span className="about-meta-val">{APP_TECH}</span>
+                </div>
+              </div>
+            </div>
+            <div className="typo-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button className="typora-btn typora-btn-primary" onClick={() => setShowAboutModal(false)}>
                 确定
               </button>
