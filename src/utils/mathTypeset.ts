@@ -1,33 +1,39 @@
 /**
- * On-demand math typesetting (v2 stage 3).
+ * Incremental math typesetting (v2 stage 3, revised).
  *
- * Why this exists
- * ---------------
- * Typesetting the whole document at once is the dominant cost of opening a
- * formula-dense paper, and it is wasted work: most formulas are never seen.
- * Wrapping the engine per CHUNK is not enough either, because the chunked preview
- * mounts several thousand blocks per chunk - so the unit of lazy work here is the
- * individual math container (`.math-equation-row` / `.math-inline`).
+ * The problem it solves
+ * ---------------------
+ * A formula-dense document freezes the window when the engine is asked to typeset
+ * all of it in one call - and most of that work is wasted, because the reader never
+ * looks at most of it. Measured on a real report: 174 formulas, one call, seconds of
+ * frozen UI.
  *
- * Guarantees
- * ----------
- * - A container is typeset when it comes near the viewport, and never twice:
- *   containers already holding an `mjx-container` are skipped.
- * - Batched: visible containers are collected and handed to the engine in ONE
- *   call, because the app's engine wrapper resets global TeX state per call.
- * - Single-flight: only one batch runs at a time, so a global reset can never
- *   interleave with a queued typeset promise.
- * - Loud: if the engine never becomes usable the session reports `missing` (or
- *   `error`) instead of silently dropping every formula.
+ * Policy (what the user asked for): render what is being read, and let the rest
+ * follow gently in the background, a little at a time.
+ *
+ *   - viewport first     anything near the viewport is handed to the engine before
+ *                        anything else
+ *   - small batches      at most MAX_BATCH containers per engine call, so no single
+ *                        call can stall the window
+ *   - background fill    while nothing visible is pending, a few more containers are
+ *                        promoted per tick, in document order, until everything is done
+ *   - never twice        a container that already holds rendered output is skipped
+ *   - single-flight      one engine call at a time (the wrapper resets global TeX state)
+ *   - loud on failure    a missing engine, or a call that renders nothing, is reported,
+ *                        requeued and retried - never counted as success
+ *
+ * Visibility uses plain geometry (getBoundingClientRect against the viewport) rather
+ * than IntersectionObserver: geometry is deterministic and cannot silently stop
+ * reporting inside nested scrollers.
  */
 
 export type MathEngineState = 'unknown' | 'loading' | 'ready' | 'missing' | 'error';
 
 export interface MathTypesetStatus {
   engine: MathEngineState;
-  /** Containers handed to the engine so far. */
+  /** Containers that now hold rendered output. */
   typeset: number;
-  /** Containers still needing typesetting (queued or waiting to come into range). */
+  /** Containers still to do (queued for the next batch + waiting their turn). */
   pending: number;
   error: string | null;
 }
@@ -35,21 +41,27 @@ export interface MathTypesetStatus {
 export interface MathTypesetSession {
   /** Re-scan the root for containers that still need typesetting. */
   refresh(): void;
-  /** Typeset every remaining container now (export / print / tests). */
+  /** Typeset everything remaining (export / print / explicit retry). */
   typesetAll(): Promise<void>;
-  /** Stop observing and drop queued work. */
+  /** Stop all scheduling and drop queued work. */
   destroy(): void;
 }
 
 const MATH_SELECTOR = '.math-equation-row, .math-inline';
-/** How far outside the viewport a container is prepared. */
-const PRELOAD_MARGIN = '1200px 0px 1200px 0px';
+/** Containers this far outside the viewport are treated as "being read". */
+const PRELOAD_PX = 1200;
+/** Hard cap per engine call - the whole point is that one call stays cheap. */
+const MAX_BATCH = 8;
+/** Background cadence: how often more off-screen work is promoted. */
+const FILL_INTERVAL_MS = 90;
+/** How many containers the background fill promotes per tick. */
+const FILL_PER_TICK = 4;
 /** Engine readiness budget; the app's own loader has CDN fallbacks behind it. */
 const ENGINE_WAIT_MS = 10000;
-/** Batch window: collect what scrolled into range, then typeset once. */
-const BATCH_DELAY_MS = 40;
 /** How long to wait before re-checking whether the engine has arrived. */
 const RETRY_DELAY_MS = 1500;
+/** Scroll settle time before the background fill resumes. */
+const SCROLL_QUIET_MS = 220;
 
 type MathJaxLike = {
   typesetPromise?: (elements?: HTMLElement[]) => Promise<void>;
@@ -62,6 +74,7 @@ function getMathJax(): MathJaxLike | undefined {
   return (window as unknown as { MathJax?: MathJaxLike }).MathJax;
 }
 
+/** Needs typesetting = no rendered output inside yet. */
 function needsTypesetting(el: Element): boolean {
   return !el.querySelector('mjx-container');
 }
@@ -76,17 +89,109 @@ export function createMathTypesetSession(
   let destroyed = false;
   let running = false;
 
+  /** Not yet rendered, in document order (rebuilt by every collect()). */
+  let waiting: HTMLElement[] = [];
+  /** The next batch to hand to the engine. */
   const queue = new Set<HTMLElement>();
-  /** Containers seen but not yet typeset (observed from a distance). */
-  const waiting = new Set<HTMLElement>();
-  let flushTimer: number | null = null;
-  let observer: IntersectionObserver | null = null;
 
-  const pendingCount = () => queue.size + waiting.size;
+  let pumpTimer: number | null = null;
+  let fillTimer: number | null = null;
+  let retryTimer: number | null = null;
+  let lastScrollAt = 0;
+
+  const pendingCount = () => waiting.length + queue.size;
 
   const push = () => {
     if (destroyed) return;
     onStatus({ engine, typeset, pending: pendingCount(), error });
+  };
+
+  const schedulePump = () => {
+    if (destroyed || pumpTimer !== null) return;
+    pumpTimer = window.setTimeout(() => {
+      pumpTimer = null;
+      void pump();
+    }, 0);
+  };
+
+  const scheduleFill = () => {
+    if (destroyed || fillTimer !== null) return;
+    fillTimer = window.setTimeout(() => {
+      fillTimer = null;
+      // Respect the reader: do not spend background time while they are scrolling.
+      if (Date.now() - lastScrollAt < SCROLL_QUIET_MS) {
+        scheduleFill();
+        return;
+      }
+      promoteVisible();
+      if (!promoteBackground(FILL_PER_TICK)) return;
+      schedulePump();
+      scheduleFill();
+    }, FILL_INTERVAL_MS);
+  };
+
+  /** Rebuild the pending list from the DOM (cheap; preserves document order). */
+  const collect = () => {
+    if (destroyed) return;
+    const all = Array.from(root.querySelectorAll(MATH_SELECTOR)) as HTMLElement[];
+    waiting = all.filter((el) => needsTypesetting(el) && !queue.has(el));
+  };
+
+  const nearViewport = (el: HTMLElement): boolean => {
+    const rect = el.getBoundingClientRect();
+    const height = window.innerHeight || 0;
+    return rect.bottom >= -PRELOAD_PX && rect.top <= height + PRELOAD_PX;
+  };
+
+  /** Anything being read goes first. */
+  const promoteVisible = () => {
+    if (!waiting.length) return;
+    const still: HTMLElement[] = [];
+    let promoted = 0;
+    for (const el of waiting) {
+      if (!el.isConnected || !needsTypesetting(el)) continue;
+      if (nearViewport(el)) {
+        queue.add(el);
+        promoted += 1;
+      } else {
+        still.push(el);
+      }
+    }
+    if (promoted > 0) {
+      waiting = still;
+      push();
+    }
+  };
+
+  /** Gentle off-screen progress, in document order. */
+  const promoteBackground = (count: number): boolean => {
+    let moved = 0;
+    while (moved < count && waiting.length > 0) {
+      const el = waiting.shift() as HTMLElement;
+      if (!el.isConnected || !needsTypesetting(el)) continue;
+      queue.add(el);
+      moved += 1;
+    }
+    if (moved > 0) push();
+    return moved > 0;
+  };
+
+  /**
+   * A one-shot engine wait is not enough: MathJax may still be fetching its bundle
+   * when the document opens, and then nothing would ever render until something
+   * recreates the session (the "switch views and it works" workaround users hit).
+   */
+  const scheduleEngineRetry = () => {
+    if (destroyed || retryTimer !== null) return;
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      if (destroyed) return;
+      if (pendingCount() > 0 && engine !== 'ready') {
+        promoteVisible();
+        if (queue.size === 0) promoteBackground(FILL_PER_TICK);
+        schedulePump();
+      }
+    }, RETRY_DELAY_MS);
   };
 
   const waitForEngine = async (): Promise<boolean> => {
@@ -95,7 +200,7 @@ export function createMathTypesetSession(
       try {
         await existing.startup?.promise;
       } catch {
-        /* startup rejection is not fatal: typesetPromise may still work */
+        /* a startup rejection is not fatal: typesetPromise may still work */
       }
       engine = 'ready';
       return true;
@@ -124,74 +229,29 @@ export function createMathTypesetSession(
     return false;
   };
 
-  /**
-   * A one-shot engine wait is not enough: MathJax may still be fetching its bundle
-   * when the document opens, and then the queue would sit untouched forever (the
-   * user sees raw TeX until something recreates the session - e.g. a view switch).
-   * Keep retrying with backoff for as long as there is work left.
-   */
-  let retryTimer: number | null = null;
-  const scheduleEngineRetry = () => {
-    if (destroyed || retryTimer !== null) return;
-    retryTimer = window.setTimeout(() => {
-      retryTimer = null;
-      if (destroyed) return;
-      if (pendingCount() > 0 && engine !== 'ready') void flush();
-    }, RETRY_DELAY_MS);
-  };
-
-  const flush = async () => {
-    flushTimer = null;
-    if (destroyed || running || queue.size === 0) return;
-    if (engine !== 'ready' && !(await waitForEngine())) {
-      // Engine still absent: keep the work queued and try again shortly, so a slow
-      // MathJax bundle heals the document on its own instead of requiring a view
-      // switch (the failure mode users actually hit).
-      scheduleEngineRetry();
-      return;
-    }
-    if (destroyed) return;
-
-    running = true;
-    const batch = Array.from(queue);
-    queue.clear();
-    batch.forEach((el) => waiting.delete(el));
-    push();
-
-    /** Put a failed batch back so a later retry can still pick it up. */
+  /** Hand ONE capped batch to the engine and verify it actually produced output. */
+  const runBatch = async (batch: HTMLElement[]): Promise<void> => {
     const requeue = () => {
       batch.forEach((el) => {
-        if (el.isConnected && needsTypesetting(el)) {
-          waiting.delete(el);
-          queue.add(el);
-        }
+        if (el.isConnected && needsTypesetting(el)) queue.add(el);
       });
     };
-
     const mj = getMathJax();
     if (!mj?.typesetPromise) {
-      // CRITICAL: `await mj?.typesetPromise?.(batch)` would "succeed" with no engine
-      // at all, increment the counter and drain the queue - shipping a document with
-      // no formulas AND no diagnostic. Refuse to treat a missing engine as success.
+      // Guard: `await mj?.typesetPromise?.(batch)` would "succeed" with no engine at
+      // all, drain the queue and report progress that never happened.
       requeue();
       engine = 'missing';
       error = 'MathJax 未就绪（离线包与 CDN 均未提供 typesetPromise）';
-      running = false;
       push();
       console.error('[MarkdownX] math engine unavailable:', error);
       scheduleEngineRetry();
       return;
     }
-
     try {
-      // One call per batch: the wrapper resets global TeX state, so concurrent
-      // calls would interleave their resets with queued typeset promises.
       mj.typesetClear?.(batch);
       mj.texReset?.();
       await mj.typesetPromise(batch);
-
-      // Verify the call actually produced output. A no-op (engine half-initialised,
-      // stale MathJax object) must not be mistaken for success.
       const withContent = batch.filter((el) => (el.textContent || '').trim().length > 0);
       const rendered = withContent.filter((el) => el.isConnected && !needsTypesetting(el)).length;
       if (withContent.length > 0 && rendered === 0) {
@@ -206,140 +266,96 @@ export function createMathTypesetSession(
       error = String(err);
       console.error('[MarkdownX] MathJax typesetting failed:', err);
       scheduleEngineRetry();
-    } finally {
-      running = false;
-      push();
-      if (queue.size > 0) schedule();
     }
   };
 
-  const schedule = () => {
-    if (destroyed || flushTimer !== null) return;
-    flushTimer = window.setTimeout(() => void flush(), BATCH_DELAY_MS);
-  };
-
-  const enqueue = (el: HTMLElement) => {
-    waiting.delete(el);
-    if (!needsTypesetting(el)) return;
-    queue.add(el);
-    schedule();
+  /**
+   * One pump = one capped engine call. Visible work first; when nothing visible is
+   * pending, the background fill keeps the document converging without ever issuing
+   * a call large enough to freeze the window.
+   */
+  const pump = async () => {
+    if (destroyed || running) return;
+    promoteVisible();
+    let batch = Array.from(queue);
+    if (batch.length === 0) {
+      if (promoteBackground(FILL_PER_TICK)) batch = Array.from(queue);
+    }
+    if (batch.length === 0) {
+      if (pendingCount() > 0) scheduleEngineRetry();
+      return;
+    }
+    batch = batch.slice(0, MAX_BATCH);
+    batch.forEach((el) => queue.delete(el));
+    running = true;
     push();
-  };
-
-  /** Fallback sweep for anything the observer may not have caught (cheap rect test). */
-  const sweepNearViewport = () => {
-    if (destroyed || waiting.size === 0) return;
-    const height = window.innerHeight || 0;
-    let moved = 0;
-    for (const el of Array.from(waiting)) {
-      if (!el.isConnected) {
-        waiting.delete(el);
-        continue;
-      }
-      if (!needsTypesetting(el)) {
-        waiting.delete(el);
-        continue;
-      }
-      const rect = el.getBoundingClientRect();
-      if (rect.bottom >= -1200 && rect.top <= height + 1200) {
-        enqueue(el);
-        moved += 1;
-      }
+    const ready = engine === 'ready' || (await waitForEngine());
+    if (destroyed) {
+      running = false;
+      return;
     }
-    if (moved > 0) push();
+    if (ready) {
+      await runBatch(batch);
+    } else {
+      batch.forEach((el) => queue.add(el));
+      scheduleEngineRetry();
+    }
+    running = false;
+    push();
+    if (pendingCount() > 0) {
+      schedulePump();
+      scheduleFill();
+    }
   };
 
   const scan = () => {
     if (destroyed) return;
-    const containers = Array.from(root.querySelectorAll(MATH_SELECTOR)) as HTMLElement[];
-    if (!containers.length) return;
-    observer?.disconnect();
-    observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const el = entry.target as HTMLElement;
-          observer?.unobserve(el);
-          enqueue(el);
-        }
-      },
-      { root: null, rootMargin: PRELOAD_MARGIN, threshold: 0 }
-    );
-    let observed = 0;
-    for (const el of containers) {
-      if (!needsTypesetting(el)) {
-        waiting.delete(el);
-        queue.delete(el);
-        continue;
-      }
-      if (queue.has(el)) continue;
-      observed += 1;
-      // Already on screen (or close to it)? Queue immediately, otherwise observe
-      // and let the scroll sweep / observer bring it in range later.
-      const rect = el.getBoundingClientRect();
-      const near =
-        rect.bottom >= -1200 && rect.top <= (window.innerHeight || 0) + 1200;
-      if (near) {
-        enqueue(el);
-      } else {
-        waiting.add(el);
-        observer.observe(el);
-      }
-    }
-    if (observed === 0) {
-      engine = engine === 'unknown' ? 'ready' : engine;
+    collect();
+    promoteVisible();
+    if (pendingCount() > 0) {
+      schedulePump();
+      scheduleFill();
+    } else if (engine === 'unknown') {
+      engine = 'ready';
     }
     push();
   };
 
-  const typesetAll = async () => {
-    if (destroyed) return;
-    const containers = Array.from(root.querySelectorAll(MATH_SELECTOR)).filter(
-      needsTypesetting
-    ) as HTMLElement[];
-    containers.forEach((el) => {
-      waiting.delete(el);
-      queue.add(el);
-    });
-    observer?.disconnect();
-    observer = null;
-    await flush();
-    // Anything the batch could not finish (e.g. the engine came up late) gets one
-    // more chance, still inside a single engine call.
-    if (queue.size > 0) await flush();
-  };
-
-  // Fallback: a throttled scroll sweep, so a viewport that the observer does not
-  // report on (nested scrollers, programmatic jumps, restored positions) still gets
-  // its formulas typeset.
-  let scrollTimer: number | null = null;
   const onScroll = () => {
-    if (destroyed || scrollTimer !== null) return;
-    scrollTimer = window.setTimeout(() => {
-      scrollTimer = null;
-      sweepNearViewport();
-    }, 120);
+    if (destroyed) return;
+    lastScrollAt = Date.now();
+    promoteVisible();
+    if (queue.size > 0) schedulePump();
+    push();
   };
   window.addEventListener('scroll', onScroll, { passive: true, capture: true });
 
-  // First scan after the current frame so the browser has laid the chunks out.
+  // First pass after layout so the geometry test is meaningful.
   window.requestAnimationFrame(() => scan());
 
   return {
     refresh: () => scan(),
-    typesetAll,
+    typesetAll: async () => {
+      if (destroyed) return;
+      collect();
+      // Force everything through, still in capped batches (print / export path).
+      let guard = 0;
+      while (!destroyed && pendingCount() > 0 && guard < 5000) {
+        guard += 1;
+        promoteBackground(MAX_BATCH);
+        await pump();
+      }
+    },
     destroy: () => {
       destroyed = true;
-      observer?.disconnect();
-      observer = null;
       queue.clear();
-      waiting.clear();
+      waiting = [];
       window.removeEventListener('scroll', onScroll, { capture: true } as EventListenerOptions);
-      if (flushTimer !== null) window.clearTimeout(flushTimer);
-      if (scrollTimer !== null) window.clearTimeout(scrollTimer);
-      if (retryTimer !== null) window.clearTimeout(retryTimer);
-      flushTimer = null;
-      scrollTimer = null;
+      for (const t of [pumpTimer, fillTimer, retryTimer]) {
+        if (t !== null) window.clearTimeout(t);
+      }
+      pumpTimer = null;
+      fillTimer = null;
       retryTimer = null;
     }
   };

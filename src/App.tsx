@@ -52,11 +52,20 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.11';
+const APP_VERSION = 'v1.9.12';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.12',
+    date: '2026-10-04',
+    items: [
+      '公式排版改为分批推进：先排正在读的，其余每 90ms 小步后台补齐（单次引擎调用 ≤ 8 个）',
+      '可见区优先、滚动期间暂停后台补齐；打开大文档不再出现一次性长卡顿',
+      '用几何判定替代 IntersectionObserver，嵌套滚动容器下不再静默失效'
+    ]
+  },
   {
     version: 'v1.9.11',
     date: '2026-10-04',
