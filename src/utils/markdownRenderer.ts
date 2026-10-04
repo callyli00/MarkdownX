@@ -185,7 +185,7 @@ function extractMermaidBlocks(input: string): {
     if (!open && !pendingFence) {
       // The info string runs to end-of-line so metadata such as
       // ```mermaid title="..." is captured whole.
-      const m = line.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+      const m = line.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*?)\r?$/);
       if (!m) {
         push(line, src);
         continue;
@@ -212,7 +212,7 @@ function extractMermaidBlocks(input: string): {
     }
 
     if (open) {
-      const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+      const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*\r?$/);
       if (close && close[1][0] === lang[0] && close[1].length >= lang.length) {
         sources.push(buffer.map((b) => b.text).join('\n'));
         const key = `${MERMAID_PREFIX}${sources.length - 1}${MERMAID_SUFFIX}`;
@@ -229,7 +229,7 @@ function extractMermaidBlocks(input: string): {
     // Accumulating a pending untagged fence.
     const pending = pendingFence;
     if (!pending) continue;
-    const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+    const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*\r?$/);
     if (close && close[1][0] === pending.marker[0] && close[1].length >= pending.marker.length) {
       const body = pending.body.map((b) => b.text).join('\n');
       if (looksLikeMermaid(body)) {
@@ -297,7 +297,11 @@ function extractMermaidBlocks(input: string): {
  * identically (a figure pasted as HTML must behave like one written as
  * Markdown).
  */
-function resolveLocalAssetUrl(href: string, documentBasePath: string): string {
+function resolveLocalAssetUrl(href: string, documentBasePath: string, resolveAssets: boolean = true): string {
+  // Deferred mode (Worker payloads): leave the path exactly as written. The host
+  // runs the identical pass afterwards, so the outcome cannot change - and this is
+  // deterministic, unlike relying on convertFileSrc being absent off-thread.
+  if (!resolveAssets) return href;
   const isRemote = /^https?:\/\//i.test(href) || href.startsWith('data:') || href.startsWith('asset:') || href.startsWith('blob:');
   if (isRemote || !href) return href;
 
@@ -323,13 +327,13 @@ function resolveLocalAssetUrl(href: string, documentBasePath: string): string {
  * src> would stay a bare relative path and never load inside the webview.
  * Rewrite those sources here.
  */
-function resolveRawHtmlImageSources(html: string, documentBasePath: string): string {
-  if (!documentBasePath) return html;
+function resolveRawHtmlImageSources(html: string, documentBasePath: string, resolveAssets: boolean = true): string {
+  if (!resolveAssets || !documentBasePath) return html;
   return html.replace(/<img\b[^>]*>/gi, (tag) =>
     tag.replace(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i, (match, doubleQuoted, singleQuoted) => {
       const raw = (doubleQuoted ?? singleQuoted ?? '').trim();
       if (!raw) return match;
-      const resolved = resolveLocalAssetUrl(raw, documentBasePath);
+      const resolved = resolveLocalAssetUrl(raw, documentBasePath, resolveAssets);
       if (resolved === raw) return match;
       const quote = doubleQuoted !== undefined ? '"' : "'";
       return `src=${quote}${resolved}${quote}`;
@@ -337,7 +341,7 @@ function resolveRawHtmlImageSources(html: string, documentBasePath: string): str
   );
 }
 
-export function configureMarked(documentBasePath: string = ''): void {
+export function configureMarked(documentBasePath: string = '', resolveAssets: boolean = true): void {
   const renderer = new marked.Renderer();
   // Duplicate headings would otherwise share one id, making every outline entry
   // jump to the first occurrence. Suffix repeats with an occurrence counter.
@@ -361,7 +365,7 @@ export function configureMarked(documentBasePath: string = ''): void {
     const imgTitle = (isToken ? hrefOrToken.title : title) || '';
     const altText = (isToken ? hrefOrToken.text : text) || '';
 
-    const sourceUrl = resolveLocalAssetUrl(href, documentBasePath);
+    const sourceUrl = resolveLocalAssetUrl(href, documentBasePath, resolveAssets);
 
     const titleAttr = imgTitle ? ` title="${imgTitle}"` : '';
     return `<img src="${sourceUrl}" alt="${altText}"${titleAttr} class="rendered-image" />`;
@@ -502,7 +506,7 @@ function maskVerbatimRegions(input: string): { masked: string; store: Map<string
       staged.push(line);
     } else {
       buffer.push(line);
-      const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+      const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*\r?$/);
       if (close && close[1][0] === openFence[0] && close[1].length >= openFence.length) {
         staged.push(mask(buffer.join('\n')));
         openFence = null;
@@ -813,8 +817,14 @@ function detokenizeMath(
   return restoredHtml;
 }
 
-export async function renderMarkdown(rawMarkdown: string, documentBasePath: string = ''): Promise<string> {
-  configureMarked(documentBasePath);
+/**
+ * The render core. `documentBasePath` is threaded through to configureMarked()
+ * because the markdown image renderer resolves relative asset paths with it.
+ * Passing '' therefore leaves every asset path exactly as written in the source
+ * (see renderMarkdownPayload()).
+ */
+async function renderCore(rawMarkdown: string, documentBasePath: string, resolveAssets: boolean = true): Promise<string> {
+  configureMarked(documentBasePath, resolveAssets);
   const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans } =
     processMathAndCitations(rawMarkdown);
 
@@ -847,7 +857,34 @@ export async function renderMarkdown(rawMarkdown: string, documentBasePath: stri
   const html = detokenizeMath(rawHtml, tokens, diagramSources, tokenSourceSpans);
   // Last step: raw HTML image sources can only be rewritten once the markup is
   // final, since the Markdown path resolves its own images earlier.
+  return resolveRawHtmlImageSources(html, documentBasePath, resolveAssets);
+}
+
+/**
+ * The host-dependent last pass: rewrites every relative `<img src>` (from Markdown
+ * and from raw HTML alike - both funnel through resolveLocalAssetUrl()) using the
+ * Tauri convertFileSrc bridge, which only exists on the main thread.
+ */
+export function finalizeAssetUrls(html: string, documentBasePath: string): string {
   return resolveRawHtmlImageSources(html, documentBasePath);
+}
+
+/**
+ * Worker-safe render: byte-for-byte what renderCore() produces in deferred-asset
+ * mode, i.e. with every asset path left exactly as written. The renderer's asset
+ * rewriting needs the Tauri bridge (convertFileSrc), which is unavailable in a
+ * Worker, so the host runs finalizeAssetUrls() on the result before handing it to
+ * the DOM. Both passes share the same choke point (resolveLocalAssetUrl), so
+ * deferring the rewrite cannot change its outcome - and the deferral is explicit
+ * (resolveAssets = false) rather than an accident of convertFileSrc being missing
+ * off-thread. tools/render-equivalence-gate proves the two paths agree.
+ */
+export async function renderMarkdownPayload(rawMarkdown: string): Promise<string> {
+  return renderCore(rawMarkdown, '', false);
+}
+
+export async function renderMarkdown(rawMarkdown: string, documentBasePath: string = ''): Promise<string> {
+  return finalizeAssetUrls(await renderCore(rawMarkdown, documentBasePath), documentBasePath);
 }
 
 interface MermaidApi {

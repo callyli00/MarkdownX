@@ -4,7 +4,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
-import { renderMarkdown, triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
+import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
+import { renderDocument } from './utils/renderClient';
 import { AppIcon } from './AppIcon';
 import './App.css';
 
@@ -51,18 +52,26 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.13';
+const APP_VERSION = 'v1.9.14';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
   {
+    version: 'v1.9.14',
+    date: '2026-10-04',
+    items: [
+      '修复 CRLF（Windows）文档中"第一个代码块之后的公式全部不渲染"——这很可能就是"检测到 174 个公式未排版"的根因',
+      '解析搬入 Web Worker：大文档解析不再占用主线程，窗口全程可响应；Worker 不可用时自动回退同步解析，只慢不错',
+      '新增渲染等价护栏 tools/render-equivalence-gate：证明 Worker 路径与同步路径逐字节一致，且 LF/CRLF 渲染结果一致'
+    ]
+  },
+  {
     version: 'v1.9.13',
     date: '2026-10-04',
     items: [
       '回退到 v1.9.6 的渲染与排版行为（撤销 v1.9.7–v1.9.12 的分片渲染与按需排版）',
-      '原因：分片渲染/按需排版整改多轮后，出现“公式不自动渲染”的致命退化；先恢复可靠行为',
-      '局部渲染将按新的设计重新实现（详见 README 的说明与后续版本）'
+      '原因：分片渲染/按需排版整改多轮后，出现“公式不自动渲染”的致命退化；先恢复可靠行为'
     ]
   },
   {
@@ -1085,6 +1094,8 @@ export const App: React.FC = () => {
   // The Markdown that `renderedHtml` was produced from. Rendering is async, so
   // a position restore must wait until this matches the current document.
   const renderedForContentRef = useRef<string | null>(null);
+  /** Content of the newest render request; guards against out-of-order completion. */
+  const latestRenderRef = useRef<string | null>(null);
 
   const activeFile = openFiles.find((f) => f.id === activeFileId) || openFiles[0];
 
@@ -1101,7 +1112,14 @@ export const App: React.FC = () => {
   const updatePreview = useCallback(async (content: string, currentPath: string | null) => {
     try {
       const basePath = getBasePath(currentPath);
-      const html = await renderMarkdown(content, basePath);
+      // Large documents are parsed in a Worker so the window stays responsive.
+      // Anything the Worker cannot do (missing, failed to load, threw, timed out) is
+      // handled inside renderDocument, which degrades to this very main-thread parse -
+      // a document can therefore never fail to render because of the Worker.
+      latestRenderRef.current = content;
+      const { html } = await renderDocument(content, basePath);
+      // Worker latency makes out-of-order completion possible: commit only the newest.
+      if (latestRenderRef.current !== content) return;
       renderedForContentRef.current = content;
       setRenderedHtml(html);
     } catch (error) {
