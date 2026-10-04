@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { prepareDocument, renderBlockRange, finalizeDocument, triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
+import { createMathTypesetSession, type MathTypesetSession, type MathTypesetStatus } from './utils/mathTypeset';
 import { AppIcon } from './AppIcon';
 import './App.css';
 
@@ -51,11 +52,21 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.8';
+const APP_VERSION = 'v1.9.9';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.9',
+    date: '2026-10-04',
+    items: [
+      'v2 阶段三：公式按需排版 —— 只排进入视野的公式，滚动时逐步补齐（状态栏显示 公式 N / M）',
+      '首次挂载与从源码切回一律重新扫描，彻底修掉“上半屏公式不排版”',
+      '公式引擎不可用/排版失败不再静默：状态栏显示 ⚠ 提示（悬停看原因，控制台看详情）',
+      '打印前自动完成全量排版'
+    ]
+  },
   {
     version: 'v1.9.8',
     date: '2026-10-04',
@@ -1267,55 +1278,50 @@ export const App: React.FC = () => {
   }, []);
 
   /**
-   * Typeset + draw the chunks that need it.
-   *
-   * Two cases must be distinguished, and conflating them is how a preview can show
-   * raw TeX: a plain APPEND only needs the new tail (re-running the engine over the
-   * whole article per append is quadratic), but a FRESH MOUNT - the first mount, or
-   * coming back from the source view - means every chunk lost its typeset DOM, so
-   * all of them must be processed again.
+   * Math is typeset ON DEMAND by a per-mount session (v2 stage 3): containers are
+   * handed to the engine when they come near the viewport, in batches, never
+   * twice. The session is created for every preview mount, so a first mount or a
+   * switch back from the source view re-scans everything - the exact case where
+   * the earlier "typeset only the newly appended chunk" optimisation left the top
+   * of the document as raw TeX.
    */
-  const previewMountRef = useRef(false);
+  const mathSessionRef = useRef<MathTypesetSession | null>(null);
+  const [mathStatus, setMathStatus] = useState<MathTypesetStatus | null>(null);
+  const previewHasChunks = renderChunks.length > 0;
   useEffect(() => {
-    if (isSourceMode) {
-      previewMountRef.current = false;
+    if (isSourceMode || !previewHasChunks) {
+      mathSessionRef.current?.destroy();
+      mathSessionRef.current = null;
       return;
     }
     const root = previewRef.current;
     if (!root) return;
-    const chunks = Array.from(root.querySelectorAll('.render-chunk')) as HTMLElement[];
-    if (!chunks.length) return;
-    const freshMount = !previewMountRef.current;
-    previewMountRef.current = true;
-    // ONE engine call per pass: triggerMathJax() runs a global texReset() before
-    // typesetting, so issuing several calls concurrently lets those resets
-    // interleave with the queued typeset promises.
-    if (freshMount) {
-      triggerMathJax(root);
-      renderMermaidDiagrams(root, appTheme);
-    } else {
-      const last = chunks[chunks.length - 1];
-      triggerMathJax(last);
-      renderMermaidDiagrams(last, appTheme);
-    }
+    const session = createMathTypesetSession(root, setMathStatus);
+    mathSessionRef.current = session;
+    return () => {
+      session.destroy();
+      if (mathSessionRef.current === session) mathSessionRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderChunks.length, isSourceMode]);
+  }, [isSourceMode, previewHasChunks]);
 
-  // Safety net: once the document has finished streaming, typeset any chunk that
-  // still holds unprocessed math. Catches races between an append and engine
-  // readiness without paying for a full pass on the healthy path.
+  // New chunks mounted: let the session pick up their math containers.
   useEffect(() => {
-    if (isSourceMode || renderProgress) return;
+    mathSessionRef.current?.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderChunks.length]);
+
+  // Mermaid: draw the appended chunk; repaint everything on a theme change
+  // (diagrams bake their colours in).
+  useEffect(() => {
+    if (isSourceMode) return;
     const root = previewRef.current;
     if (!root) return;
-    const raw = Array.from(root.querySelectorAll('.render-chunk')).filter(
-      (chunk) =>
-        (chunk.querySelector('.math-equation-row') || chunk.querySelector('.math-inline')) &&
-        !chunk.querySelector('mjx-container')
-    ) as HTMLElement[];
-    if (raw.length) triggerMathJax(root);   // single call keeps texReset from interleaving
+    const chunks = Array.from(root.querySelectorAll('.render-chunk')) as HTMLElement[];
+    const last = chunks[chunks.length - 1];
+    if (last) renderMermaidDiagrams(last, appTheme);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderProgress, isSourceMode]);
+  }, [renderChunks.length, isSourceMode]);
 
   // A theme change DOES require repainting every diagram (mermaid bakes colours in).
   useEffect(() => {
@@ -1432,10 +1438,15 @@ export const App: React.FC = () => {
     };
   }, [isSourceMode, renderChunks.length]);
 
-  // Production build fix: listen for mathjax-ready event when MathJax finishes async loading
+  // Production build fix: when MathJax finishes its async load, ask the on-demand
+  // session to pick up whatever still needs typesetting (it is engine-agnostic:
+  // the session itself waits for readiness and reports a missing engine loudly).
   useEffect(() => {
     const handleMathJaxReady = () => {
-      if (previewRef.current && !isSourceMode) {
+      if (isSourceMode) return;
+      if (mathSessionRef.current) {
+        mathSessionRef.current.refresh();
+      } else if (previewRef.current) {
         triggerMathJax(previewRef.current);
       }
     };
@@ -1444,6 +1455,7 @@ export const App: React.FC = () => {
       handleMathJaxReady();
     }
     return () => window.removeEventListener('mathjax-ready', handleMathJaxReady);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSourceMode]);
 
 // --- Outline Extraction (TOC) ---
@@ -2121,15 +2133,25 @@ export const App: React.FC = () => {
   };
 
   // 1. Independent Print handler (Ctrl + P) - Keeps system print dialog 100% active
-  const handlePrint = () => {
+  const handlePrint = async () => {
     setActiveMenu(null);
+    // Printing reads the DOM, so the on-demand session must finish first or the
+    // paper copy would contain raw TeX for every formula that was never scrolled to.
+    const typesetThenPrint = async () => {
+      try {
+        await mathSessionRef.current?.typesetAll();
+      } catch {
+        /* printing proceeds regardless */
+      }
+      window.print();
+    };
     if (isSourceMode) {
       // Route through toggleSourceMode so the reading position is carried back
       // into the preview instead of dumping the reader at the top.
       toggleSourceMode();
-      setTimeout(() => window.print(), 350);
+      setTimeout(() => void typesetThenPrint(), 600);
     } else {
-      window.print();
+      await typesetThenPrint();
     }
   };
 
@@ -3332,6 +3354,33 @@ ${texBody}
                 <span className="sep">•</span>
                 <span className="status-badge render-progress" title="大文档分段排版中，可继续滚动与编辑">
                   排版中 {renderProgress.done} / {renderProgress.total} 块
+                </span>
+              </>
+            )}
+            {/* Math engine diagnostics: a silently missing engine used to look like
+                "no formula renders at all", so it is surfaced here instead. */}
+            {mathStatus && (mathStatus.engine === 'missing' || mathStatus.engine === 'error') && (
+              <>
+                <span className="sep">•</span>
+                <span
+                  className="status-badge math-error"
+                  title={`${mathStatus.error || ''}\n（请在开发者控制台查看 [MarkdownX] 详情）`}
+                >
+                  {mathStatus.engine === 'missing' ? '⚠ 公式引擎未加载' : '⚠ 公式排版失败'}
+                </span>
+              </>
+            )}
+            {mathStatus && mathStatus.engine === 'loading' && (
+              <>
+                <span className="sep">•</span>
+                <span className="status-badge">公式引擎加载中…</span>
+              </>
+            )}
+            {mathStatus && mathStatus.engine === 'ready' && mathStatus.pending > 0 && (
+              <>
+                <span className="sep">•</span>
+                <span className="status-badge" title="进入视野的公式随滚动逐步排版">
+                  公式 {mathStatus.typeset} / {mathStatus.typeset + mathStatus.pending}
                 </span>
               </>
             )}

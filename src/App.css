@@ -3001,3 +3001,10 @@ body.theme-sepia .typora-paper-article {
   background: color-mix(in srgb, var(--wb-accent) 16%, transparent) !important;
   color: var(--wb-accent) !important;
 }
+
+/* Loud diagnostic: the math engine failed to load or a typeset batch threw. */
+.typora-statusbar .status-badge.math-error {
+  background: color-mix(in srgb, #e54848 18%, transparent) !important;
+  color: #b42318 !important;
+  font-weight: 600;
+}
