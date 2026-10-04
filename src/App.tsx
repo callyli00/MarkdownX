@@ -52,11 +52,21 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.9';
+const APP_VERSION = 'v1.9.10';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.10',
+    date: '2026-10-04',
+    items: [
+      '修复“公式一个都不渲染且毫无提示”的真正根因：引擎缺席时旧代码会“假装排版成功”并清空队列',
+      '引擎缺席不再算成功：整批回队 + 持续退避重试 + 状态栏可见',
+      '排版后核验真实产出（0 个渲染结果即按失败处理）',
+      '引擎迟到会自愈：MathJax 晚到时文档自动补排，无需切换视图'
+    ]
+  },
   {
     version: 'v1.9.9',
     date: '2026-10-04',
@@ -1288,28 +1298,54 @@ export const App: React.FC = () => {
   const mathSessionRef = useRef<MathTypesetSession | null>(null);
   const [mathStatus, setMathStatus] = useState<MathTypesetStatus | null>(null);
   const previewHasChunks = renderChunks.length > 0;
+
+  /** Create the session if the preview is showing and none is alive yet. */
+  const ensureMathSession = useCallback((): MathTypesetSession | null => {
+    if (isSourceMode || chunksRef.current.length === 0) return null;
+    if (mathSessionRef.current) return mathSessionRef.current;
+    const root = previewRef.current;
+    if (!root) return null;
+    const session = createMathTypesetSession(root, setMathStatus);
+    mathSessionRef.current = session;
+    return session;
+  }, [isSourceMode]);
+
   useEffect(() => {
     if (isSourceMode || !previewHasChunks) {
       mathSessionRef.current?.destroy();
       mathSessionRef.current = null;
       return;
     }
-    const root = previewRef.current;
-    if (!root) return;
-    const session = createMathTypesetSession(root, setMathStatus);
-    mathSessionRef.current = session;
+    ensureMathSession();
     return () => {
-      session.destroy();
-      if (mathSessionRef.current === session) mathSessionRef.current = null;
+      mathSessionRef.current?.destroy();
+      mathSessionRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSourceMode, previewHasChunks]);
 
   // New chunks mounted: let the session pick up their math containers.
   useEffect(() => {
-    mathSessionRef.current?.refresh();
+    ensureMathSession()?.refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderChunks.length]);
+
+  /**
+   * Guarantee pass. On-demand typesetting is an optimisation and must never be able
+   * to leave the document unrendered: when the stream finishes, anything still
+   * untouched gets one full pass. This is what makes a slow MathJax bundle (or any
+   * missed observer notification) self-heal instead of needing a view switch.
+   */
+  useEffect(() => {
+    if (isSourceMode || renderProgress) return;
+    const session = ensureMathSession();
+    if (!session) return;
+    session.refresh();
+    if (mathStatus && mathStatus.typeset === 0 && mathStatus.pending > 0) {
+      void session.typesetAll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderProgress, isSourceMode]);
 
   // Mermaid: draw the appended chunk; repaint everything on a theme change
   // (diagrams bake their colours in).
@@ -3358,32 +3394,37 @@ ${texBody}
               </>
             )}
             {/* Math engine diagnostics: a silently missing engine used to look like
-                "no formula renders at all", so it is surfaced here instead. */}
-            {mathStatus && (mathStatus.engine === 'missing' || mathStatus.engine === 'error') && (
-              <>
-                <span className="sep">•</span>
-                <span
-                  className="status-badge math-error"
-                  title={`${mathStatus.error || ''}\n（请在开发者控制台查看 [MarkdownX] 详情）`}
-                >
-                  {mathStatus.engine === 'missing' ? '⚠ 公式引擎未加载' : '⚠ 公式排版失败'}
-                </span>
-              </>
-            )}
-            {mathStatus && mathStatus.engine === 'loading' && (
-              <>
-                <span className="sep">•</span>
-                <span className="status-badge">公式引擎加载中…</span>
-              </>
-            )}
-            {mathStatus && mathStatus.engine === 'ready' && mathStatus.pending > 0 && (
-              <>
-                <span className="sep">•</span>
-                <span className="status-badge" title="进入视野的公式随滚动逐步排版">
-                  公式 {mathStatus.typeset} / {mathStatus.typeset + mathStatus.pending}
-                </span>
-              </>
-            )}
+                            "no formula renders at all", so it is surfaced here instead. */}
+                        {mathStatus && (mathStatus.engine === 'missing' || mathStatus.engine === 'error') && (
+                          <>
+                            <span className="sep">•</span>
+                            <span
+                              className="status-badge math-error"
+                              title={`${mathStatus.error || ''}\n（请在开发者控制台查看 [MarkdownX] 详情）`}
+                            >
+                              {mathStatus.engine === 'missing' ? '⚠ 公式引擎未加载' : '⚠ 公式排版失败'}
+                            </span>
+                          </>
+                        )}
+                        {mathStatus && mathStatus.engine === 'loading' && (
+                          <>
+                            <span className="sep">•</span>
+                            <span className="status-badge" title="正在等待公式引擎就绪，就绪后会自动排版">
+                              公式引擎加载中…
+                            </span>
+                          </>
+                        )}
+                        {mathStatus &&
+                          (mathStatus.engine === 'ready' || mathStatus.engine === 'unknown') &&
+                          mathStatus.pending > 0 && (
+                            <>
+                              <span className="sep">•</span>
+                              <span className="status-badge" title="进入视野的公式随滚动逐步排版">
+                                {mathStatus.engine === 'unknown' ? '公式待排版 ' : `公式 ${mathStatus.typeset} / `}
+                                {mathStatus.typeset + mathStatus.pending}
+                              </span>
+                            </>
+                          )}
           </div>
           <div className="status-right">
             <span>对齐: {typography.textAlign === 'justify' ? '两端对齐' : '左对齐'}</span>

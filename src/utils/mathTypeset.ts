@@ -48,6 +48,8 @@ const PRELOAD_MARGIN = '1200px 0px 1200px 0px';
 const ENGINE_WAIT_MS = 10000;
 /** Batch window: collect what scrolled into range, then typeset once. */
 const BATCH_DELAY_MS = 40;
+/** How long to wait before re-checking whether the engine has arrived. */
+const RETRY_DELAY_MS = 1500;
 
 type MathJaxLike = {
   typesetPromise?: (elements?: HTMLElement[]) => Promise<void>;
@@ -122,10 +124,32 @@ export function createMathTypesetSession(
     return false;
   };
 
+  /**
+   * A one-shot engine wait is not enough: MathJax may still be fetching its bundle
+   * when the document opens, and then the queue would sit untouched forever (the
+   * user sees raw TeX until something recreates the session - e.g. a view switch).
+   * Keep retrying with backoff for as long as there is work left.
+   */
+  let retryTimer: number | null = null;
+  const scheduleEngineRetry = () => {
+    if (destroyed || retryTimer !== null) return;
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      if (destroyed) return;
+      if (pendingCount() > 0 && engine !== 'ready') void flush();
+    }, RETRY_DELAY_MS);
+  };
+
   const flush = async () => {
     flushTimer = null;
     if (destroyed || running || queue.size === 0) return;
-    if (engine !== 'ready' && !(await waitForEngine())) return;
+    if (engine !== 'ready' && !(await waitForEngine())) {
+      // Engine still absent: keep the work queued and try again shortly, so a slow
+      // MathJax bundle heals the document on its own instead of requiring a view
+      // switch (the failure mode users actually hit).
+      scheduleEngineRetry();
+      return;
+    }
     if (destroyed) return;
 
     running = true;
@@ -133,24 +157,55 @@ export function createMathTypesetSession(
     queue.clear();
     batch.forEach((el) => waiting.delete(el));
     push();
+
+    /** Put a failed batch back so a later retry can still pick it up. */
+    const requeue = () => {
+      batch.forEach((el) => {
+        if (el.isConnected && needsTypesetting(el)) {
+          waiting.delete(el);
+          queue.add(el);
+        }
+      });
+    };
+
     const mj = getMathJax();
+    if (!mj?.typesetPromise) {
+      // CRITICAL: `await mj?.typesetPromise?.(batch)` would "succeed" with no engine
+      // at all, increment the counter and drain the queue - shipping a document with
+      // no formulas AND no diagnostic. Refuse to treat a missing engine as success.
+      requeue();
+      engine = 'missing';
+      error = 'MathJax 未就绪（离线包与 CDN 均未提供 typesetPromise）';
+      running = false;
+      push();
+      console.error('[MarkdownX] math engine unavailable:', error);
+      scheduleEngineRetry();
+      return;
+    }
+
     try {
       // One call per batch: the wrapper resets global TeX state, so concurrent
       // calls would interleave their resets with queued typeset promises.
-      mj?.typesetClear?.(batch);
-      mj?.texReset?.();
-      await mj?.typesetPromise?.(batch);
-      typeset += batch.length;
+      mj.typesetClear?.(batch);
+      mj.texReset?.();
+      await mj.typesetPromise(batch);
+
+      // Verify the call actually produced output. A no-op (engine half-initialised,
+      // stale MathJax object) must not be mistaken for success.
+      const withContent = batch.filter((el) => (el.textContent || '').trim().length > 0);
+      const rendered = withContent.filter((el) => el.isConnected && !needsTypesetting(el)).length;
+      if (withContent.length > 0 && rendered === 0) {
+        throw new Error(`引擎调用未产生渲染输出（0 / ${withContent.length} 个容器）`);
+      }
+      typeset += rendered;
       error = null;
       if (engine === 'error') engine = 'ready';
     } catch (err) {
-      // Put the batch back so a later refresh can retry it.
-      batch.forEach((el) => {
-        if (el.isConnected && needsTypesetting(el)) queue.add(el);
-      });
+      requeue();
       engine = 'error';
       error = String(err);
       console.error('[MarkdownX] MathJax typesetting failed:', err);
+      scheduleEngineRetry();
     } finally {
       running = false;
       push();
@@ -282,8 +337,10 @@ export function createMathTypesetSession(
       window.removeEventListener('scroll', onScroll, { capture: true } as EventListenerOptions);
       if (flushTimer !== null) window.clearTimeout(flushTimer);
       if (scrollTimer !== null) window.clearTimeout(scrollTimer);
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
       flushTimer = null;
       scrollTimer = null;
+      retryTimer = null;
     }
   };
 }
