@@ -2544,12 +2544,20 @@ body.theme-sepia .mermaid-unclosed-hint {
   top: calc(100% + 8px);
   left: 0;
   min-width: 232px;
-  /* A long menu must stay inside the window: without this the tail items (the
-     window commands) fall below the bottom edge and can never be clicked. */
-  max-height: calc(100vh - 72px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  /* Submenus fly out of this box (left: 100%), so the menu must NOT be a scroll
+     container: a non-visible overflow clips them and, because the CSS spec
+     turns the other axis into `auto` as well, it also grows a horizontal
+     scrollbar. Only a genuinely short window falls back to scrolling, where a
+     fly-out could not fit anyway. */
+  overflow: visible;
   z-index: 200;
+}
+@media (max-height: 640px) {
+  .wb-dropdown {
+    max-height: calc(100vh - 72px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
 }
 .wb-dropdown::-webkit-scrollbar { width: 8px; }
 .wb-dropdown::-webkit-scrollbar-thumb { background: var(--wb-line); border-radius: 4px; }
