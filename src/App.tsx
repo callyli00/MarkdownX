@@ -52,11 +52,20 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.10';
+const APP_VERSION = 'v1.9.11';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.11',
+    date: '2026-10-04',
+    items: [
+      '公式未排版时在正文顶部显示红色横幅（含原因）并提供「立即重新排版」按钮',
+      '自检不依赖排版会话记账，逐条核对容器数与实际渲染数',
+      '侧栏版本徽章改为显示真实版本号（便于确认实际安装版本）'
+    ]
+  },
   {
     version: 'v1.9.10',
     date: '2026-10-04',
@@ -1297,6 +1306,9 @@ export const App: React.FC = () => {
    */
   const mathSessionRef = useRef<MathTypesetSession | null>(null);
   const [mathStatus, setMathStatus] = useState<MathTypesetStatus | null>(null);
+  // Independent DOM-level health check: it does not trust the session's bookkeeping,
+  // so a broken/silent session still produces a visible, actionable signal.
+  const [mathHealth, setMathHealth] = useState<{ containers: number; rendered: number; engine: boolean } | null>(null);
   const previewHasChunks = renderChunks.length > 0;
 
   /** Create the session if the preview is showing and none is alive yet. */
@@ -1346,6 +1358,41 @@ export const App: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderProgress, isSourceMode]);
+
+  /** DOM-level health probe: how many math containers exist vs. how many rendered. */
+  const probeMathHealth = useCallback(() => {
+    const root = previewRef.current;
+    if (!root) return;
+    const containers = Array.from(root.querySelectorAll('.math-equation-row, .math-inline'));
+    const rendered = containers.filter((el) => el.querySelector('mjx-container')).length;
+    const engine = !!(window as unknown as { MathJax?: { typesetPromise?: unknown } }).MathJax?.typesetPromise;
+    setMathHealth({ containers: containers.length, rendered, engine });
+  }, []);
+
+  useEffect(() => {
+    if (isSourceMode || renderProgress) return;
+    const timer = window.setTimeout(probeMathHealth, 1200);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderProgress, isSourceMode, renderChunks.length]);
+
+  /**
+   * Programmatic equivalent of the "switch view and back" workaround users reach for
+   * when formulas stay raw: rebuild the session and force a complete pass.
+   */
+  const retryAllMath = useCallback(async () => {
+    const root = previewRef.current;
+    if (!root) return;
+    mathSessionRef.current?.destroy();
+    mathSessionRef.current = null;
+    const session = createMathTypesetSession(root, setMathStatus);
+    mathSessionRef.current = session;
+    try {
+      await session.typesetAll();
+    } finally {
+      window.setTimeout(probeMathHealth, 600);
+    }
+  }, [probeMathHealth]);
 
   // Mermaid: draw the appended chunk; repaint everything on a theme change
   // (diagrams bake their colours in).
@@ -2992,7 +3039,7 @@ ${texBody}
             <div className="sb-brand">
               <MarkdownXLogo size={22} />
               <span className="sb-brand-name">MarkdownX</span>
-              <span className="sb-badge">v1.9</span>
+              <span className="sb-badge" title={`版本 ${APP_VERSION} · 构建于 ${APP_BUILD_DATE}`}>{APP_VERSION}</span>
             </div>
 
             <button className="sb-newdoc" onClick={handleNewFile}>
@@ -3338,6 +3385,17 @@ ${texBody}
             /* Pure Typora Centered Article View */
             <div className="typora-document-scroll">
               <div className="typora-paper-article">
+                {!isSourceMode && mathHealth && mathHealth.containers > 0 && mathHealth.rendered === 0 && (
+                  <div className="math-health-banner">
+                    <span className="mhb-text">
+                      ⚠ 检测到 {mathHealth.containers} 个公式未排版
+                      {mathHealth.engine ? '' : '（公式引擎未加载）'}
+                    </span>
+                    <button className="mhb-btn" onClick={() => void retryAllMath()}>
+                      立即重新排版
+                    </button>
+                  </div>
+                )}
                 {activeFile?.content?.trim() ? (
                   <article
                     ref={previewRef}

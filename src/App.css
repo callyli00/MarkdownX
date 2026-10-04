@@ -3008,3 +3008,32 @@ body.theme-sepia .typora-paper-article {
   color: #b42318 !important;
   font-weight: 600;
 }
+
+/* In-preview banner: un-typeset formulas are a user-visible defect, so offer the
+   recovery action right where the problem is instead of only in the status bar. */
+.math-health-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 16px 0 4px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #e54848 10%, var(--wb-card));
+  border: 1px solid color-mix(in srgb, #e54848 34%, transparent);
+  color: #b42318;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.math-health-banner .mhb-btn {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #e54848 45%, transparent);
+  background: var(--wb-card);
+  color: #b42318;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.math-health-banner .mhb-btn:hover { background: color-mix(in srgb, #e54848 14%, var(--wb-card)); }
