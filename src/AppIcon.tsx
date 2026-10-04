@@ -13,7 +13,8 @@ export type IconName =
   | 'book' | 'list-tree' | 'wrench' | 'copy' | 'print' | 'export' | 'close'
   | 'chevron-down' | 'save' | 'new-file' | 'open-file' | 'eye' | 'pencil'
   | 'align-justify' | 'align-left' | 'indent' | 'undo' | 'redo' | 'trash' | 'download'
-  | 'scissors' | 'clipboard';
+  | 'scissors' | 'clipboard'
+  | 'win-min' | 'win-max' | 'win-restore';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   'plus-circle': <><circle cx="12" cy="12" r="8.5" /><path d="M12 8.8v6.4M8.8 12h6.4" /></>,
@@ -63,6 +64,9 @@ const PATHS: Record<IconName, React.ReactNode> = {
   'download': <><path d="M12 4v10M8 10.5l4 4 4-4" /><path d="M4.5 19.5h15" /></>,
   'scissors': <><circle cx="6.5" cy="6.5" r="2.5" /><circle cx="6.5" cy="17.5" r="2.5" /><path d="M8.6 8.2L20 18M20 6L8.6 15.8" /></>,
   'clipboard': <><rect x="6" y="5" width="12" height="15.5" rx="2" /><path d="M9.5 5V3.8a1.3 1.3 0 0 1 1.3-1.3h2.4a1.3 1.3 0 0 1 1.3 1.3V5" /><path d="M12 10.5v6M9.2 13.3h5.6" /></>,
+  'win-min': <path d="M6 12h12" />,
+  'win-max': <rect x="7" y="7" width="10" height="10" />,
+  'win-restore': <><rect x="6" y="9" width="9" height="9" /><path d="M9 9V6h9v9h-3" /></>,
 };
 
 export const AppIcon: React.FC<{ name: IconName; size?: number; className?: string; strokeWidth?: number }> = ({

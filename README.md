@@ -1,4 +1,4 @@
-# MarkdownX (v1.9.0)
+# MarkdownX (v1.9.1)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -29,6 +29,16 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v1.9.1] - 2026-10-03
+
+#### 窗口控制一体化 (Integrated Window Controls)
+- **现象**：窗口顶部存在两层横带——Windows 原生标题栏（系统配色，通常为冷调浅蓝白）与应用自绘顶栏（主题配色）色相割裂，三个窗口按钮（最小化/最大化/关闭）浮在上层。
+- **方案论证**：`titleBarStyle: "overlay"` 在 `tauri-runtime-wry` 中为 **macOS 专属**（`#[cfg(target_os = "macos")]`），Windows 不生效；改用 `decorations: false` + 自绘三键。经 tao `WM_NCHITTEST` 源码确认，无装饰窗口在 `RESIZABLE` 且非最大化时执行完整边缘命中测试，**边缘缩放与 Aero Snap 保留**。
+- **实现**：`tauri.conf.json` 关闭原生装饰（保留 `shadow`）；顶栏右端新增 44×45px 全高窗口控制组，与编辑图标簇同轴同行、齐右贴边；`data-tauri-drag-region` 覆盖顶栏/左簇/文档名/中区（三键刻意不覆盖）；`onResized` 同步真实窗口态以切换最大化/还原字形；关闭键 hover 采用 Windows 惯用 `#e81123`。
+- **实证**：三键中心轴与图标簇一致（均 23px）、末键右缘与视口等宽、按钮高 45px 顶至窗口上缘；无窗口 API 环境下连点三键不崩（守卫式调用）。
+
+---
 
 ### [v1.9.0] - 2026-10-03
 

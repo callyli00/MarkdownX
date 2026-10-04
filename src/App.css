@@ -2471,9 +2471,9 @@ body.theme-sepia .mermaid-unclosed-hint {
   z-index: 60;
 }
 .wb-tb-left, .wb-tb-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.wb-tb-left { flex: 1 1 auto; }
+.wb-tb-left { flex: 1 1 auto; min-width: 0; }
 .wb-tb-right { flex: 0 0 auto; }
-.wb-tb-center { flex: 0 0 auto; display: flex; align-items: center; }
+.wb-tb-center { flex: 0 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; }
 
 .wb-doc-name {
   margin-left: 6px;
@@ -2843,4 +2843,55 @@ body.theme-sepia .typora-paper-article {
   border-radius: 14px;
   margin: 20px auto;
   min-height: calc(100% - 40px);
+}
+
+/* ---------- 5. Window caption buttons (the OS title bar is disabled) ---------- */
+/* The three controls live on the application's own top bar row, immediately
+   right of the edit cluster, so the window has a single, integrated header. */
+.wb-topbar { padding-right: 0; }
+/* Stretch the right cluster to the full bar height so the caption buttons are
+   full-height, exactly like the OS ones they replace. */
+.wb-tb-right { padding-right: 0; align-self: stretch; }
+.wb-win-controls {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  margin-left: 4px;
+}
+.wb-win-btn {
+  width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--wb-fg2);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.wb-win-btn:hover { background: var(--wb-sel); color: var(--wb-fg); }
+.wb-win-btn:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: -2px; }
+.wb-win-btn.close:hover { background: #e81123; color: #ffffff; }
+.wb-win-btn.close:active { background: #c50f1f; color: #ffffff; }
+
+/* With no native frame the drag strip must never look interactive. */
+.wb-topbar[data-tauri-drag-region],
+.wb-tb-left[data-tauri-drag-region],
+.wb-doc-name[data-tauri-drag-region],
+.wb-tb-center[data-tauri-drag-region] { cursor: default; }
+
+/* Narrow windows: the window controls must never be pushed off the bar, so the
+   optional affordances yield first, then the view tabs (still reachable via
+   Ctrl+/ and the ⋯ menu) and the shrinkable edit cluster. */
+.wb-doc-name { min-width: 0; }
+.wb-edit-cluster { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+@media (max-width: 1080px) {
+  .wb-tb-right .wb-icon-btn[data-optional="true"] { display: none; }
+  .wb-tb-right .wb-cluster-sep { display: none; }
+}
+@media (max-width: 860px) {
+  .wb-tb-center { display: none; }
+}
+@media (max-width: 680px) {
+  .wb-edit-cluster { display: none; }
 }

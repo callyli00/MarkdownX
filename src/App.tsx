@@ -871,6 +871,10 @@ export const App: React.FC = () => {
   // Workbench chrome: the right-hand typography inspector, the collapsed
   // outline groups, and which sidebar panel is shown.
   const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(false);
+  // The OS title bar is disabled (decorations: false), so the caption buttons are
+  // drawn in the top bar. The maximize / restore glyph has to follow the REAL
+  // window state, which changes on resize, double-click and Aero Snap alike.
+  const [isWindowMaximized, setIsWindowMaximized] = useState<boolean>(false);
   const [collapsedOutline, setCollapsedOutline] = useState<Set<number>>(new Set());
   // External-modification conflicts are tracked PER TAB so that background
   // documents keep their conflict state until the user resolves it explicitly.
@@ -2213,6 +2217,39 @@ ${texBody}
     };
   }, []);
 
+  // Keep the maximize/restore glyph in step with the window, and expose the three
+  // caption actions. Every call is guarded: outside Tauri (browser harness) the
+  // window API is absent and the controls simply do nothing.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    try {
+      const appWin = getCurrentWindow();
+      const sync = () => {
+        appWin.isMaximized()
+          .then((maximized) => { if (!disposed) setIsWindowMaximized(!!maximized); })
+          .catch(() => {});
+      };
+      sync();
+      appWin.onResized(sync)
+        .then((un) => { if (disposed) un(); else unlisten = un; })
+        .catch(() => {});
+    } catch {
+      // No Tauri window (plain browser): leave the controls inert.
+    }
+    return () => { disposed = true; if (unlisten) unlisten(); };
+  }, []);
+
+  const handleWindowMinimize = () => {
+    try { getCurrentWindow().minimize().catch(() => {}); } catch { /* browser */ }
+  };
+  const handleWindowToggleMaximize = () => {
+    try { getCurrentWindow().toggleMaximize().catch(() => {}); } catch { /* browser */ }
+  };
+  const handleWindowClose = () => {
+    try { getCurrentWindow().close().catch(() => {}); } catch { /* browser */ }
+  };
+
   // Rust Native File Watcher (Notify Crate) integration
   useEffect(() => {
     if (!autoWatchSetting) return;
@@ -2351,8 +2388,8 @@ ${texBody}
   return (
     <div className="typora-shell" onDragOver={handleHtml5DragOver} onDragLeave={handleHtml5DragLeave} onDrop={handleHtml5Drop}>
       {/* 1. Workbench top bar: identity + document, view tabs, edit cluster, menus */}
-      <header className="wb-topbar">
-        <div className="wb-tb-left">
+      <header className="wb-topbar" data-tauri-drag-region>
+        <div className="wb-tb-left" data-tauri-drag-region>
           <button
             className="wb-icon-btn"
             onClick={() => setIsSidebarOpen((prev) => !prev)}
@@ -2361,7 +2398,7 @@ ${texBody}
             <AppIcon name="sidebar-left" size={16} />
           </button>
           <MarkdownXLogo size={18} />
-          <span className="wb-doc-name" title={activeFile?.path || '未保存'}>
+          <span className="wb-doc-name" data-tauri-drag-region title={activeFile?.path || '未保存'}>
             {activeFile?.name || 'MarkdownX'}
             {activeFile?.isModified ? <span className="wb-dirty-dot">•</span> : null}
           </span>
@@ -2496,7 +2533,7 @@ ${texBody}
           </div>
         </div>
 
-        <div className="wb-tb-center">
+        <div className="wb-tb-center" data-tauri-drag-region>
           <div className="wb-view-tabs">
             <button className={`wb-view-tab ${!isSourceMode ? 'active' : ''}`} onClick={() => { if (isSourceMode) toggleSourceMode(); }} title="沉浸排版视图 (Ctrl+/)">
               排版
@@ -2521,6 +2558,7 @@ ${texBody}
           <button
             className={`wb-icon-btn ${isFocusMode ? 'active' : ''}`}
             onClick={() => setIsFocusMode((v) => !v)}
+            data-optional="true"
             title={`专注模式 (F8)`}
           >
             <AppIcon name="target" size={15} />
@@ -2528,20 +2566,41 @@ ${texBody}
           <button
             className={`wb-icon-btn ${isInspectorOpen ? 'active' : ''}`}
             onClick={() => setIsInspectorOpen((v) => !v)}
+            data-optional="true"
             title="排版检查器 (Ctrl+Shift+2)"
           >
             <AppIcon name="type" size={15} />
           </button>
-          <button className="wb-icon-btn" onClick={cycleTheme} title={`主题：${themePref === 'auto' ? '跟随系统' : appTheme}（点击循环）`}>
+          <button className="wb-icon-btn" data-optional="true" onClick={cycleTheme} title={`主题：${themePref === 'auto' ? '跟随系统' : appTheme}（点击循环）`}>
             <AppIcon name={themeIconName()} size={15} />
           </button>
           <button
             className="wb-icon-btn"
             onClick={() => { setShowHelpModal(true); }}
+            data-optional="true"
             title="快捷键速查"
           >
             <AppIcon name="help" size={15} />
           </button>
+
+          {/* Caption buttons: the window has no OS title bar, so these three live
+              on the application's own top bar row. */}
+          <div className="wb-win-controls">
+            <button className="wb-win-btn" onClick={handleWindowMinimize} title="最小化" aria-label="最小化">
+              <AppIcon name="win-min" size={14} strokeWidth={1.4} />
+            </button>
+            <button
+              className="wb-win-btn"
+              onClick={handleWindowToggleMaximize}
+              title={isWindowMaximized ? '向下还原' : '最大化'}
+              aria-label={isWindowMaximized ? '向下还原' : '最大化'}
+            >
+              <AppIcon name={isWindowMaximized ? 'win-restore' : 'win-max'} size={14} strokeWidth={1.4} />
+            </button>
+            <button className="wb-win-btn close" onClick={handleWindowClose} title="关闭" aria-label="关闭">
+              <AppIcon name="close" size={14} strokeWidth={1.4} />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -2966,7 +3025,7 @@ ${texBody}
                     onClick={() => enterSourceMode(null)}
                   >
                     <p className="empty-hint-main">点击此处或按 <kbd>Ctrl + /</kbd> 开始书写...</p>
-                    <p className="empty-hint-sub">也可通过左上方 <strong>文件(F) ➔ 打开...</strong> 打开本地 Markdown 文档</p>
+                    <p className="empty-hint-sub">也可将 .md 文件拖入窗口，或用顶部 <strong>⋯ 菜单 ➔ 打开文件...</strong> 打开本地 Markdown 文档</p>
                   </div>
                 )}
               </div>
@@ -3154,7 +3213,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.9.0 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.9.1 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。
