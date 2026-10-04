@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
-import { renderMarkdown, triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
+import { prepareDocument, renderBlockRange, finalizeDocument, triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
 import { AppIcon } from './AppIcon';
 import './App.css';
 
@@ -51,11 +51,20 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.6';
+const APP_VERSION = 'v1.9.7';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.7',
+    date: '2026-10-04',
+    items: [
+      'v2 阶段二：分片渲染 —— 大文档首屏约 0.3s 出画，其余分片流式补齐，窗口不再冻结',
+      '数学与图表按分片增量排版，旧分片 DOM 不被重建；状态栏显示排版进度',
+      '渲染器拆为 prepass / 逐块渲染 / finalize，并以护栏保证分片与整篇渲染逐字节等价'
+    ]
+  },
   {
     version: 'v1.9.6',
     date: '2026-10-04',
@@ -349,6 +358,20 @@ interface SourceIndex {
   /** Original character offset of each character in `folded`. */
   offsets: number[];
 }
+
+/** Yield to the browser: an idle callback when available, else a macrotask. */
+function scheduleIdle(fn: () => void): void {
+  const ric = (window as unknown as {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+  }).requestIdleCallback;
+  if (typeof ric === 'function') ric(fn, { timeout: 120 });
+  else window.setTimeout(fn, 0);
+}
+
+/** Time budget per rendering slice (ms). Keeps the UI responsive between slices. */
+const RENDER_SLICE_MS = 12;
+/** The first slice is the one the user actually waits for - keep it short. */
+const FIRST_PAINT_MS = 16;
 
 export function buildSourceIndex(content: string): SourceIndex {
   const chars: string[] = [];
@@ -1070,10 +1093,17 @@ export const App: React.FC = () => {
     localStorage.setItem('preferred_typography_v3', JSON.stringify(typography));
   }, [typography]);
 
-  const [renderedHtml, setRenderedHtml] = useState<string>('');
+  // v2 chunked rendering: the preview is a LIST of rendered slices rather than one
+  // HTML blob, so appending the next slice touches only the new subtree (previously
+  // every render destroyed and rebuilt the whole document).
+  const [renderChunks, setRenderChunks] = useState<string[]>([]);
+  const [renderProgress, setRenderProgress] = useState<{ done: number; total: number } | null>(null);
+  const renderGenRef = useRef(0);
+  const chunksRef = useRef<string[]>([]);
+  const renderDoneRef = useRef<boolean>(true);
   const previewRef = useRef<HTMLDivElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  // The Markdown that `renderedHtml` was produced from. Rendering is async, so
+  // The Markdown revision the current chunk set was produced from (rendering is async, so
   // a position restore must wait until this matches the current document.
   const renderedForContentRef = useRef<string | null>(null);
 
@@ -1089,16 +1119,96 @@ export const App: React.FC = () => {
     return index !== -1 ? fullPath.substring(0, index) : '';
   };
 
+  /**
+   * Chunked render (v2). The block boundaries ARE marked's top-level tokens, so a
+   * slice is a contiguous block range; the first slice is published synchronously
+   * so the window paints immediately, the rest is appended in idle slices (each
+   * ending when its 12ms budget is spent). A generation counter voids in-flight
+   * slices the moment the file changes again.
+   *
+   * Equivalence to a whole-document render is proven by tools/chunked-render-gate.
+   */
   const updatePreview = useCallback(async (content: string, currentPath: string | null) => {
+    const gen = renderGenRef.current + 1;
+    renderGenRef.current = gen;
+    renderDoneRef.current = false;
+    const basePath = getBasePath(currentPath);
     try {
-      const basePath = getBasePath(currentPath);
-      const html = await renderMarkdown(content, basePath);
+      const tPrep = performance.now();
+      const prep = prepareDocument(content, basePath);
+      const prepMs = performance.now() - tPrep;
+      if (gen !== renderGenRef.current) return;
       renderedForContentRef.current = content;
-      setRenderedHtml(html);
+      const total = prep.blocks.length;
+
+      const publish = (html: string, next: number) => {
+        chunksRef.current = [...chunksRef.current, html];
+        setRenderChunks(chunksRef.current);
+        setRenderProgress(next < total ? { done: next, total } : null);
+      };
+
+      // Render whole blocks until the budget is spent (always at least one block).
+      const renderSlice = (from: number, budget: number, maxBlocks = Infinity) => {
+        const started = performance.now();
+        let i = from;
+        let parts = '';
+        while (i < total) {
+          parts += renderBlockRange(prep, i, i + 1);
+          i += 1;
+          if (i - from >= maxBlocks) break;
+          if (performance.now() - started >= budget) break;
+        }
+        const html = finalizeDocument(parts, prep);
+        return { html, next: i, blocks: i - from, ms: performance.now() - started };
+      };
+
+      chunksRef.current = [];
+      const first = renderSlice(0, FIRST_PAINT_MS);
+      publish(first.html, first.next);
+      console.log(`[MarkdownX] open: prepass ${prepMs.toFixed(1)}ms, first paint ${first.ms.toFixed(1)}ms ` +
+                  `(${first.next}/${total} blocks, ${content.length} chars)`);
+      if (first.next >= total) {
+        renderDoneRef.current = true;
+        return;
+      }
+
+      let cursor = first.next;
+      // The finalize pass runs outside the block loop, so a slice's real cost
+      // exceeds the budget it measured. Feed that overshoot back as a quota
+      // correction - otherwise slices jank badly (measured ~40ms against a 12ms
+      // budget on a 1.4MB document).
+      let quota = Math.max(1, first.next);
+      const pump = () => {
+        if (gen !== renderGenRef.current) return;
+        const slice = renderSlice(cursor, RENDER_SLICE_MS, quota);
+        cursor = slice.next;
+        publish(slice.html, cursor);
+        if (cursor >= total) {
+          renderDoneRef.current = true;
+          return;
+        }
+        const scale = slice.ms > 0 ? RENDER_SLICE_MS / slice.ms : 1;
+        quota = Math.min(Math.max(1, Math.round(slice.blocks * scale)), Math.max(1, slice.blocks * 2));
+        scheduleIdle(pump);
+      };
+      scheduleIdle(pump);
     } catch (error) {
       console.error('Markdown rendering error:', error);
-      setRenderedHtml(`<div style="color: #ef4444; padding: 20px;">Rendering Error: ${String(error)}</div>`);
+      const errHtml = `<div style="color: #ef4444; padding: 20px;">Rendering Error: ${String(error)}</div>`;
+      chunksRef.current = [errHtml];
+      setRenderChunks([errHtml]);
+      setRenderProgress(null);
+      renderDoneRef.current = true;
     }
+  }, []);
+
+  /** Exports need the finished document; a chunked render may still be running. */
+  const awaitRenderedHtml = useCallback(async (): Promise<string> => {
+    const started = Date.now();
+    while (!renderDoneRef.current && Date.now() - started < 20000) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return chunksRef.current.join('');
   }, []);
 
   // Update preview on tab change
@@ -1148,19 +1258,31 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('contextmenu', handleContextMenu, true);
   }, []);
 
-  // Typeset MathJax whenever rendered HTML updates
+  /**
+   * Typeset + draw ONLY the chunk that was just appended. Re-running the engine
+   * over the whole article on every append would make the cost quadratic - the
+   * earlier chunks keep their typeset DOM (React reconciles by index, so previous
+   * chunk nodes are never recreated).
+   */
   useEffect(() => {
-    if (previewRef.current && !isSourceMode) {
-      triggerMathJax(previewRef.current);
-    }
-  }, [renderedHtml, isSourceMode]);
+    if (isSourceMode) return;
+    const root = previewRef.current;
+    if (!root) return;
+    const chunks = root.querySelectorAll('.render-chunk');
+    const last = chunks[chunks.length - 1] as HTMLElement | undefined;
+    if (!last) return;
+    triggerMathJax(last);
+    renderMermaidDiagrams(last, appTheme);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderChunks.length, isSourceMode]);
 
-  // Draw ```mermaid diagrams whenever the preview HTML is rebuilt.
+  // A theme change DOES require repainting every diagram (mermaid bakes colours in).
   useEffect(() => {
     if (previewRef.current && !isSourceMode) {
       renderMermaidDiagrams(previewRef.current, appTheme);
     }
-  }, [renderedHtml, isSourceMode, appTheme]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appTheme, isSourceMode]);
 
   // Apply a position handed over from the preview (double-click, mode toggle).
   // The textarea already exists because the source view was just opened.
@@ -1236,7 +1358,6 @@ export const App: React.FC = () => {
     // the measurement would run against stale HTML and land in the wrong place.
     if (renderedForContentRef.current !== pending.content) return;
     if (pending.tabId !== activeFileIdRef.current) return;
-    pendingPreviewScrollRef.current = null;
     const offset = pending.offset;
 
     const article = previewRef.current;
@@ -1244,8 +1365,11 @@ export const App: React.FC = () => {
     const source = activeFile?.content || '';
     if (!article || !scroller || !source) return;
 
+    // With chunked rendering the target block may not be mounted yet: keep the
+    // request pending and let this effect retry as further chunks arrive.
     const target = blockForSourceOffset(article, source, offset);
     if (!target) return;
+    pendingPreviewScrollRef.current = null;
 
     // Absolute geometry via rects: offsetTop is unreliable because neither
     // .typora-document-scroll nor .typora-paper-article is positioned.
@@ -1265,7 +1389,7 @@ export const App: React.FC = () => {
       window.clearTimeout(clearFlash);
       target.classList.remove('jump-target-flash');
     };
-  }, [isSourceMode, renderedHtml]);
+  }, [isSourceMode, renderChunks.length]);
 
   // Production build fix: listen for mathjax-ready event when MathJax finishes async loading
   useEffect(() => {
@@ -2093,7 +2217,7 @@ export const App: React.FC = () => {
 </head>
 <body>
   <div class="markdownx-exported-doc">
-    ${renderedHtml}
+    ${await awaitRenderedHtml()}
   </div>
 </body>
 </html>`;
@@ -2123,7 +2247,7 @@ export const App: React.FC = () => {
   <title>${activeFile.name.replace(/\.[^/.]+$/, '')}</title>
 </head>
 <body>
-${renderedHtml}
+${await awaitRenderedHtml()}
 </body>
 </html>`;
         await writeTextFile(targetPath, plainHtml);
@@ -2224,7 +2348,7 @@ ${texBody}
 </head>
 <body>
   <div>
-    ${renderedHtml}
+    ${await awaitRenderedHtml()}
   </div>
 </body>
 </html>`;
@@ -3119,9 +3243,16 @@ ${texBody}
                   <article
                     ref={previewRef}
                     className="academic-article"
-                    dangerouslySetInnerHTML={{ __html: renderedHtml }}
                     onDoubleClick={handlePreviewDoubleClick}
-                  />
+                  >
+                    {renderChunks.map((html, index) => (
+                      <div
+                        key={index}
+                        className="render-chunk"
+                        dangerouslySetInnerHTML={{ __html: html }}
+                      />
+                    ))}
+                  </article>
                 ) : (
                   <div
                     className="typora-empty-guide"
@@ -3155,6 +3286,14 @@ ${texBody}
             {isFocusMode && <><span className="sep">•</span><span className="status-pill-badge">专注模式</span></>}
             {isTypewriterMode && <><span className="sep">•</span><span className="status-pill-badge">打字机模式</span></>}
             {zoomLevel !== 1 && <><span className="sep">•</span><span>缩放: {Math.round(zoomLevel * 100)}%</span></>}
+            {renderProgress && (
+              <>
+                <span className="sep">•</span>
+                <span className="status-badge render-progress" title="大文档分段排版中，可继续滚动与编辑">
+                  排版中 {renderProgress.done} / {renderProgress.total} 块
+                </span>
+              </>
+            )}
           </div>
           <div className="status-right">
             <span>对齐: {typography.textAlign === 'justify' ? '两端对齐' : '左对齐'}</span>

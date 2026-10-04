@@ -1997,14 +1997,17 @@ body.theme-dark .code-block-header {
 /* =========================================
    Focus Mode & Typewriter Mode
    ========================================= */
-.focus-mode-active .academic-article > * {
+/* Focus mode dims everything but the block under the cursor. Chunked rendering
+   (v2) nests blocks inside .render-chunk wrappers, so the target is the wrapper's
+   children - a `>` selector on the article itself would stop at the wrapper. */
+.focus-mode-active .academic-article .render-chunk > * {
   opacity: 0.35;
   transition: opacity 0.2s ease;
 }
 
-.focus-mode-active .academic-article > *:hover,
-.focus-mode-active .academic-article > h1,
-.focus-mode-active .academic-article > h2 {
+.focus-mode-active .academic-article .render-chunk > *:hover,
+.focus-mode-active .academic-article .render-chunk > h1,
+.focus-mode-active .academic-article .render-chunk > h2 {
   opacity: 1 !important;
 }
 
@@ -2986,3 +2989,15 @@ body.theme-sepia .typora-paper-article {
 .about-meta-row { display: flex; gap: 12px; font-size: 12.5px; }
 .about-meta-key { flex: 0 0 68px; color: var(--text-faint); }
 .about-meta-val { color: var(--text-muted); }
+
+/* ---------- v2 chunked rendering ---------- */
+/* One sliced render batch. Chunks are appended as they are produced, so an append
+   inserts exactly one subtree and leaves the earlier DOM (and its typeset math)
+   untouched. */
+.render-chunk { display: block; }
+
+/* Progress pill in the status bar while a large document streams in. */
+.typora-statusbar .status-badge.render-progress {
+  background: color-mix(in srgb, var(--wb-accent) 16%, transparent) !important;
+  color: var(--wb-accent) !important;
+}
