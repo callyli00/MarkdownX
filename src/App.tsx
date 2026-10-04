@@ -61,7 +61,7 @@ const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
     version: 'v1.9.14',
     date: '2026-10-04',
     items: [
-      '修复 CRLF（Windows）文档中"第一个代码块之后的公式全部不渲染"——这很可能就是"检测到 174 个公式未排版"的根因',
+      '修复 CRLF（Windows）文档中"第一个代码块之后公式全部不渲染"（需代码围栏 + 其后有公式，实测影响面较窄）',
       '解析搬入 Web Worker：大文档解析不再占用主线程，窗口全程可响应；Worker 不可用时自动回退同步解析，只慢不错',
       '新增渲染等价护栏 tools/render-equivalence-gate：证明 Worker 路径与同步路径逐字节一致，且 LF/CRLF 渲染结果一致'
     ]
