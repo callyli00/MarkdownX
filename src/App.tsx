@@ -4,8 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
-import { prepareDocument, renderBlockRange, finalizeDocument, triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
-import { createMathTypesetSession, type MathTypesetSession, type MathTypesetStatus } from './utils/mathTypeset';
+import { renderMarkdown, triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
 import { AppIcon } from './AppIcon';
 import './App.css';
 
@@ -52,64 +51,18 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.12';
+const APP_VERSION = 'v1.9.13';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
   {
-    version: 'v1.9.12',
+    version: 'v1.9.13',
     date: '2026-10-04',
     items: [
-      '公式排版改为分批推进：先排正在读的，其余每 90ms 小步后台补齐（单次引擎调用 ≤ 8 个）',
-      '可见区优先、滚动期间暂停后台补齐；打开大文档不再出现一次性长卡顿',
-      '用几何判定替代 IntersectionObserver，嵌套滚动容器下不再静默失效'
-    ]
-  },
-  {
-    version: 'v1.9.11',
-    date: '2026-10-04',
-    items: [
-      '公式未排版时在正文顶部显示红色横幅（含原因）并提供「立即重新排版」按钮',
-      '自检不依赖排版会话记账，逐条核对容器数与实际渲染数',
-      '侧栏版本徽章改为显示真实版本号（便于确认实际安装版本）'
-    ]
-  },
-  {
-    version: 'v1.9.10',
-    date: '2026-10-04',
-    items: [
-      '修复“公式一个都不渲染且毫无提示”的真正根因：引擎缺席时旧代码会“假装排版成功”并清空队列',
-      '引擎缺席不再算成功：整批回队 + 持续退避重试 + 状态栏可见',
-      '排版后核验真实产出（0 个渲染结果即按失败处理）',
-      '引擎迟到会自愈：MathJax 晚到时文档自动补排，无需切换视图'
-    ]
-  },
-  {
-    version: 'v1.9.9',
-    date: '2026-10-04',
-    items: [
-      'v2 阶段三：公式按需排版 —— 只排进入视野的公式，滚动时逐步补齐（状态栏显示 公式 N / M）',
-      '首次挂载与从源码切回一律重新扫描，彻底修掉“上半屏公式不排版”',
-      '公式引擎不可用/排版失败不再静默：状态栏显示 ⚠ 提示（悬停看原因，控制台看详情）',
-      '打印前自动完成全量排版'
-    ]
-  },
-  {
-    version: 'v1.9.8',
-    date: '2026-10-04',
-    items: [
-      '修复 v1.9.7 回归：上半屏公式未排版（分片渲染在“首次挂载/从源码切回”时只排了最后一片）',
-      '追加仍为增量排版；全新挂载整篇排一次，并加自愈兜底扫描'
-    ]
-  },
-  {
-    version: 'v1.9.7',
-    date: '2026-10-04',
-    items: [
-      'v2 阶段二：分片渲染 —— 大文档首屏约 0.3s 出画，其余分片流式补齐，窗口不再冻结',
-      '数学与图表按分片增量排版，旧分片 DOM 不被重建；状态栏显示排版进度',
-      '渲染器拆为 prepass / 逐块渲染 / finalize，并以护栏保证分片与整篇渲染逐字节等价'
+      '回退到 v1.9.6 的渲染与排版行为（撤销 v1.9.7–v1.9.12 的分片渲染与按需排版）',
+      '原因：分片渲染/按需排版整改多轮后，出现“公式不自动渲染”的致命退化；先恢复可靠行为',
+      '局部渲染将按新的设计重新实现（详见 README 的说明与后续版本）'
     ]
   },
   {
@@ -405,20 +358,6 @@ interface SourceIndex {
   /** Original character offset of each character in `folded`. */
   offsets: number[];
 }
-
-/** Yield to the browser: an idle callback when available, else a macrotask. */
-function scheduleIdle(fn: () => void): void {
-  const ric = (window as unknown as {
-    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-  }).requestIdleCallback;
-  if (typeof ric === 'function') ric(fn, { timeout: 120 });
-  else window.setTimeout(fn, 0);
-}
-
-/** Time budget per rendering slice (ms). Keeps the UI responsive between slices. */
-const RENDER_SLICE_MS = 12;
-/** The first slice is the one the user actually waits for - keep it short. */
-const FIRST_PAINT_MS = 16;
 
 export function buildSourceIndex(content: string): SourceIndex {
   const chars: string[] = [];
@@ -1140,17 +1079,10 @@ export const App: React.FC = () => {
     localStorage.setItem('preferred_typography_v3', JSON.stringify(typography));
   }, [typography]);
 
-  // v2 chunked rendering: the preview is a LIST of rendered slices rather than one
-  // HTML blob, so appending the next slice touches only the new subtree (previously
-  // every render destroyed and rebuilt the whole document).
-  const [renderChunks, setRenderChunks] = useState<string[]>([]);
-  const [renderProgress, setRenderProgress] = useState<{ done: number; total: number } | null>(null);
-  const renderGenRef = useRef(0);
-  const chunksRef = useRef<string[]>([]);
-  const renderDoneRef = useRef<boolean>(true);
+  const [renderedHtml, setRenderedHtml] = useState<string>('');
   const previewRef = useRef<HTMLDivElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  // The Markdown revision the current chunk set was produced from (rendering is async, so
+  // The Markdown that `renderedHtml` was produced from. Rendering is async, so
   // a position restore must wait until this matches the current document.
   const renderedForContentRef = useRef<string | null>(null);
 
@@ -1166,96 +1098,16 @@ export const App: React.FC = () => {
     return index !== -1 ? fullPath.substring(0, index) : '';
   };
 
-  /**
-   * Chunked render (v2). The block boundaries ARE marked's top-level tokens, so a
-   * slice is a contiguous block range; the first slice is published synchronously
-   * so the window paints immediately, the rest is appended in idle slices (each
-   * ending when its 12ms budget is spent). A generation counter voids in-flight
-   * slices the moment the file changes again.
-   *
-   * Equivalence to a whole-document render is proven by tools/chunked-render-gate.
-   */
   const updatePreview = useCallback(async (content: string, currentPath: string | null) => {
-    const gen = renderGenRef.current + 1;
-    renderGenRef.current = gen;
-    renderDoneRef.current = false;
-    const basePath = getBasePath(currentPath);
     try {
-      const tPrep = performance.now();
-      const prep = prepareDocument(content, basePath);
-      const prepMs = performance.now() - tPrep;
-      if (gen !== renderGenRef.current) return;
+      const basePath = getBasePath(currentPath);
+      const html = await renderMarkdown(content, basePath);
       renderedForContentRef.current = content;
-      const total = prep.blocks.length;
-
-      const publish = (html: string, next: number) => {
-        chunksRef.current = [...chunksRef.current, html];
-        setRenderChunks(chunksRef.current);
-        setRenderProgress(next < total ? { done: next, total } : null);
-      };
-
-      // Render whole blocks until the budget is spent (always at least one block).
-      const renderSlice = (from: number, budget: number, maxBlocks = Infinity) => {
-        const started = performance.now();
-        let i = from;
-        let parts = '';
-        while (i < total) {
-          parts += renderBlockRange(prep, i, i + 1);
-          i += 1;
-          if (i - from >= maxBlocks) break;
-          if (performance.now() - started >= budget) break;
-        }
-        const html = finalizeDocument(parts, prep);
-        return { html, next: i, blocks: i - from, ms: performance.now() - started };
-      };
-
-      chunksRef.current = [];
-      const first = renderSlice(0, FIRST_PAINT_MS);
-      publish(first.html, first.next);
-      console.log(`[MarkdownX] open: prepass ${prepMs.toFixed(1)}ms, first paint ${first.ms.toFixed(1)}ms ` +
-                  `(${first.next}/${total} blocks, ${content.length} chars)`);
-      if (first.next >= total) {
-        renderDoneRef.current = true;
-        return;
-      }
-
-      let cursor = first.next;
-      // The finalize pass runs outside the block loop, so a slice's real cost
-      // exceeds the budget it measured. Feed that overshoot back as a quota
-      // correction - otherwise slices jank badly (measured ~40ms against a 12ms
-      // budget on a 1.4MB document).
-      let quota = Math.max(1, first.next);
-      const pump = () => {
-        if (gen !== renderGenRef.current) return;
-        const slice = renderSlice(cursor, RENDER_SLICE_MS, quota);
-        cursor = slice.next;
-        publish(slice.html, cursor);
-        if (cursor >= total) {
-          renderDoneRef.current = true;
-          return;
-        }
-        const scale = slice.ms > 0 ? RENDER_SLICE_MS / slice.ms : 1;
-        quota = Math.min(Math.max(1, Math.round(slice.blocks * scale)), Math.max(1, slice.blocks * 2));
-        scheduleIdle(pump);
-      };
-      scheduleIdle(pump);
+      setRenderedHtml(html);
     } catch (error) {
       console.error('Markdown rendering error:', error);
-      const errHtml = `<div style="color: #ef4444; padding: 20px;">Rendering Error: ${String(error)}</div>`;
-      chunksRef.current = [errHtml];
-      setRenderChunks([errHtml]);
-      setRenderProgress(null);
-      renderDoneRef.current = true;
+      setRenderedHtml(`<div style="color: #ef4444; padding: 20px;">Rendering Error: ${String(error)}</div>`);
     }
-  }, []);
-
-  /** Exports need the finished document; a chunked render may still be running. */
-  const awaitRenderedHtml = useCallback(async (): Promise<string> => {
-    const started = Date.now();
-    while (!renderDoneRef.current && Date.now() - started < 20000) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    return chunksRef.current.join('');
   }, []);
 
   // Update preview on tab change
@@ -1305,123 +1157,19 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('contextmenu', handleContextMenu, true);
   }, []);
 
-  /**
-   * Math is typeset ON DEMAND by a per-mount session (v2 stage 3): containers are
-   * handed to the engine when they come near the viewport, in batches, never
-   * twice. The session is created for every preview mount, so a first mount or a
-   * switch back from the source view re-scans everything - the exact case where
-   * the earlier "typeset only the newly appended chunk" optimisation left the top
-   * of the document as raw TeX.
-   */
-  const mathSessionRef = useRef<MathTypesetSession | null>(null);
-  const [mathStatus, setMathStatus] = useState<MathTypesetStatus | null>(null);
-  // Independent DOM-level health check: it does not trust the session's bookkeeping,
-  // so a broken/silent session still produces a visible, actionable signal.
-  const [mathHealth, setMathHealth] = useState<{ containers: number; rendered: number; engine: boolean } | null>(null);
-  const previewHasChunks = renderChunks.length > 0;
-
-  /** Create the session if the preview is showing and none is alive yet. */
-  const ensureMathSession = useCallback((): MathTypesetSession | null => {
-    if (isSourceMode || chunksRef.current.length === 0) return null;
-    if (mathSessionRef.current) return mathSessionRef.current;
-    const root = previewRef.current;
-    if (!root) return null;
-    const session = createMathTypesetSession(root, setMathStatus);
-    mathSessionRef.current = session;
-    return session;
-  }, [isSourceMode]);
-
+  // Typeset MathJax whenever rendered HTML updates
   useEffect(() => {
-    if (isSourceMode || !previewHasChunks) {
-      mathSessionRef.current?.destroy();
-      mathSessionRef.current = null;
-      return;
+    if (previewRef.current && !isSourceMode) {
+      triggerMathJax(previewRef.current);
     }
-    ensureMathSession();
-    return () => {
-      mathSessionRef.current?.destroy();
-      mathSessionRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSourceMode, previewHasChunks]);
+  }, [renderedHtml, isSourceMode]);
 
-  // New chunks mounted: let the session pick up their math containers.
-  useEffect(() => {
-    ensureMathSession()?.refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderChunks.length]);
-
-  /**
-   * Guarantee pass. On-demand typesetting is an optimisation and must never be able
-   * to leave the document unrendered: when the stream finishes, anything still
-   * untouched gets one full pass. This is what makes a slow MathJax bundle (or any
-   * missed observer notification) self-heal instead of needing a view switch.
-   */
-  useEffect(() => {
-    if (isSourceMode || renderProgress) return;
-    const session = ensureMathSession();
-    if (!session) return;
-    session.refresh();
-    if (mathStatus && mathStatus.typeset === 0 && mathStatus.pending > 0) {
-      void session.typesetAll();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderProgress, isSourceMode]);
-
-  /** DOM-level health probe: how many math containers exist vs. how many rendered. */
-  const probeMathHealth = useCallback(() => {
-    const root = previewRef.current;
-    if (!root) return;
-    const containers = Array.from(root.querySelectorAll('.math-equation-row, .math-inline'));
-    const rendered = containers.filter((el) => el.querySelector('mjx-container')).length;
-    const engine = !!(window as unknown as { MathJax?: { typesetPromise?: unknown } }).MathJax?.typesetPromise;
-    setMathHealth({ containers: containers.length, rendered, engine });
-  }, []);
-
-  useEffect(() => {
-    if (isSourceMode || renderProgress) return;
-    const timer = window.setTimeout(probeMathHealth, 1200);
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderProgress, isSourceMode, renderChunks.length]);
-
-  /**
-   * Programmatic equivalent of the "switch view and back" workaround users reach for
-   * when formulas stay raw: rebuild the session and force a complete pass.
-   */
-  const retryAllMath = useCallback(async () => {
-    const root = previewRef.current;
-    if (!root) return;
-    mathSessionRef.current?.destroy();
-    mathSessionRef.current = null;
-    const session = createMathTypesetSession(root, setMathStatus);
-    mathSessionRef.current = session;
-    try {
-      await session.typesetAll();
-    } finally {
-      window.setTimeout(probeMathHealth, 600);
-    }
-  }, [probeMathHealth]);
-
-  // Mermaid: draw the appended chunk; repaint everything on a theme change
-  // (diagrams bake their colours in).
-  useEffect(() => {
-    if (isSourceMode) return;
-    const root = previewRef.current;
-    if (!root) return;
-    const chunks = Array.from(root.querySelectorAll('.render-chunk')) as HTMLElement[];
-    const last = chunks[chunks.length - 1];
-    if (last) renderMermaidDiagrams(last, appTheme);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderChunks.length, isSourceMode]);
-
-  // A theme change DOES require repainting every diagram (mermaid bakes colours in).
+  // Draw ```mermaid diagrams whenever the preview HTML is rebuilt.
   useEffect(() => {
     if (previewRef.current && !isSourceMode) {
       renderMermaidDiagrams(previewRef.current, appTheme);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appTheme, isSourceMode]);
+  }, [renderedHtml, isSourceMode, appTheme]);
 
   // Apply a position handed over from the preview (double-click, mode toggle).
   // The textarea already exists because the source view was just opened.
@@ -1497,6 +1245,7 @@ export const App: React.FC = () => {
     // the measurement would run against stale HTML and land in the wrong place.
     if (renderedForContentRef.current !== pending.content) return;
     if (pending.tabId !== activeFileIdRef.current) return;
+    pendingPreviewScrollRef.current = null;
     const offset = pending.offset;
 
     const article = previewRef.current;
@@ -1504,11 +1253,8 @@ export const App: React.FC = () => {
     const source = activeFile?.content || '';
     if (!article || !scroller || !source) return;
 
-    // With chunked rendering the target block may not be mounted yet: keep the
-    // request pending and let this effect retry as further chunks arrive.
     const target = blockForSourceOffset(article, source, offset);
     if (!target) return;
-    pendingPreviewScrollRef.current = null;
 
     // Absolute geometry via rects: offsetTop is unreliable because neither
     // .typora-document-scroll nor .typora-paper-article is positioned.
@@ -1528,17 +1274,12 @@ export const App: React.FC = () => {
       window.clearTimeout(clearFlash);
       target.classList.remove('jump-target-flash');
     };
-  }, [isSourceMode, renderChunks.length]);
+  }, [isSourceMode, renderedHtml]);
 
-  // Production build fix: when MathJax finishes its async load, ask the on-demand
-  // session to pick up whatever still needs typesetting (it is engine-agnostic:
-  // the session itself waits for readiness and reports a missing engine loudly).
+  // Production build fix: listen for mathjax-ready event when MathJax finishes async loading
   useEffect(() => {
     const handleMathJaxReady = () => {
-      if (isSourceMode) return;
-      if (mathSessionRef.current) {
-        mathSessionRef.current.refresh();
-      } else if (previewRef.current) {
+      if (previewRef.current && !isSourceMode) {
         triggerMathJax(previewRef.current);
       }
     };
@@ -1547,7 +1288,6 @@ export const App: React.FC = () => {
       handleMathJaxReady();
     }
     return () => window.removeEventListener('mathjax-ready', handleMathJaxReady);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSourceMode]);
 
 // --- Outline Extraction (TOC) ---
@@ -2225,25 +1965,15 @@ export const App: React.FC = () => {
   };
 
   // 1. Independent Print handler (Ctrl + P) - Keeps system print dialog 100% active
-  const handlePrint = async () => {
+  const handlePrint = () => {
     setActiveMenu(null);
-    // Printing reads the DOM, so the on-demand session must finish first or the
-    // paper copy would contain raw TeX for every formula that was never scrolled to.
-    const typesetThenPrint = async () => {
-      try {
-        await mathSessionRef.current?.typesetAll();
-      } catch {
-        /* printing proceeds regardless */
-      }
-      window.print();
-    };
     if (isSourceMode) {
       // Route through toggleSourceMode so the reading position is carried back
       // into the preview instead of dumping the reader at the top.
       toggleSourceMode();
-      setTimeout(() => void typesetThenPrint(), 600);
+      setTimeout(() => window.print(), 350);
     } else {
-      await typesetThenPrint();
+      window.print();
     }
   };
 
@@ -2372,7 +2102,7 @@ export const App: React.FC = () => {
 </head>
 <body>
   <div class="markdownx-exported-doc">
-    ${await awaitRenderedHtml()}
+    ${renderedHtml}
   </div>
 </body>
 </html>`;
@@ -2402,7 +2132,7 @@ export const App: React.FC = () => {
   <title>${activeFile.name.replace(/\.[^/.]+$/, '')}</title>
 </head>
 <body>
-${await awaitRenderedHtml()}
+${renderedHtml}
 </body>
 </html>`;
         await writeTextFile(targetPath, plainHtml);
@@ -2503,7 +2233,7 @@ ${texBody}
 </head>
 <body>
   <div>
-    ${await awaitRenderedHtml()}
+    ${renderedHtml}
   </div>
 </body>
 </html>`;
@@ -3394,31 +3124,13 @@ ${texBody}
             /* Pure Typora Centered Article View */
             <div className="typora-document-scroll">
               <div className="typora-paper-article">
-                {!isSourceMode && mathHealth && mathHealth.containers > 0 && mathHealth.rendered === 0 && (
-                  <div className="math-health-banner">
-                    <span className="mhb-text">
-                      ⚠ 检测到 {mathHealth.containers} 个公式未排版
-                      {mathHealth.engine ? '' : '（公式引擎未加载）'}
-                    </span>
-                    <button className="mhb-btn" onClick={() => void retryAllMath()}>
-                      立即重新排版
-                    </button>
-                  </div>
-                )}
                 {activeFile?.content?.trim() ? (
                   <article
                     ref={previewRef}
                     className="academic-article"
+                    dangerouslySetInnerHTML={{ __html: renderedHtml }}
                     onDoubleClick={handlePreviewDoubleClick}
-                  >
-                    {renderChunks.map((html, index) => (
-                      <div
-                        key={index}
-                        className="render-chunk"
-                        dangerouslySetInnerHTML={{ __html: html }}
-                      />
-                    ))}
-                  </article>
+                  />
                 ) : (
                   <div
                     className="typora-empty-guide"
@@ -3452,46 +3164,6 @@ ${texBody}
             {isFocusMode && <><span className="sep">•</span><span className="status-pill-badge">专注模式</span></>}
             {isTypewriterMode && <><span className="sep">•</span><span className="status-pill-badge">打字机模式</span></>}
             {zoomLevel !== 1 && <><span className="sep">•</span><span>缩放: {Math.round(zoomLevel * 100)}%</span></>}
-            {renderProgress && (
-              <>
-                <span className="sep">•</span>
-                <span className="status-badge render-progress" title="大文档分段排版中，可继续滚动与编辑">
-                  排版中 {renderProgress.done} / {renderProgress.total} 块
-                </span>
-              </>
-            )}
-            {/* Math engine diagnostics: a silently missing engine used to look like
-                            "no formula renders at all", so it is surfaced here instead. */}
-                        {mathStatus && (mathStatus.engine === 'missing' || mathStatus.engine === 'error') && (
-                          <>
-                            <span className="sep">•</span>
-                            <span
-                              className="status-badge math-error"
-                              title={`${mathStatus.error || ''}\n（请在开发者控制台查看 [MarkdownX] 详情）`}
-                            >
-                              {mathStatus.engine === 'missing' ? '⚠ 公式引擎未加载' : '⚠ 公式排版失败'}
-                            </span>
-                          </>
-                        )}
-                        {mathStatus && mathStatus.engine === 'loading' && (
-                          <>
-                            <span className="sep">•</span>
-                            <span className="status-badge" title="正在等待公式引擎就绪，就绪后会自动排版">
-                              公式引擎加载中…
-                            </span>
-                          </>
-                        )}
-                        {mathStatus &&
-                          (mathStatus.engine === 'ready' || mathStatus.engine === 'unknown') &&
-                          mathStatus.pending > 0 && (
-                            <>
-                              <span className="sep">•</span>
-                              <span className="status-badge" title="进入视野的公式随滚动逐步排版">
-                                {mathStatus.engine === 'unknown' ? '公式待排版 ' : `公式 ${mathStatus.typeset} / `}
-                                {mathStatus.typeset + mathStatus.pending}
-                              </span>
-                            </>
-                          )}
           </div>
           <div className="status-right">
             <span>对齐: {typography.textAlign === 'justify' ? '两端对齐' : '左对齐'}</span>

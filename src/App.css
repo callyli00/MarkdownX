@@ -1997,17 +1997,14 @@ body.theme-dark .code-block-header {
 /* =========================================
    Focus Mode & Typewriter Mode
    ========================================= */
-/* Focus mode dims everything but the block under the cursor. Chunked rendering
-   (v2) nests blocks inside .render-chunk wrappers, so the target is the wrapper's
-   children - a `>` selector on the article itself would stop at the wrapper. */
-.focus-mode-active .academic-article .render-chunk > * {
+.focus-mode-active .academic-article > * {
   opacity: 0.35;
   transition: opacity 0.2s ease;
 }
 
-.focus-mode-active .academic-article .render-chunk > *:hover,
-.focus-mode-active .academic-article .render-chunk > h1,
-.focus-mode-active .academic-article .render-chunk > h2 {
+.focus-mode-active .academic-article > *:hover,
+.focus-mode-active .academic-article > h1,
+.focus-mode-active .academic-article > h2 {
   opacity: 1 !important;
 }
 
@@ -2989,51 +2986,3 @@ body.theme-sepia .typora-paper-article {
 .about-meta-row { display: flex; gap: 12px; font-size: 12.5px; }
 .about-meta-key { flex: 0 0 68px; color: var(--text-faint); }
 .about-meta-val { color: var(--text-muted); }
-
-/* ---------- v2 chunked rendering ---------- */
-/* One sliced render batch. Chunks are appended as they are produced, so an append
-   inserts exactly one subtree and leaves the earlier DOM (and its typeset math)
-   untouched. */
-.render-chunk { display: block; }
-
-/* Progress pill in the status bar while a large document streams in. */
-.typora-statusbar .status-badge.render-progress {
-  background: color-mix(in srgb, var(--wb-accent) 16%, transparent) !important;
-  color: var(--wb-accent) !important;
-}
-
-/* Loud diagnostic: the math engine failed to load or a typeset batch threw. */
-.typora-statusbar .status-badge.math-error {
-  background: color-mix(in srgb, #e54848 18%, transparent) !important;
-  color: #b42318 !important;
-  font-weight: 600;
-}
-
-/* In-preview banner: un-typeset formulas are a user-visible defect, so offer the
-   recovery action right where the problem is instead of only in the status bar. */
-.math-health-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin: 16px 0 4px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: color-mix(in srgb, #e54848 10%, var(--wb-card));
-  border: 1px solid color-mix(in srgb, #e54848 34%, transparent);
-  color: #b42318;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.math-health-banner .mhb-btn {
-  flex: 0 0 auto;
-  padding: 5px 12px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, #e54848 45%, transparent);
-  background: var(--wb-card);
-  color: #b42318;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.math-health-banner .mhb-btn:hover { background: color-mix(in srgb, #e54848 14%, var(--wb-card)); }

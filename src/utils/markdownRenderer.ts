@@ -813,100 +813,41 @@ function detokenizeMath(
   return restoredHtml;
 }
 
-/** One top-level block: the unit of chunked (v2) rendering. */
-export interface MarkdownBlock {
-  index: number;
-  /** Raw markdown of this block, in the SANITIZED (math-masked) document. */
-  raw: string;
-  /** Offsets of this block in the ORIGINAL source - exactly what data-src-* carries. */
-  srcStart: number;
-  srcEnd: number;
-  token: unknown;
-}
-
-/**
- * Everything that must be computed over the WHOLE document before any single
- * block can be rendered: the math/diagram token store, the offset translation,
- * and the cross-block registries (equation numbering, labels). Splitting here is
- * what lets the expensive per-block work run in slices, in a worker, or lazily.
- */
-export interface PreparedDocument {
-  blocks: MarkdownBlock[];
-  tokens: TokenStore;
-  diagramSources: string[];
-  tokenSourceSpans: Record<string, { start: number; end: number }>;
-  basePath: string;
-}
-
-/**
- * Phase 1 - document prepass. Whole-document work, done exactly once; every
- * per-block render afterwards is independent of document size.
- */
-export function prepareDocument(rawMarkdown: string, documentBasePath: string = ''): PreparedDocument {
+export async function renderMarkdown(rawMarkdown: string, documentBasePath: string = ''): Promise<string> {
   configureMarked(documentBasePath);
   const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans } =
     processMathAndCitations(rawMarkdown);
 
-  // Top-level tokens ARE the block boundaries - the same boundaries the
-  // data-src-* anchors have always used, so the mapping contract is preserved.
+  // Render each top-level block on its own, then stamp that block's TRUE source
+  // span onto its first tag. Click-to-source mapping then reads an anchor
+  // instead of searching for rendered text: deterministic for every document -
+  // repeated paragraphs and duplicate captions included.
   const lexed = marked.lexer(sanitizedMarkdown) as any[];
-  const blocks: MarkdownBlock[] = [];
+  const parts: string[] = [];
   let cursor = 0;
   for (const token of lexed) {
     const raw = token && typeof token.raw === 'string' ? token.raw : '';
     const start = cursor;
     cursor += raw.length;
-    blocks.push({
-      index: blocks.length,
-      raw,
-      srcStart: translation.map(start),
-      srcEnd: translation.map(start + raw.length),
-      token
-    });
-  }
-  return { blocks, tokens, diagramSources, tokenSourceSpans, basePath: documentBasePath };
-}
-
-/**
- * Phase 2 - render a contiguous block range (the indivisible unit of the
- * synchronous clone-free renderer API).
- *
- * Blocks MUST be rendered in ascending document order: heading id de-duplication
- * lives in the renderer's own state, so a suffix depends on how many identical
- * headings preceded this block. Chunked rendering keeps that order, which is why
- * the output is byte-identical to a single whole-document pass.
- */
-export function renderBlockRange(prep: PreparedDocument, from = 0, to = prep.blocks.length): string {
-  const parts: string[] = [];
-  const end = Math.min(to, prep.blocks.length);
-  for (let i = Math.max(0, from); i < end; i++) {
-    const block = prep.blocks[i];
-    let segment = String(marked.parser([block.token as any]));
-    if (block.raw && block.srcEnd > block.srcStart) {
-      segment = segment.replace(
-        /^(\s*<[a-zA-Z][a-zA-Z0-9:-]*)/,
-        `$1 data-src-start="${block.srcStart}" data-src-end="${block.srcEnd}"`
-      );
+    let segment = String(marked.parser([token]));
+    if (raw) {
+      const spanStart = translation.map(start);
+      const spanEnd = translation.map(start + raw.length);
+      if (spanEnd > spanStart) {
+        segment = segment.replace(
+          /^(\s*<[a-zA-Z][a-zA-Z0-9:-]*)/,
+          `$1 data-src-start="${spanStart}" data-src-end="${spanEnd}"`
+        );
+      }
     }
     parts.push(segment);
   }
-  return parts.join('');
-}
+  const rawHtml = parts.join('');
 
-/**
- * Phase 3 - turn the assembled block HTML into final markup (token restoration,
- * then raw-HTML asset rewriting, which must run last).
- */
-export function finalizeDocument(html: string, prep: PreparedDocument): string {
-  return resolveRawHtmlImageSources(
-    detokenizeMath(html, prep.tokens, prep.diagramSources, prep.tokenSourceSpans),
-    prep.basePath
-  );
-}
-
-export async function renderMarkdown(rawMarkdown: string, documentBasePath: string = ''): Promise<string> {
-  const prep = prepareDocument(rawMarkdown, documentBasePath);
-  return finalizeDocument(renderBlockRange(prep, 0, prep.blocks.length), prep);
+  const html = detokenizeMath(rawHtml, tokens, diagramSources, tokenSourceSpans);
+  // Last step: raw HTML image sources can only be rewritten once the markup is
+  // final, since the Markdown path resolves its own images earlier.
+  return resolveRawHtmlImageSources(html, documentBasePath);
 }
 
 interface MermaidApi {
