@@ -875,6 +875,9 @@ export const App: React.FC = () => {
   // drawn in the top bar. The maximize / restore glyph has to follow the REAL
   // window state, which changes on resize, double-click and Aero Snap alike.
   const [isWindowMaximized, setIsWindowMaximized] = useState<boolean>(false);
+  // Surfaced in the top bar if a window command is refused (e.g. a missing
+  // capability) so a dead control is never silent again.
+  const [windowCmdNotice, setWindowCmdNotice] = useState<string | null>(null);
   const [collapsedOutline, setCollapsedOutline] = useState<Set<number>>(new Set());
   // External-modification conflicts are tracked PER TAB so that background
   // documents keep their conflict state until the user resolves it explicitly.
@@ -953,6 +956,12 @@ export const App: React.FC = () => {
   useEffect(() => {
     document.body.className = `theme-${appTheme}`;
   }, [appTheme]);
+
+  useEffect(() => {
+    if (!windowCmdNotice) return;
+    const t = window.setTimeout(() => setWindowCmdNotice(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [windowCmdNotice]);
 
   // Preference -> resolved theme. Under 'auto' this follows the OS now and keeps
   // following it while the app is open (media-query listener).
@@ -2240,15 +2249,23 @@ ${texBody}
     return () => { disposed = true; if (unlisten) unlisten(); };
   }, []);
 
-  const handleWindowMinimize = () => {
-    try { getCurrentWindow().minimize().catch(() => {}); } catch { /* browser */ }
+  // A rejected call here is almost always a missing capability (Tauri v2 gates
+  // every window mutation behind an ACL entry), and swallowing it silently is
+  // exactly how a dead button ships. Log it, and keep the UI alive.
+  const runWindowCommand = (label: string, run: () => Promise<void>) => {
+    const report = (err: unknown) => {
+      console.warn(`[MarkdownX] window command "${label}" was refused:`, err);
+      setWindowCmdNotice(`窗口命令「${label}」被拒绝：${String(err)}`);
+    };
+    try {
+      run().catch(report);
+    } catch (err) {
+      report(err);
+    }
   };
-  const handleWindowToggleMaximize = () => {
-    try { getCurrentWindow().toggleMaximize().catch(() => {}); } catch { /* browser */ }
-  };
-  const handleWindowClose = () => {
-    try { getCurrentWindow().close().catch(() => {}); } catch { /* browser */ }
-  };
+  const handleWindowMinimize = () => runWindowCommand('minimize', () => getCurrentWindow().minimize());
+  const handleWindowToggleMaximize = () => runWindowCommand('toggle-maximize', () => getCurrentWindow().toggleMaximize());
+  const handleWindowClose = () => runWindowCommand('close', () => getCurrentWindow().close());
 
   // Rust Native File Watcher (Notify Crate) integration
   useEffect(() => {
@@ -2398,6 +2415,11 @@ ${texBody}
             <AppIcon name="sidebar-left" size={16} />
           </button>
           <MarkdownXLogo size={18} />
+          {windowCmdNotice && (
+            <span className="wb-cmd-notice" title={windowCmdNotice}>
+              {windowCmdNotice}
+            </span>
+          )}
           <span className="wb-doc-name" data-tauri-drag-region title={activeFile?.path || '未保存'}>
             {activeFile?.name || 'MarkdownX'}
             {activeFile?.isModified ? <span className="wb-dirty-dot">•</span> : null}
@@ -2527,6 +2549,18 @@ ${texBody}
                 <div className="dropdown-divider" />
                 <div className="dropdown-item" onClick={() => { handleCloseFile(activeFileId); setActiveMenu(null); }}>
                   <span>关闭当前文档</span><span className="shortcut">Ctrl+W</span>
+                </div>
+                <div className="dropdown-divider" />
+                {/* Window commands live here too: the caption buttons are drawn on the
+                    top bar, and this keeps them reachable when the bar is narrow. */}
+                <div className="dropdown-item" onClick={() => { setActiveMenu(null); handleWindowMinimize(); }}>
+                  <span>最小化窗口</span>
+                </div>
+                <div className="dropdown-item" onClick={() => { setActiveMenu(null); handleWindowToggleMaximize(); }}>
+                  <span>{isWindowMaximized ? '向下还原窗口' : '最大化窗口'}</span>
+                </div>
+                <div className="dropdown-item" onClick={() => { setActiveMenu(null); handleWindowClose(); }}>
+                  <span>关闭窗口</span>
                 </div>
               </div>
             )}
@@ -3213,7 +3247,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.9.1 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.9.2 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。

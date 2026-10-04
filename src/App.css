@@ -2544,8 +2544,15 @@ body.theme-sepia .mermaid-unclosed-hint {
   top: calc(100% + 8px);
   left: 0;
   min-width: 232px;
+  /* A long menu must stay inside the window: without this the tail items (the
+     window commands) fall below the bottom edge and can never be clicked. */
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   z-index: 200;
 }
+.wb-dropdown::-webkit-scrollbar { width: 8px; }
+.wb-dropdown::-webkit-scrollbar-thumb { background: var(--wb-line); border-radius: 4px; }
 
 /* ---------- 2. Sidebar ---------- */
 .typora-sidebar {
@@ -2894,4 +2901,20 @@ body.theme-sepia .typora-paper-article {
 }
 @media (max-width: 680px) {
   .wb-edit-cluster { display: none; }
+}
+
+/* Transient notice for a refused window command (missing capability, etc.). */
+.wb-cmd-notice {
+  margin-left: 10px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #b42318;
+  background: color-mix(in srgb, #e54848 16%, transparent);
+  border: 1px solid color-mix(in srgb, #e54848 40%, transparent);
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

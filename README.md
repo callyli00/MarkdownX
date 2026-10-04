@@ -1,4 +1,4 @@
-# MarkdownX (v1.9.1)
+# MarkdownX (v1.9.2)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -29,6 +29,19 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v1.9.2] - 2026-10-04
+
+#### 修复：窗口控制三键失效（Tauri v2 能力白名单缺失）
+- **现象**：v1.9.1 自绘的最小化/最大化/关闭按钮点击无任何反应（完全失效）。
+- **根因**：Tauri v2 对**每一个窗口命令**都要求显式授权（capabilities ACL）。`src-tauri/capabilities/default.json` 原本只授予 `set-fullscreen / is-fullscreen / set-always-on-top / is-always-on-top`，**未授予** `minimize / maximize / unmaximize / toggle-maximize / close / is-maximized / start-dragging`。后端因此直接拒绝 IPC，而处理器里的 `.catch(() => {})` 把拒绝**静默吞掉**，表现为"按钮点了没反应"。
+- **修复**：
+  - `capabilities/default.json` 补齐 `core:window:allow-{minimize,maximize,unmaximize,toggle-maximize,close,is-maximized,is-minimized,start-dragging}`（已核验进入构建期解析出的 `capabilities.json`，且 ACL 清单中 `allow-minimize` 等标识确实绑定 `minimize` 等命令）。
+  - 处理器改为 `runWindowCommand(label, run)`：拒绝时 `console.warn` **并在顶栏显示红色提示**（含原始错误），6 秒后自动消失——从此"死按钮"不会再静默。
+- **验证**：出厂二进制中，顶栏拖拽区**双击**（Tauri 内部走 `plugin:window|internal_toggle_maximize`，与最大化按钮同一窗口 IPC 权限通路）实测 `IsZoomed: False → True → False`（最大化/还原均成功）；另以"故意拒绝窗口命令"的桩验证顶栏提示通路：点击三键即显示 `窗口命令「minimize」被拒绝：… not allowed`。
+- **附带修复**：`⋯` 菜单新增「窗口」命令组（最小化 / 最大化·还原 / 关闭窗口），作为窄窗或按钮不可达时的兜底；并为 `.wb-dropdown` 补 `max-height: calc(100vh - 72px)` + 滚动——此前菜单过长时**末尾条目会落到窗口之外、根本无法点击**。
+
+---
 
 ### [v1.9.1] - 2026-10-03
 
