@@ -1266,17 +1266,39 @@ export const App: React.FC = () => {
   // Handle clicking outline item
   const handleOutlineClick = (item: OutlineItem) => {
     if (isSourceMode) {
-      if (textareaRef.current) {
-        const lines = (activeFile?.content || '').split('\n');
-        let charIndex = 0;
-        for (let i = 0; i < item.line && i < lines.length; i++) {
-          charIndex += lines[i].length + 1;
-        }
-        textareaRef.current.focus();
-        textareaRef.current.setSelectionRange(charIndex, charIndex + (lines[item.line]?.length || 0));
-        const lineHeight = 28;
-        textareaRef.current.scrollTop = Math.max(0, item.line * lineHeight - 150);
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const lines = (activeFile?.content || '').split('\n');
+      let charIndex = 0;
+      for (let i = 0; i < item.line && i < lines.length; i++) {
+        charIndex += lines[i].length + 1;
       }
+      const pos = Math.max(0, Math.min(charIndex, ta.value.length));
+      const lineLen = Math.max(0, Math.min(lines[item.line]?.length || 0, ta.value.length - pos));
+      ta.focus();
+      ta.setSelectionRange(pos, pos + lineLen);
+      // A fixed line height cannot address the target: wrapped lines make the
+      // real pixel offset diverge from `line * lineHeight`. Measure the caret
+      // geometry instead (same machinery as the preview double-click landing).
+      requestAnimationFrame(() => {
+        const caret = measureTextareaCaret(ta, pos);
+        ta.scrollTop = Math.max(0, caret.top - ta.clientHeight / 3);
+        const pane = ta.parentElement;
+        if (pane) {
+          const style = window.getComputedStyle(ta);
+          const paddingLeft = parseFloat(style.paddingLeft) || 0;
+          const paddingRight = parseFloat(style.paddingRight) || 0;
+          const paneTop = ta.offsetTop;
+          flashAnchorRef.current = { paneTop, contentTop: caret.top };
+          setCaretFlash({
+            top: paneTop + caret.top - ta.scrollTop,
+            left: ta.offsetLeft + paddingLeft,
+            width: Math.max(0, ta.clientWidth - paddingLeft - paddingRight),
+            height: caret.height,
+            tickLeft: ta.offsetLeft + caret.caretLeft
+          });
+        }
+      });
     } else {
       const el = document.getElementById(`heading-${item.slug}`) ||
                  Array.from(document.querySelectorAll(`h${item.level}`)).find(h => (h.textContent || '').includes(item.title));
@@ -3247,7 +3269,7 @@ $$`}
             <div className="typo-modal-body" style={{ padding: '32px 24px 24px' }}>
               <MarkdownXLogo size={56} />
               <h2 style={{ margin: '16px 0 8px', fontSize: '20px' }}>MarkdownX</h2>
-              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.9.3 (2026.10)</p>
+              <p style={{ color: 'var(--text-faint)', fontSize: '12px', margin: '0 0 16px' }}>v1.9.4 (2026.10)</p>
               <p style={{ fontSize: '13.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 专为计算力学与科研论文打造的轻量级纯粹 Markdown 写作软件。<br />
                 支持原生公式排版、三线表规范、多级大纲、专注写作及多格式科研级导出。

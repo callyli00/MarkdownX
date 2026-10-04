@@ -1,4 +1,4 @@
-# MarkdownX (v1.9.3)
+# MarkdownX (v1.9.4)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -29,6 +29,18 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v1.9.4] - 2026-10-04
+
+#### 修复：最近文件子菜单文字溢出 + 源码模式大纲跳转失效
+- **① 子菜单文字溢出面板**：`⋯ 菜单 ➔ 打开最近文件` 的长路径**未被约束**，直接画到面板圆角边框之外、覆盖正文（用户截图标注）。
+  - 修复：`.typora-submenu .file-name/.file-subpath` 增加 `display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap`；最近文件子菜单定宽 360px，条目 `width:100%; box-sizing:border-box`；顶层菜单项标签同样加省略号约束并让快捷键/箭头不被压缩。
+  - 验证（生产包 DOM）：注入超长路径后 `overflow:hidden / text-overflow:ellipsis / white-space:nowrap` 全部生效，文本被裁切、盒子右缘 745 ≤ 面板右缘 758 → 不再溢出。
+- **② 源码模式点击大纲不跳转**：`handleOutlineClick` 用**硬编码行高 28** 估算滚动量（`item.line * 28 - 150`）。正文一旦折行，逻辑行号与真实像素位置脱钩，落点完全偏移（实测某文档偏 **957px**，caret 落在视口之外）。
+  - 修复：改为**测量真实 caret 几何**（复用 v1.8.5 的 `measureTextareaCaret`，与大预览双击落点同一套机制），并同步触发落点高亮与光标列指示条；位置做边界钳制。
+  - 验证（生产包 + 独立镜像测量）：目标标题行被正确选中；`scrollTop` 使 caret 落在视口内（偏移 292/490）且落点高亮/列指示条出现；旧公式偏移 957px 的问题消除。
+
+---
 
 ### [v1.9.3] - 2026-10-04
 

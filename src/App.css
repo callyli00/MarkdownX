@@ -2926,3 +2926,26 @@ body.theme-sepia .typora-paper-article {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Long labels and recent-file paths must stay inside the menu panel: without an
+   explicit containment they paint past the rounded border, over the document. */
+.wb-dropdown > .dropdown-item > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-dropdown > .dropdown-item > .shortcut,
+.wb-dropdown > .dropdown-item > .arrow { flex: 0 0 auto; }
+
+.recent-files-submenu { width: 360px; }
+.recent-files-submenu .dropdown-item { width: 100%; box-sizing: border-box; }
+.typora-submenu .file-name,
+.typora-submenu .file-subpath {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
