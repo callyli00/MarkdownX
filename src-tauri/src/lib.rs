@@ -178,7 +178,17 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.unminimize();
                 let _ = window.set_focus();
-                let _ = window.emit("open-file-from-cli", args);
+                // `args` is the second instance's full command line, argv[0] included.
+                // Forwarding it verbatim made the frontend open the app's own
+                // executable as a ~13 MB "document" (the window then froze while
+                // parsing binary). Drop the program name and any switches, exactly
+                // as get_cli_args() does, before handing the paths to the UI.
+                let files: Vec<String> = args
+                    .into_iter()
+                    .skip(1)
+                    .filter(|arg| !arg.starts_with('-'))
+                    .collect();
+                let _ = window.emit("open-file-from-cli", files);
             }
         }));
     }

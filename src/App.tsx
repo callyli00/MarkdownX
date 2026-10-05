@@ -52,11 +52,20 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.14';
+const APP_VERSION = 'v1.9.15';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.15',
+    date: '2026-10-04',
+    items: [
+      '修复"双击打开第二个 Markdown 后窗口卡住、能滚动但点不动"：不再把程序自身路径当文档打开',
+      '根因：单实例回调转发的命令行参数包含 argv[0]（可执行文件路径），旧代码把它当文件读取——13MB 的 exe 被当成文本载入，界面随即卡死',
+      'Rust 侧剔除 argv[0] 与开关参数；前端再加一道防线（拒绝 exe/dll/msi 等可执行文件后缀）；CLI 参数只处理一次'
+    ]
+  },
   {
     version: 'v1.9.14',
     date: '2026-10-04',
@@ -1822,14 +1831,30 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  /**
+   * A CLI argument is only worth opening if it looks like a document path.
+   * The single-instance plugin hands the caller's FULL command line to the Rust
+   * side, argv[0] (the executable) included; forwarding that verbatim made the app
+   * "open" its own binary as a ~13 MB document, which then froze the UI. The Rust
+   * side now drops the program name too - this is the second line of defence, so a
+   * future argument source cannot reintroduce it.
+   */
+  const isOpenableDocumentArg = (arg: string): boolean =>
+    !!arg &&
+    !arg.startsWith('-') &&
+    !/\.(exe|dll|msi|sys|bat|cmd|com|scr|zip|7z|rar)$/i.test(arg);
+
   // Listen for CLI arguments on initial startup (double-clicking an associated .md file)
   useEffect(() => {
+    let handled = false;
     const checkInitialCliArgs = async () => {
+      if (handled) return;
+      handled = true;
       try {
         const args = await invoke<string[]>('get_cli_args');
         if (args && args.length > 0) {
           for (const arg of args) {
-            if (!arg.startsWith('-')) {
+            if (isOpenableDocumentArg(arg)) {
               await openFileByPath(arg);
               break;
             }
@@ -1852,7 +1877,7 @@ export const App: React.FC = () => {
           const args = event.payload;
           if (args && args.length > 0) {
             for (const arg of args) {
-              if (!arg.startsWith('-')) {
+              if (isOpenableDocumentArg(arg)) {
                 await openFileByPath(arg);
                 break;
               }
