@@ -2489,18 +2489,6 @@ body.theme-sepia .mermaid-unclosed-hint {
 .wb-tb-right { flex: 0 0 auto; }
 .wb-tb-center { flex: 0 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; }
 
-.wb-doc-name {
-  margin-left: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--wb-fg);
-  max-width: 34ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wb-dirty-dot { color: var(--wb-accent); margin-left: 6px; font-weight: 700; }
-
 .wb-icon-btn {
   width: 30px;
   height: 30px;
@@ -2683,18 +2671,6 @@ body.theme-sepia .mermaid-unclosed-hint {
   white-space: nowrap;
 }
 
-.sb-foot {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--wb-line);
-  font-size: 10.5px;
-  color: var(--wb-fg3);
-}
-.sb-foot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-back-link {
   margin-top: 10px;
   border: none;
@@ -2906,13 +2882,11 @@ body.theme-sepia .typora-paper-article {
 /* With no native frame the drag strip must never look interactive. */
 .wb-topbar[data-tauri-drag-region],
 .wb-tb-left[data-tauri-drag-region],
-.wb-doc-name[data-tauri-drag-region],
 .wb-tb-center[data-tauri-drag-region] { cursor: default; }
 
 /* Narrow windows: the window controls must never be pushed off the bar, so the
    optional affordances yield first, then the view tabs (still reachable via
    Ctrl+/ and the ⋯ menu) and the shrinkable edit cluster. */
-.wb-doc-name { min-width: 0; }
 .wb-edit-cluster { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 @media (max-width: 1080px) {
   .wb-tb-right .wb-icon-btn[data-optional="true"] { display: none; }

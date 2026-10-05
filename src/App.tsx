@@ -52,11 +52,20 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.16';
+const APP_VERSION = 'v1.9.17';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.17',
+    date: '2026-10-04',
+    items: [
+      '界面清理：移除三处影响观感的路径/窗口命令（顶栏的应用图标与文档完整路径、菜单底部的窗口控制项、侧边栏底部的路径行）',
+      '相应删除已无引用的样式规则；全窗口不再出现任何文件绝对路径',
+      '正文渲染与打印行为不受影响'
+    ]
+  },
   {
     version: 'v1.9.16',
     date: '2026-10-04',
@@ -2551,16 +2560,11 @@ ${texBody}
           >
             <AppIcon name="sidebar-left" size={16} />
           </button>
-          <MarkdownXLogo size={18} />
           {windowCmdNotice && (
             <span className="wb-cmd-notice" title={windowCmdNotice}>
               {windowCmdNotice}
             </span>
           )}
-          <span className="wb-doc-name" data-tauri-drag-region title={activeFile?.path || '未保存'}>
-            {activeFile?.name || 'MarkdownX'}
-            {activeFile?.isModified ? <span className="wb-dirty-dot">•</span> : null}
-          </span>
           <div className="wb-menu-host">
             <button
               className={`wb-icon-btn ${activeMenu === 'mainmenu' ? 'active' : ''}`}
@@ -2686,18 +2690,6 @@ ${texBody}
                 <div className="dropdown-divider" />
                 <div className="dropdown-item" onClick={() => { handleCloseFile(activeFileId); setActiveMenu(null); }}>
                   <span>关闭当前文档</span><span className="shortcut">Ctrl+W</span>
-                </div>
-                <div className="dropdown-divider" />
-                {/* Window commands live here too: the caption buttons are drawn on the
-                    top bar, and this keeps them reachable when the bar is narrow. */}
-                <div className="dropdown-item" onClick={() => { setActiveMenu(null); handleWindowMinimize(); }}>
-                  <span>最小化窗口</span>
-                </div>
-                <div className="dropdown-item" onClick={() => { setActiveMenu(null); handleWindowToggleMaximize(); }}>
-                  <span>{isWindowMaximized ? '向下还原窗口' : '最大化窗口'}</span>
-                </div>
-                <div className="dropdown-item" onClick={() => { setActiveMenu(null); handleWindowClose(); }}>
-                  <span>关闭窗口</span>
                 </div>
               </div>
             )}
@@ -3026,11 +3018,6 @@ ${texBody}
                   )}
                 </>
               )}
-            </div>
-
-            <div className="sb-foot">
-              <span>UTF-8</span>
-              <span>{activeFile?.path || '未保存'}</span>
             </div>
           </aside>
         )}
