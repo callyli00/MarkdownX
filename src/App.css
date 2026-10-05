@@ -1102,6 +1102,8 @@ body.font-theme-technical {
   .wb-win-controls,
   .typora-sidebar,
   .typo-inspector,
+  .doc-tabs,
+  .sb-splitter,
   .typora-menubar,
   .typora-statusbar,
   .typo-modal-overlay,
@@ -1116,6 +1118,14 @@ body.font-theme-technical {
   /* The layout is a flex row on screen; in print it must be a plain block so the
      article is not squeezed into the space the hidden sidebar used to occupy. */
   .typora-main-layout {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* The workbench row/column are layout shells: flatten them for print. */
+  .app-row,
+  .app-col {
     display: block !important;
     height: auto !important;
     overflow: visible !important;
@@ -1663,9 +1673,11 @@ body.theme-dark .code-block-header {
 
 /* Sidebar Styles */
 .typora-sidebar {
-  width: 280px;
-  min-width: 240px;
-  max-width: 380px;
+  /* Bounds are enforced by the splitter logic; min/max here would fight the inline
+     width (a min-width above the dragged value pins the panel and breaks resizing). */
+  width: auto;
+  min-width: 0;
+  max-width: none;
   background-color: var(--bg-surface, #ffffff);
   border-right: 1px solid var(--border-subtle, #e5e7eb);
   display: flex;
@@ -2566,9 +2578,8 @@ body.theme-sepia .mermaid-unclosed-hint {
 
 /* ---------- 2. Sidebar ---------- */
 .typora-sidebar {
-  width: 252px !important;
-  min-width: 252px !important;
-  max-width: 252px !important;
+  /* Width is set inline from state (draggable splitter); only the bounds are enforced. */
+  flex: 0 0 auto;
   background-color: var(--wb-side) !important;
   border-right: 1px solid var(--wb-line) !important;
   padding: 12px 10px 8px;
@@ -2974,3 +2985,155 @@ body.theme-sepia .typora-paper-article {
 .about-meta-row { display: flex; gap: 12px; font-size: 12.5px; }
 .about-meta-key { flex: 0 0 68px; color: var(--text-faint); }
 .about-meta-val { color: var(--text-muted); }
+
+/* ============================================================================
+   v2.0.0 WORKBENCH LAYOUT
+   Sidebar spans the full height with a draggable splitter; the top bar and the
+   document tabs live in the right column, so the bar starts where the sidebar ends.
+   ============================================================================ */
+
+.app-row {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ---------- Splitter ("格栅"): drag to resize, arrow to collapse ---------- */
+.sb-splitter {
+  position: relative;
+  flex: 0 0 auto;
+  width: 6px;
+  cursor: col-resize;
+  background: var(--wb-main);
+  border-right: 1px solid var(--wb-line);
+  transition: background 0.15s ease;
+  z-index: 12;
+}
+
+.sb-splitter:hover,
+.sb-splitter:active {
+  background: var(--wb-accent, #0969da);
+}
+
+.sb-splitter-arrow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 16px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--wb-line);
+  border-radius: 4px;
+  background: var(--wb-card, #ffffff);
+  color: var(--wb-fg3, #6b7280);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.sb-splitter-arrow:hover {
+  opacity: 1;
+  color: var(--wb-accent, #0969da);
+  border-color: var(--wb-accent, #0969da);
+}
+
+/* Collapsed: the strip stays as the single affordance to bring the panel back. */
+.sb-splitter.collapsed {
+  border-right: none;
+}
+.sb-splitter.collapsed .sb-splitter-arrow {
+  opacity: 0.75;
+}
+
+/* During a drag: no width transition (the panel must track the cursor) and no
+   accidental text selection anywhere in the window. */
+body.sb-resizing,
+body.sb-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+body.sb-resizing .typora-sidebar {
+  transition: none !important;
+}
+
+/* ---------- Document tabs ---------- */
+.doc-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 4px 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--wb-main);
+  scrollbar-width: thin;
+}
+
+.doc-tabs::-webkit-scrollbar { height: 4px; }
+.doc-tabs::-webkit-scrollbar-thumb { background: var(--wb-line); border-radius: 2px; }
+
+.doc-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 190px;
+  padding: 5px 8px 6px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  font-size: 12px;
+  color: var(--wb-fg2, #4b5563);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.doc-tab:hover { background: color-mix(in srgb, var(--wb-card, #fff) 55%, transparent); }
+
+.doc-tab.active {
+  background: var(--wb-card, #ffffff);
+  border-color: var(--wb-line);
+  color: var(--wb-fg);
+  font-weight: 600;
+}
+
+.doc-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-tab-dot { color: var(--wb-accent, #0969da); font-weight: 700; }
+
+.doc-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.doc-tab:hover .doc-tab-close,
+.doc-tab.active .doc-tab-close { opacity: 0.65; }
+.doc-tab-close:hover { opacity: 1; background: color-mix(in srgb, var(--wb-accent, #0969da) 18%, transparent); }

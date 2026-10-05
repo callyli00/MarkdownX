@@ -52,11 +52,42 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.17';
+const APP_VERSION = 'v2.0.0';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
+
+/**
+ * File name only, from a full path or a bare name.
+ *
+ * Deliberately regex-free: `split('\\')` / `split('/')` on literal separators cannot be
+ * affected by escaping differences between source, bundler and runtime, which is what
+ * made `path.split(/[\\/]/)` return the whole path in the shipped build. The hover
+ * title keeps the full path; only the visible label is shortened.
+ */
+function fileBaseName(pathOrName: string | null | undefined): string {
+  const raw = String(pathOrName || '');
+  if (!raw) return '';
+  const normalized = raw.split('\\').join('/');
+  const parts = normalized.split('/').filter((part) => part.length > 0);
+  return parts.length ? parts[parts.length - 1] : raw;
+}
+
+/** Sidebar width: dragged range, and the width used on a fresh profile. */
+const SIDEBAR_MIN_W = 180;
+const SIDEBAR_MAX_W = 520;
+const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.0.0',
+    date: '2026-10-04',
+    items: [
+      '工作台布局重构：侧边栏改为上下贯通（顶到底），顶栏右缩至内容区，仅覆盖内容一侧',
+      '侧边栏宽度可拖动格栅调节（180–520px，实时生效并记忆）；折叠改为格栅上的箭头按钮',
+      '中间改为文档标签（tab）模式：标签显示文件名，鼠标悬停显示完整路径，可切换与关闭',
+      '同步隐藏打印输出中的新外壳（标签条、格栅）；侧栏与最近文件的可见标签改为文件名，悬停仍为完整路径'
+    ]
+  },
   {
     version: 'v1.9.17',
     date: '2026-10-04',
@@ -996,7 +1027,57 @@ export const App: React.FC = () => {
   const [modalFeedback, setModalFeedback] = useState<string | null>(null);
 
   // --- View & Sidebar States (Typora Complete Spec) ---
-  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    // The sidebar is a first-class part of the layout now: open unless the user
+    // collapsed it last time.
+    try {
+      const raw = localStorage.getItem('markdownx_sidebar_open');
+      return raw === null ? true : raw === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const raw = Number(localStorage.getItem('markdownx_sidebar_width'));
+      return Number.isFinite(raw) && raw >= SIDEBAR_MIN_W && raw <= SIDEBAR_MAX_W ? raw : SIDEBAR_DEFAULT_W;
+    } catch {
+      return SIDEBAR_DEFAULT_W;
+    }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem('markdownx_sidebar_open', String(isSidebarOpen)); } catch { /* private mode */ }
+  }, [isSidebarOpen]);
+
+  useEffect(() => {
+    try { localStorage.setItem('markdownx_sidebar_width', String(Math.round(sidebarWidth))); } catch { /* private mode */ }
+  }, [sidebarWidth]);
+
+  /**
+   * Drag the splitter to resize the sidebar. The width is clamped, applied live and
+   * remembered; `sb-resizing` on <body> suppresses the width transition and text
+   * selection for the duration of the drag (otherwise the panel lags the cursor and
+   * the drag selects text instead).
+   */
+  const beginSidebarDrag = useCallback((e: React.MouseEvent) => {
+    if (!isSidebarOpen) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, startWidth + (ev.clientX - startX)));
+      setSidebarWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('sb-resizing');
+    };
+    document.body.classList.add('sb-resizing');
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [isSidebarOpen, sidebarWidth]);
   const [sidebarPanel, setSidebarPanel] = useState<'workspace' | 'search'>('workspace');
   const [outlineRegionOpen, setOutlineRegionOpen] = useState<boolean>(true);
   const [isFocusMode, setIsFocusMode] = useState<boolean>(false);
@@ -2550,16 +2631,224 @@ ${texBody}
 
   return (
     <div className="typora-shell" onDragOver={handleHtml5DragOver} onDragLeave={handleHtml5DragLeave} onDrop={handleHtml5Drop}>
-      {/* 1. Workbench top bar: identity + document, view tabs, edit cluster, menus */}
-      <header className="wb-topbar" data-tauri-drag-region>
-        <div className="wb-tb-left" data-tauri-drag-region>
+      {/* Workbench row: the sidebar spans the full height, the top bar starts to its right */}
+      <div className="app-row">
+          {/* Collapsible Sidebar */}
+          {isSidebarOpen && (
+            <aside className="typora-sidebar" style={{ width: sidebarWidth }}>
+              <div className="sb-brand">
+                <MarkdownXLogo size={22} />
+                <span className="sb-brand-name">MarkdownX</span>
+                <span className="sb-badge" title={`版本 ${APP_VERSION} · 构建于 ${APP_BUILD_DATE}`}>{APP_VERSION}</span>
+              </div>
+
+              <button className="sb-newdoc" onClick={handleNewFile}>
+                <AppIcon name="plus-circle" size={15} />
+                <span>新建文档</span>
+              </button>
+
+              <div className="sb-searchbar" onClick={openSearchPanel}>
+                <AppIcon name="search" size={14} />
+                <span>{sidebarPanel === 'search' ? '文档查找与替换...' : '搜索 / 替换  (Ctrl+Shift+F)'}</span>
+              </div>
+
+              <div className="sb-scroll">
+                {sidebarPanel === 'search' ? (
+                  <div className="search-view">
+                    <div className="sidebar-pane-title">文档全文查找与替换</div>
+                    <div className="search-box">
+                      <input
+                        type="text"
+                        className="search-input"
+                        placeholder="查找内容..."
+                        autoFocus
+                        value={searchQuery}
+                        onChange={(e) => handleSearch(e.target.value)}
+                      />
+                      <div className="search-nav-row">
+                        <span className="search-count-label">
+                          {searchMatchesCount > 0 ? `${currentMatchIndex + 1} / ${searchMatchesCount} 处匹配` : (searchQuery ? '无匹配项' : '输入关键词')}
+                        </span>
+                        <div className="search-nav-btns">
+                          <button className="search-nav-btn" onClick={() => handleNavigateMatch(-1)} title="上一个匹配">▲</button>
+                          <button className="search-nav-btn" onClick={() => handleNavigateMatch(1)} title="下一个匹配">▼</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="replace-box">
+                      <input
+                        type="text"
+                        className="replace-input"
+                        placeholder="替换为..."
+                        value={replaceQuery}
+                        onChange={(e) => setReplaceQuery(e.target.value)}
+                      />
+                      <div className="replace-btns">
+                        <button className="replace-action-btn" onClick={handleReplaceOne}>替换当前</button>
+                        <button className="replace-action-btn" onClick={handleReplaceAll}>全部替换</button>
+                      </div>
+                    </div>
+
+                    <button className="sb-back-link" onClick={() => setSidebarPanel('workspace')}>
+                      ← 返回工作区
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {/* 大纲（树状，可逐节点折叠） */}
+                    <div className="sb-region">
+                      <div
+                        className="sb-region-head"
+                        onClick={() => setOutlineRegionOpen((v) => !v)}
+                        title="点击折叠 / 展开此区域"
+                      >
+                        <span className={`sb-region-arrow ${outlineRegionOpen ? 'open' : ''}`}>▸</span>
+                        <span className="sb-region-title">大纲 · OUTLINE</span>
+                      </div>
+                      {outlineRegionOpen && (
+                        <div className="sb-region-body">
+                          {outlineList.length === 0 ? (
+                            <div className="sidebar-empty-hint">当前文档暂无标题</div>
+                          ) : (
+                            outlineRows.map((item, idx) => (
+                              <div
+                                key={`${item.line}-${idx}`}
+                                className={`outline-item level-${item.level}${item.hasChild && item.collapsed ? ' has-collapsed' : ''}`}
+                                style={{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }}
+                                title={`跳转到: ${item.title}`}
+                              >
+                                {item.hasChild ? (
+                                  <span
+                                    className="outline-caret"
+                                    onClick={(e) => { e.stopPropagation(); toggleOutlineNode(item.line); }}
+                                    title={item.collapsed ? '展开子标题' : '折叠子标题'}
+                                  >
+                                    {item.collapsed ? '▸' : '▾'}
+                                  </span>
+                                ) : (
+                                  <span className="outline-caret-sp" />
+                                )}
+                                <span
+                                  className="outline-title"
+                                  onClick={() => handleOutlineClick(item)}
+                                >
+                                  {item.title}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 已打开文档 */}
+                    <div className="sb-region">
+                      <div className="sb-region-head static">
+                        <span className="sb-region-title">已打开 · DOCUMENTS ({openFiles.length})</span>
+                      </div>
+                      <div className="sb-region-body">
+                        {openFiles.map((file) => (
+                          <div
+                            key={file.id}
+                            className={`sidebar-doc-item ${file.id === activeFileId ? 'active' : ''}`}
+                            onClick={() => setActiveFileId(file.id)}
+                            title={file.path || '未保存于磁盘'}
+                          >
+                            <AppIcon name="file-text" size={14} className="doc-icon-2" />
+                            <span className="doc-name">{fileBaseName(file.path) || file.name}{fileConflicts[file.id] ? ' ⚠️' : ''}</span>
+                            {file.isModified && <span className="doc-modified-dot" title="未保存更改">•</span>}
+                            <button
+                              className="doc-close-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCloseFile(file.id);
+                              }}
+                              title="关闭文档"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 工作区文件树 */}
+                    <div className="sb-region">
+                      <div className="sb-region-head static">
+                        <span className="sb-region-title">工作区 · WORKSPACE</span>
+                        <button className="sb-mini-btn" onClick={handleSelectWorkspace} title="打开本地文件夹作为工作区">
+                          <AppIcon name="folder-open" size={13} />
+                        </button>
+                      </div>
+                      <div className="sb-region-body">
+                        {workspaceFiles.length === 0 ? (
+                          <div className="sidebar-empty-hint">
+                            {workspaceDir ? '该文件夹内暂无 Markdown 文件' : '点击上方图标选择本地文件夹'}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="sb-ws-root" title={workspaceDir || ''}>
+                              {workspaceDir ? workspaceDir.split(/[\\/]/).pop() : ''}
+                            </div>
+                            {workspaceFiles.map((item) => (
+                              <FileTreeNode
+                                key={item.path}
+                                item={item}
+                                level={0}
+                                activePath={activeFile?.path || null}
+                                expandedDirs={expandedDirs}
+                                dirChildrenCache={dirChildrenCache}
+                                onToggleDir={handleToggleDirectory}
+                                onOpenFile={openFileByPath}
+                              />
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 最近文件 */}
+                    {recentFiles.length > 0 && (
+                      <div className="sb-region">
+                        <div className="sb-region-head static">
+                          <span className="sb-region-title">最近 · RECENT</span>
+                        </div>
+                        <div className="sb-region-body">
+                          {recentFiles.slice(0, 6).map((rf, idx) => (
+                            <div key={idx} className="sidebar-doc-item" onClick={() => handleOpenFile(rf.path)} title={rf.path}>
+                              <AppIcon name="file-text" size={14} className="doc-icon-2" />
+                              <span className="doc-name">{rf.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </aside>
+          )}
+
+        {/* Sidebar splitter: drag to resize, click the arrow to collapse / expand */}
+        <div
+          className={`sb-splitter ${isSidebarOpen ? '' : 'collapsed'}`}
+          onMouseDown={beginSidebarDrag}
+          title={isSidebarOpen ? '拖动调整侧边栏宽度' : '拖动或点击展开侧边栏'}
+        >
           <button
-            className="wb-icon-btn"
+            className="sb-splitter-arrow"
             onClick={() => setIsSidebarOpen((prev) => !prev)}
-            title={`显示 / 隐藏侧边栏 (Ctrl+Shift+L)`}
+            title={isSidebarOpen ? '隐藏侧边栏 (Ctrl+Shift+L)' : '显示侧边栏 (Ctrl+Shift+L)'}
           >
-            <AppIcon name="sidebar-left" size={16} />
+            <AppIcon name={isSidebarOpen ? 'sidebar-left' : 'sidebar-right'} size={13} />
           </button>
+        </div>
+
+        <div className="app-col">
+            {/* 1. Workbench top bar: identity + document, view tabs, edit cluster, menus */}
+            <header className="wb-topbar" data-tauri-drag-region>
+        <div className="wb-tb-left" data-tauri-drag-region>
           {windowCmdNotice && (
             <span className="wb-cmd-notice" title={windowCmdNotice}>
               {windowCmdNotice}
@@ -2592,7 +2881,7 @@ ${texBody}
                     ) : (
                       recentFiles.map((rf, idx) => (
                         <div key={idx} className="dropdown-item" onClick={() => handleOpenFile(rf.path)}>
-                          <span className="file-name">{rf.name}</span>
+                          <span className="file-name">{fileBaseName(rf.path) || rf.name}</span>
                           <span className="file-subpath">{rf.path}</span>
                         </div>
                       ))
@@ -2769,6 +3058,32 @@ ${texBody}
         </div>
       </header>
 
+      {/* Document tabs: file name on the tab, full path on hover */}
+      <div className="doc-tabs" role="tablist">
+        {openFiles.map((f) => (
+          <div
+            key={f.id}
+            role="tab"
+            aria-selected={f.id === activeFileId}
+            className={`doc-tab ${f.id === activeFileId ? 'active' : ''}`}
+            title={f.path || f.name || '未保存'}
+            onClick={() => setActiveFileId(f.id)}
+          >
+            <span className="doc-tab-name">{fileBaseName(f.path) || f.name || '未保存'}</span>
+            {f.isModified ? <span className="doc-tab-dot" title="未保存的修改">•</span> : null}
+            {openFiles.length > 1 ? (
+              <button
+                className="doc-tab-close"
+                title="关闭此文档"
+                onClick={(e) => { e.stopPropagation(); handleCloseFile(f.id); }}
+              >
+                <AppIcon name="close" size={11} />
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+
       {/* External File Modification Conflict Alert Banner (per-tab; shown when that tab is active) */}
       {conflictBanner && (
         <div className="file-conflict-banner">
@@ -2825,203 +3140,6 @@ ${texBody}
 
       {/* 3. Main Workspace & Collapsible Sidebar Container */}
       <div className="typora-main-layout">
-        {/* Collapsible Sidebar */}
-        {isSidebarOpen && (
-          <aside className="typora-sidebar">
-            <div className="sb-brand">
-              <MarkdownXLogo size={22} />
-              <span className="sb-brand-name">MarkdownX</span>
-              <span className="sb-badge" title={`版本 ${APP_VERSION} · 构建于 ${APP_BUILD_DATE}`}>{APP_VERSION}</span>
-            </div>
-
-            <button className="sb-newdoc" onClick={handleNewFile}>
-              <AppIcon name="plus-circle" size={15} />
-              <span>新建文档</span>
-            </button>
-
-            <div className="sb-searchbar" onClick={openSearchPanel}>
-              <AppIcon name="search" size={14} />
-              <span>{sidebarPanel === 'search' ? '文档查找与替换...' : '搜索 / 替换  (Ctrl+Shift+F)'}</span>
-            </div>
-
-            <div className="sb-scroll">
-              {sidebarPanel === 'search' ? (
-                <div className="search-view">
-                  <div className="sidebar-pane-title">文档全文查找与替换</div>
-                  <div className="search-box">
-                    <input
-                      type="text"
-                      className="search-input"
-                      placeholder="查找内容..."
-                      autoFocus
-                      value={searchQuery}
-                      onChange={(e) => handleSearch(e.target.value)}
-                    />
-                    <div className="search-nav-row">
-                      <span className="search-count-label">
-                        {searchMatchesCount > 0 ? `${currentMatchIndex + 1} / ${searchMatchesCount} 处匹配` : (searchQuery ? '无匹配项' : '输入关键词')}
-                      </span>
-                      <div className="search-nav-btns">
-                        <button className="search-nav-btn" onClick={() => handleNavigateMatch(-1)} title="上一个匹配">▲</button>
-                        <button className="search-nav-btn" onClick={() => handleNavigateMatch(1)} title="下一个匹配">▼</button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="replace-box">
-                    <input
-                      type="text"
-                      className="replace-input"
-                      placeholder="替换为..."
-                      value={replaceQuery}
-                      onChange={(e) => setReplaceQuery(e.target.value)}
-                    />
-                    <div className="replace-btns">
-                      <button className="replace-action-btn" onClick={handleReplaceOne}>替换当前</button>
-                      <button className="replace-action-btn" onClick={handleReplaceAll}>全部替换</button>
-                    </div>
-                  </div>
-
-                  <button className="sb-back-link" onClick={() => setSidebarPanel('workspace')}>
-                    ← 返回工作区
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {/* 大纲（树状，可逐节点折叠） */}
-                  <div className="sb-region">
-                    <div
-                      className="sb-region-head"
-                      onClick={() => setOutlineRegionOpen((v) => !v)}
-                      title="点击折叠 / 展开此区域"
-                    >
-                      <span className={`sb-region-arrow ${outlineRegionOpen ? 'open' : ''}`}>▸</span>
-                      <span className="sb-region-title">大纲 · OUTLINE</span>
-                    </div>
-                    {outlineRegionOpen && (
-                      <div className="sb-region-body">
-                        {outlineList.length === 0 ? (
-                          <div className="sidebar-empty-hint">当前文档暂无标题</div>
-                        ) : (
-                          outlineRows.map((item, idx) => (
-                            <div
-                              key={`${item.line}-${idx}`}
-                              className={`outline-item level-${item.level}${item.hasChild && item.collapsed ? ' has-collapsed' : ''}`}
-                              style={{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }}
-                              title={`跳转到: ${item.title}`}
-                            >
-                              {item.hasChild ? (
-                                <span
-                                  className="outline-caret"
-                                  onClick={(e) => { e.stopPropagation(); toggleOutlineNode(item.line); }}
-                                  title={item.collapsed ? '展开子标题' : '折叠子标题'}
-                                >
-                                  {item.collapsed ? '▸' : '▾'}
-                                </span>
-                              ) : (
-                                <span className="outline-caret-sp" />
-                              )}
-                              <span
-                                className="outline-title"
-                                onClick={() => handleOutlineClick(item)}
-                              >
-                                {item.title}
-                              </span>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 已打开文档 */}
-                  <div className="sb-region">
-                    <div className="sb-region-head static">
-                      <span className="sb-region-title">已打开 · DOCUMENTS ({openFiles.length})</span>
-                    </div>
-                    <div className="sb-region-body">
-                      {openFiles.map((file) => (
-                        <div
-                          key={file.id}
-                          className={`sidebar-doc-item ${file.id === activeFileId ? 'active' : ''}`}
-                          onClick={() => setActiveFileId(file.id)}
-                          title={file.path || '未保存于磁盘'}
-                        >
-                          <AppIcon name="file-text" size={14} className="doc-icon-2" />
-                          <span className="doc-name">{file.name}{fileConflicts[file.id] ? ' ⚠️' : ''}</span>
-                          {file.isModified && <span className="doc-modified-dot" title="未保存更改">•</span>}
-                          <button
-                            className="doc-close-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleCloseFile(file.id);
-                            }}
-                            title="关闭文档"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* 工作区文件树 */}
-                  <div className="sb-region">
-                    <div className="sb-region-head static">
-                      <span className="sb-region-title">工作区 · WORKSPACE</span>
-                      <button className="sb-mini-btn" onClick={handleSelectWorkspace} title="打开本地文件夹作为工作区">
-                        <AppIcon name="folder-open" size={13} />
-                      </button>
-                    </div>
-                    <div className="sb-region-body">
-                      {workspaceFiles.length === 0 ? (
-                        <div className="sidebar-empty-hint">
-                          {workspaceDir ? '该文件夹内暂无 Markdown 文件' : '点击上方图标选择本地文件夹'}
-                        </div>
-                      ) : (
-                        <>
-                          <div className="sb-ws-root" title={workspaceDir || ''}>
-                            {workspaceDir ? workspaceDir.split(/[\\/]/).pop() : ''}
-                          </div>
-                          {workspaceFiles.map((item) => (
-                            <FileTreeNode
-                              key={item.path}
-                              item={item}
-                              level={0}
-                              activePath={activeFile?.path || null}
-                              expandedDirs={expandedDirs}
-                              dirChildrenCache={dirChildrenCache}
-                              onToggleDir={handleToggleDirectory}
-                              onOpenFile={openFileByPath}
-                            />
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 最近文件 */}
-                  {recentFiles.length > 0 && (
-                    <div className="sb-region">
-                      <div className="sb-region-head static">
-                        <span className="sb-region-title">最近 · RECENT</span>
-                      </div>
-                      <div className="sb-region-body">
-                        {recentFiles.slice(0, 6).map((rf, idx) => (
-                          <div key={idx} className="sidebar-doc-item" onClick={() => handleOpenFile(rf.path)} title={rf.path}>
-                            <AppIcon name="file-text" size={14} className="doc-icon-2" />
-                            <span className="doc-name">{rf.name}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </aside>
-        )}
-
         {isInspectorOpen && !isSourceMode && (
           <aside className="typo-inspector">
             <div className="insp-head">
@@ -3192,6 +3310,8 @@ ${texBody}
             </div>
           )}
         </main>
+      </div>
+      </div>
       </div>
 
       {/* 4. Typora Bottom Status Bar (Toggleable) */}
