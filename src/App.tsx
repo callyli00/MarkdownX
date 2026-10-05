@@ -52,11 +52,20 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v1.9.15';
+const APP_VERSION = 'v1.9.16';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v1.9.16',
+    date: '2026-10-04',
+    items: [
+      '修复打印/导出 PDF 把界面一起打出来：顶栏、侧边栏、排版检查器、状态栏、窗口控件不再进入打印',
+      '根因：打印样式表隐藏的仍是 v1.9.0 改版前的旧类名（.typora-menubar），改版后的 .wb-topbar / .typora-sidebar / .typo-inspector 不在隐藏列表里',
+      '打印改为等 React 提交"菜单已关闭"状态后再触发（用定时器而非 requestAnimationFrame，窗口最小化时也不会静默失效）'
+    ]
+  },
   {
     version: 'v1.9.15',
     date: '2026-10-04',
@@ -2010,13 +2019,22 @@ export const App: React.FC = () => {
   // 1. Independent Print handler (Ctrl + P) - Keeps system print dialog 100% active
   const handlePrint = () => {
     setActiveMenu(null);
+    // Print only after React has committed the menu-closed state and the browser has
+    // laid it out: calling print() synchronously here snapped the print while an open
+    // dropdown (the very menu the user clicked through) was still in the DOM, so the
+    // exported PDF carried the menu with it.
+    // A timer, not requestAnimationFrame: rAF does not fire while the window is not
+    // rendering (minimised, hidden), which would silently swallow the print request.
+    const printAfterFlush = () => {
+      window.setTimeout(() => window.print(), 50);
+    };
     if (isSourceMode) {
       // Route through toggleSourceMode so the reading position is carried back
       // into the preview instead of dumping the reader at the top.
       toggleSourceMode();
-      setTimeout(() => window.print(), 350);
+      setTimeout(printAfterFlush, 350);
     } else {
-      window.print();
+      printAfterFlush();
     }
   };
 

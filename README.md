@@ -1,4 +1,4 @@
-# MarkdownX (v1.9.15)
+# MarkdownX (v1.9.16)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -29,6 +29,30 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v1.9.16] - 2026-10-04
+
+#### 修复：打印 / 导出 PDF 把界面一起打出来（顶栏、侧边栏、菜单）
+- **症状（用户报告）**：打印时"连着侧边栏、菜单一起都打印了"。
+- **根因**：`@media print` 的隐藏列表写的是 **v1.9.0 工作台改版前的旧类名** ——
+  `.typora-menubar`（改版后已不存在）。改版后的真实外壳类名
+  `.wb-topbar`（顶栏 + 窗口控件）、`.typora-sidebar`（侧边栏）、`.typo-inspector`（排版检查器）
+  **都不在隐藏列表里**，于是它们照常进入打印输出。
+- **修复**：
+  | 项 | 改动 |
+  |---|---|
+  | 隐藏列表 | 加入 `.wb-topbar`、`.wb-win-controls`、`.typora-sidebar`、`.typo-inspector`（旧类名保留兼容） |
+  | 布局 | `@media print` 下 `.typora-main-layout` 由 flex 行改为 `block`，正文不再被"隐藏侧栏后留下的空间"挤压 |
+  | 打印时机 | `handlePrint` 先关菜单，再在 React 提交状态之后打印（原先同步调用 `window.print()`，会把刚点开的"导出"子菜单一起打进快照） |
+  | 稳健性 | 用 `setTimeout(…, 50)` 而非 `requestAnimationFrame`：窗口最小化/不渲染时 rAF 不触发，会静默吞掉打印请求 |
+- **验证（浏览器 + 打印媒体验证，非肉眼）**：
+  | 检查 | 结果 |
+  |---|---|
+  | 打印媒体下 `.wb-topbar` / `.wb-win-controls` / `.typosidebar` / `.typo-inspector` / `.typora-statusbar` | 全部 `display: none` ✓ |
+  | 打印媒体下 `.typora-main-layout` | `block`（单栏）✓ |
+  | 打印内容 `innerText` 中的界面文字（新建文档、搜索/替换、大纲、工作区、对齐:…） | **0 处命中** ✓ |
+  | 打印内容中的正文文字 | 正常存在 ✓ |
+  | 触发打印时下拉菜单是否仍打开 | `menuOpen: false`（排版视图与源码模式两条路径均如此）✓ |
 
 ### [v1.9.15] - 2026-10-04
 

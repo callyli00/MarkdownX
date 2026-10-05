@@ -1095,7 +1095,13 @@ body.font-theme-technical {
     color: #111827 !important;
   }
 
-  /* Hide navigation, menu bar, status bar, and dialogs */
+  /* Hide navigation, menu bar, status bar, and dialogs.
+     The workbench chrome (v1.9.0) uses .wb-topbar / .typora-sidebar,
+     so the legacy .typora-menubar selector is kept only for old markup. */
+  .wb-topbar,
+  .wb-win-controls,
+  .typora-sidebar,
+  .typo-inspector,
   .typora-menubar,
   .typora-statusbar,
   .typo-modal-overlay,
@@ -1105,6 +1111,14 @@ body.font-theme-technical {
   .quick-font-btn,
   .view-mode-toggle-btn {
     display: none !important;
+  }
+
+  /* The layout is a flex row on screen; in print it must be a plain block so the
+     article is not squeezed into the space the hidden sidebar used to occupy. */
+  .typora-main-layout {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
   }
 
   .typora-workspace {
