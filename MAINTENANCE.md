@@ -170,6 +170,22 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 
 ---
 
+## 8.5 Contents API 上传大文件的坑（v2.3.1 实测）
+
+- `scripts/release-update.mjs --publish` 走 GitHub **Contents API**（`PUT /repos/.../contents/<file>`）
+  上传安装包。安装包 ≤ 5.4 MB（v2.2.4）时能过；到 13 MB（v2.3.0 / v2.3.1）时该请求**稳定返回
+  `401 Bad credentials`** —— 而同一时刻 `gh api user`（读）和 `gh release create`（资产上传）都正常，
+  所以这是**大 body 的上传被拒**，不是凭据真的坏了。**不要**因此去动凭据。
+- 可靠替代路径（两条都用 git/gh 的正常能力）：
+  1. **分支发布**：临时目录 `git init` → 放 `MarkdownX_<ver>_x64-setup.exe` + `latest.json`
+     → `git push -f origin HEAD:release-assets`（git push 走 credential manager，不受影响）。
+  2. **Release 兜底**：`gh release create v<ver> --notes ... <exe> <latest.json>`；
+     若上传中断，用 `gh release upload v<ver> <exe> --clobber` 补传（13 MB 约需 2–3 分钟），
+     再用 `gh release edit v<ver> --draft=false --latest` 把 Draft 转正。
+- 症状自查：`gh release list` 里出现 **Draft** 且资产不全 → 就是上传被中断。
+
+---
+
 ## 9. 验证方法论（"能跑"必须有证据）
 
 | 层次 | 手段 |
