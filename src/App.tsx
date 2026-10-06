@@ -52,7 +52,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.1.0';
+const APP_VERSION = 'v2.1.1';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
