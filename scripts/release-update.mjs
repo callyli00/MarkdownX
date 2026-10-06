@@ -116,10 +116,32 @@ console.log(`   更新清单: ${manifestPath}`);
 console.log(`\n   应用将拉取: https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/latest.json`);
 
 // 5. publish through the API (api.github.com is reachable here; github.com is not)
+/**
+ * Resolve the GitHub CLI without trusting PATH: a winget install updates the PATH for NEW
+ * processes only, so a long-lived shell (or a script started from one) may not see `gh` at
+ * all. Try the environment override, then PATH, then the default install location.
+ */
+function ghBin() {
+  const candidates = [
+    process.env.GH_BIN,
+    'gh',
+    'C:/Program Files/GitHub CLI/gh.exe'
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      execFileSync(candidate, ['--version'], { stdio: 'ignore' });
+      return candidate;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  throw new Error('找不到 gh CLI：请安装 GitHub CLI，或用 GH_BIN 指定其完整路径');
+}
+
 function gh(args, inputFile) {
   const full = ['api', ...args];
   if (inputFile) full.push('--input', inputFile);
-  return execFileSync('gh', full, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim();
+  return execFileSync(ghBin(), full, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim();
 }
 
 function ensureAssetBranch() {
@@ -160,10 +182,21 @@ function uploadFile(localPath, remoteName) {
 }
 
 function verifyRaw() {
+  // `-o /dev/null` is a POSIX path: on Windows curl exits 23 (write error) even though it
+  // fetched fine, which used to crash this check. Ask curl for the code and ignore the
+  // body, tolerate a non-zero exit, and treat the printed code as the verdict.
   for (const url of [`https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/latest.json`,
                      `https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${assetName}`]) {
-    const code = execFileSync('curl', ['-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20', '-L', url], { encoding: 'utf8' }).trim();
-    console.log(`   ${code === '200' ? '✓' : '✗'} HTTP ${code}  ${url}`);
+    let code = 'unknown';
+    try {
+      code = execFileSync('curl', ['-s', '-D', '-', '-o', 'NUL', '-w', '%{http_code}', '--max-time', '20', '-L', url],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n').pop().trim();
+    } catch (err) {
+      code = String(err.stdout || '').trim().split('\n').pop().trim() || 'failed';
+    }
+    const ok = code === '200';
+    console.log(`   ${ok ? '✓' : '✗'} HTTP ${code}  ${url}`);
+    if (!ok) console.log('     （注意：raw 有几分钟缓存；刚上传后立刻取可能仍是旧内容）');
   }
 }
 

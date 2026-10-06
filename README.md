@@ -44,11 +44,12 @@
 安装包:   https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/MarkdownX_x.y.z_x64-setup.exe
 ```
 
-- 两个文件放在专用分支 `release-assets`（**每次发布覆盖**，分支历史始终只有 1 个提交；`main` 保持干净）
+- 两个文件放在专用分支 `release-assets`（**每次发布覆盖**这两个文件，`main` 保持干净；
+  分支上每次覆盖会留下一个提交，属正常，可定期清理）
 - 发布经 `gh`（走 api.github.com ✓）完成，**发布后脚本自动 curl 实测这两个地址** ✓
 - GitHub Releases 仍可另外建给人看（其链接在 github.com，需要梯子），**应用不依赖它**
 
-**发布一条命令**
+**发布一条命令**（已实测可用 ✓）
 ```bash
 node scripts/release-update.mjs --owner callyli00 --repo MarkdownX            # 签名打包 + 生成 latest.json
 node scripts/release-update.mjs --owner callyli00 --repo MarkdownX --skip-build --publish   # 上传并实测
