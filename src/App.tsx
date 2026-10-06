@@ -8,7 +8,12 @@ import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer'
 import { renderDocument } from './utils/renderClient';
 import { checkForUpdate, installUpdate, type UpdateCheckResult, type UpdateProgress } from './utils/updater';
 import { AppIcon } from './AppIcon';
+import { isPdfPath, loadPdfBytes } from './pdf/openPdf';
+import { readAnnotsFromPdf } from './pdf/annotStore';
+import type { PdfAnnot } from './pdf/annotations';
 import './App.css';
+
+type TabKind = 'markdown' | 'pdf';
 
 interface FileTab {
   id: string;
@@ -16,6 +21,12 @@ interface FileTab {
   path: string | null;
   content: string;
   isModified: boolean;
+  /** Discriminator. Absent means a Markdown tab (back-compat). */
+  kind?: TabKind;
+  /** PDF source bytes (kind === 'pdf' only). */
+  pdfBytes?: Uint8Array;
+  /** Annotations in normalized page space (kind === 'pdf' only). */
+  pdfAnnots?: PdfAnnot[];
 }
 
 interface FileConflict {
@@ -1057,6 +1068,7 @@ export const App: React.FC = () => {
   const [defaultMathEngineSetting, setDefaultMathEngineSetting] = useState<'svg' | 'chtml'>(() => initialPrefs.current.defaultMathEngine || 'svg');
   const [autoWatchSetting, setAutoWatchSetting] = useState<boolean>(() => initialPrefs.current.autoWatchExternalChanges !== false);
   const [externalReloadNotice, setExternalReloadNotice] = useState<string | null>(null);
+  const [pdfOpenError, setPdfOpenError] = useState<string | null>(null);
   // Workbench chrome: the right-hand typography inspector, the collapsed
   // outline groups, and which sidebar panel is shown.
   const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(false);
@@ -2055,6 +2067,43 @@ export const App: React.FC = () => {
         return;
       }
 
+      // --- PDF branch: bytes go through plugin-fs, never the text command ---
+      if (isPdfPath(targetPath)) {
+        try {
+          const bytes = await loadPdfBytes(targetPath);
+          const savedAnnots = await readAnnotsFromPdf(bytes);
+          const pdfName = targetPath.split(/[\\/]/).pop() || 'document.pdf';
+          const pdfId = `pdf-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+          const pdfTab: FileTab = {
+            id: pdfId,
+            name: pdfName,
+            path: targetPath,
+            content: '',
+            isModified: false,
+            kind: 'pdf',
+            pdfBytes: bytes,
+            pdfAnnots: savedAnnots,
+          };
+          const tabsBefore = openFilesRef.current;
+          const pdfNext =
+            tabsBefore.length === 1 && tabsBefore[0].id === 'default-tab' && !tabsBefore[0].path && tabsBefore[0].content === ''
+              ? [pdfTab]
+              : [...tabsBefore, pdfTab];
+          openFilesRef.current = pdfNext;
+          setOpenFiles(pdfNext);
+          setActiveFileId(pdfId);
+          setRecentFiles((prev) => [
+            { name: pdfName, path: targetPath },
+            ...prev.filter((item) => item.path !== targetPath),
+          ].slice(0, 10));
+        } catch (pdfErr) {
+          console.error('PDF open error:', pdfErr);
+          setPdfOpenError(`无法打开 PDF「${targetPath.split(/[\\/]/).pop() || targetPath}」：${String((pdfErr as Error)?.message || pdfErr)}`);
+        }
+        return;
+      }
+      // --- end PDF branch ---
+
       let fileContent = '';
       try {
         fileContent = await invoke<string>('read_file_from_path', { path: targetPath });
@@ -2162,7 +2211,7 @@ export const App: React.FC = () => {
       let targetPath = specificPath;
       if (!targetPath) {
         const selected = await open({
-          filters: [{ name: 'Markdown Documents', extensions: ['md', 'markdown', 'txt'] }],
+          filters: [{ name: 'Documents', extensions: ['md', 'markdown', 'txt', 'pdf'] }],
           multiple: false
         });
         if (typeof selected === 'string') {
@@ -3245,6 +3294,7 @@ ${texBody}
             onClick={() => setActiveFileId(f.id)}
             onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, kind: 'tab', fileId: f.id }); }}
           >
+            {f.kind === 'pdf' ? <span className="doc-tab-badge" title="PDF 文档">PDF</span> : null}
             <span className="doc-tab-name">{fileBaseName(f.path) || f.name || '未保存'}</span>
             {f.isModified ? <span className="doc-tab-dot" title="未保存的修改">•</span> : null}
             {openFiles.length > 1 ? (
@@ -3311,6 +3361,13 @@ ${texBody}
       {externalReloadNotice && (
         <div className="external-reload-toast">
           {externalReloadNotice}
+        </div>
+      )}
+
+      {/* PDF open failure notice (bad file, encrypted, unreadable ...) */}
+      {pdfOpenError && (
+        <div className="external-reload-toast" onClick={() => setPdfOpenError(null)} title="点击关闭" style={{ cursor: 'pointer' }}>
+          ⚠️ {pdfOpenError}
         </div>
       )}
 

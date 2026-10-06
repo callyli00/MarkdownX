@@ -3164,6 +3164,21 @@ body.sb-resizing .typora-sidebar {
   white-space: nowrap;
 }
 
+.doc-tab-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  color: #b91c1c;
+  background: rgba(185, 28, 28, 0.12);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-right: 5px;
+  flex-shrink: 0;
+}
+body.theme-dark .doc-tab-badge {
+  color: #fca5a5;
+  background: rgba(252, 165, 165, 0.15);
+}
 .doc-tab-dot { color: var(--wb-accent, #0969da); font-weight: 700; }
 
 .doc-tab-close {
