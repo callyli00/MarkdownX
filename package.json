@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "tauri": "tauri",
     "postinstall": "node -e \"try { require('./scripts/copy-mathjax.cjs'); } catch (e) { console.log('MathJax auto-copy notice:', e.message); }\"",
     "copy:mathjax": "node scripts/copy-mathjax.cjs",
@@ -32,6 +34,7 @@
     "@types/react-dom": "^18.2.19",
     "@vitejs/plugin-react": "^4.2.1",
     "typescript": "^5.2.2",
-    "vite": "^5.1.4"
+    "vite": "^5.1.4",
+    "vitest": "^2.1.9"
   }
 }

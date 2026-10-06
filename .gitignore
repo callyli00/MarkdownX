@@ -14,6 +14,17 @@ public/mathjax/*
 public/mermaid/*
 !public/mermaid/README.txt
 
+# PDF.js offline assets (cMaps + standard fonts, copied from node_modules/pdfjs-dist)
+public/pdfjs/*
+!public/pdfjs/README.txt
+
+# CJK note font (copied from node_modules/@expo-google-fonts/noto-sans-sc, ~10 MB)
+public/fonts/*
+!public/fonts/README.txt
+
+# AI planning workspace (local only)
+.hermes/
+
 # Tauri generated ACL schemas (recreated by tauri-build on every build)
 src-tauri/gen/schemas
 
