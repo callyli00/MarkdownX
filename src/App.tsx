@@ -11,6 +11,11 @@ import { AppIcon } from './AppIcon';
 import { isPdfPath, loadPdfBytes } from './pdf/openPdf';
 import { readAnnotsFromPdf } from './pdf/annotStore';
 import type { PdfAnnot } from './pdf/annotations';
+// Lazy: pdf.js + pdf-lib are ~1 MB of the bundle and are only needed once a PDF
+// tab is opened, so they must not delay first paint of a Markdown session.
+const PdfViewer = React.lazy(() =>
+  import('./pdf/PdfViewer').then((m) => ({ default: m.PdfViewer }))
+);
 import './App.css';
 
 type TabKind = 'markdown' | 'pdf';
@@ -3373,7 +3378,7 @@ ${texBody}
 
       {/* 3. Main Workspace & Collapsible Sidebar Container */}
       <div className="typora-main-layout">
-        {isInspectorOpen && !isSourceMode && (
+        {isInspectorOpen && !isSourceMode && activeFile?.kind !== 'pdf' && (
           <aside className="typo-inspector">
             <div className="insp-head">
               <span className="insp-title">排版检查器</span>
@@ -3503,7 +3508,15 @@ ${texBody}
           className={`typora-workspace ${isFocusMode ? 'focus-mode-active' : ''} ${isTypewriterMode ? 'typewriter-mode-active' : ''}`}
           style={{ zoom: zoomLevel }}
         >
-          {isSourceMode ? (
+          {activeFile?.kind === 'pdf' && activeFile.pdfBytes ? (
+            <React.Suspense fallback={<div className="pdf-loading">正在加载 PDF 引擎…</div>}>
+              <PdfViewer
+                key={activeFile.id}
+                bytes={activeFile.pdfBytes}
+                onError={(msg) => console.error('PDF render error:', msg)}
+              />
+            </React.Suspense>
+          ) : isSourceMode ? (
             /* Pure Source Code Editor */
             <div className="source-fullscreen-pane">
               {caretFlash && (

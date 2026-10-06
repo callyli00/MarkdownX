@@ -3321,3 +3321,85 @@ body.theme-dark .doc-tab-badge {
   .ctx-menu-backdrop,
   .sb-splitter-open { display: none !important; }
 }
+
+/* =========================================
+   PDF Viewer
+   ========================================= */
+.pdf-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--wb-main, #f7f8fa);
+}
+.pdf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--wb-card, #fff);
+  flex-shrink: 0;
+}
+.pdf-btn {
+  border: 1px solid var(--border-subtle);
+  background: var(--wb-card, #fff);
+  color: var(--text-main);
+  border-radius: 4px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.pdf-btn:hover { background: var(--wb-sel, #e1e5ec); }
+.pdf-zoom {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 44px;
+  text-align: center;
+  color: var(--text-main);
+}
+.pdf-sep { flex: 1; }
+.pdf-pagecount { font-size: 12px; color: var(--text-muted); }
+.pdf-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.pdf-page-wrap {
+  position: relative;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  background: #fff;
+  flex-shrink: 0;
+}
+.pdf-page-canvas { display: block; }
+.pdf-error-card {
+  margin: 60px auto;
+  max-width: 460px;
+  padding: 24px 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--wb-card, #fff);
+  text-align: center;
+}
+.pdf-error-icon { font-size: 28px; margin-bottom: 8px; }
+.pdf-error-title { font-weight: 600; margin-bottom: 6px; color: var(--text-main); }
+.pdf-error-detail {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  word-break: break-word;
+  font-family: var(--font-mono);
+}
+body.theme-dark .pdf-page-wrap { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6); }
+.pdf-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
+}
