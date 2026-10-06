@@ -3,13 +3,15 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
 import { renderDocument } from './utils/renderClient';
 import { checkForUpdate, installUpdate, type UpdateCheckResult, type UpdateProgress } from './utils/updater';
 import { AppIcon } from './AppIcon';
 import { isPdfPath, loadPdfBytes } from './pdf/openPdf';
-import { readAnnotsFromPdf } from './pdf/annotStore';
+// pdf-lib-backed modules are imported DYNAMICALLY at each call site (they are all
+// async) so ~300 kB of pdf-lib never lands in the startup bundle.
+import { fetchNoteFontBytes } from './pdf/cjkFont';
 import type { PdfAnnot } from './pdf/annotations';
 // Lazy: pdf.js + pdf-lib are ~1 MB of the bundle and are only needed once a PDF
 // tab is opened, so they must not delay first paint of a Markdown session.
@@ -1074,6 +1076,14 @@ export const App: React.FC = () => {
   const [autoWatchSetting, setAutoWatchSetting] = useState<boolean>(() => initialPrefs.current.autoWatchExternalChanges !== false);
   const [externalReloadNotice, setExternalReloadNotice] = useState<string | null>(null);
   const [pdfOpenError, setPdfOpenError] = useState<string | null>(null);
+  const [pdfPageInfo, setPdfPageInfo] = useState<{ page: number; total: number } | null>(null);
+  const [pdfMetaOpen, setPdfMetaOpen] = useState<boolean>(false);
+  const [pdfMetaDraft, setPdfMetaDraft] = useState<{ title: string; author: string; subject: string; keywords: string }>({
+    title: '',
+    author: '',
+    subject: '',
+    keywords: '',
+  });
   // Workbench chrome: the right-hand typography inspector, the collapsed
   // outline groups, and which sidebar panel is shown.
   const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(false);
@@ -1943,6 +1953,9 @@ export const App: React.FC = () => {
   // Keyboard shortcuts (Comprehensive Typora & MarkdownX Keybindings)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Markdown-only shortcuts must not fire while a PDF tab is active.
+      const pdfTabActive =
+        openFilesRef.current.find((f) => f.id === activeFileIdRef.current)?.kind === 'pdf';
       // Function keys
       if (e.key === 'F8') {
         e.preventDefault();
@@ -1984,7 +1997,8 @@ export const App: React.FC = () => {
             return;
           } else if (e.key === '2' || e.key === '@') {
             e.preventDefault();
-            setIsInspectorOpen((v) => !v);
+            // The typography inspector is Markdown-only.
+            if (!pdfTabActive) setIsInspectorOpen((v) => !v);
             return;
           } else if (e.key === 'F' || e.key === 'f') {
             e.preventDefault();
@@ -2013,7 +2027,7 @@ export const App: React.FC = () => {
         // Standard Ctrl combinations
         if (e.key === '/') {
           e.preventDefault();
-          toggleSourceMode();
+          if (!pdfTabActive) toggleSourceMode();
         } else if (e.key === 's' || e.key === 'S') {
           e.preventDefault();
           handleSaveFile();
@@ -2025,7 +2039,7 @@ export const App: React.FC = () => {
           handleNewFile();
         } else if (e.key === 'p' || e.key === 'P') {
           e.preventDefault();
-          handlePrint();
+          if (!pdfTabActive) handlePrint();
         } else if (e.key === ',' || e.key === '，') {
           e.preventDefault();
           setShowTypographyModal(true);
@@ -2034,13 +2048,13 @@ export const App: React.FC = () => {
           handleCloseFile(activeFileId);
         } else if (e.key === '=' || e.key === '+') {
           e.preventDefault();
-          setTypography((t) => ({ ...t, fontSize: Math.min(t.fontSize + 1, 26) }));
+          if (!pdfTabActive) setTypography((t) => ({ ...t, fontSize: Math.min(t.fontSize + 1, 26) }));
         } else if (e.key === '-') {
           e.preventDefault();
-          setTypography((t) => ({ ...t, fontSize: Math.max(t.fontSize - 1, 12) }));
+          if (!pdfTabActive) setTypography((t) => ({ ...t, fontSize: Math.max(t.fontSize - 1, 12) }));
         } else if (e.key === '0') {
           e.preventDefault();
-          setTypography((t) => ({ ...t, fontSize: 16 }));
+          if (!pdfTabActive) setTypography((t) => ({ ...t, fontSize: 16 }));
         }
       }
     };
@@ -2076,6 +2090,7 @@ export const App: React.FC = () => {
       if (isPdfPath(targetPath)) {
         try {
           const bytes = await loadPdfBytes(targetPath);
+          const { readAnnotsFromPdf } = await import('./pdf/annotStore');
           const savedAnnots = await readAnnotsFromPdf(bytes);
           const pdfName = targetPath.split(/[\\/]/).pop() || 'document.pdf';
           const pdfId = `pdf-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
@@ -2235,6 +2250,10 @@ export const App: React.FC = () => {
   const handleSaveFile = async () => {
     setActiveMenu(null);
     if (!activeFile) return;
+    if (activeFile.kind === 'pdf') {
+      await savePdfTab(false);
+      return;
+    }
     try {
       let targetPath = activeFile.path;
       if (!targetPath) {
@@ -2260,6 +2279,10 @@ export const App: React.FC = () => {
   const handleSaveFileAs = async () => {
     setActiveMenu(null);
     if (!activeFile) return;
+    if (activeFile.kind === 'pdf') {
+      await savePdfTab(true);
+      return;
+    }
     try {
       const targetPath = await save({
         filters: [{ name: 'Markdown Documents', extensions: ['md'] }]
@@ -2280,6 +2303,118 @@ export const App: React.FC = () => {
     }
   };
 
+
+  // ==========================================
+  // PDF document actions (annotations, structural edits, save/export)
+  // ==========================================
+
+  /** Replace the active PDF tab's annotation list. */
+  const updateActivePdfAnnots = useCallback((next: PdfAnnot[]) => {
+    setOpenFiles((prev) =>
+      prev.map((f) => (f.id === activeFileIdRef.current ? { ...f, pdfAnnots: next, isModified: true } : f))
+    );
+  }, []);
+
+  /** Structural ops hand back fresh bytes; store them and mark the tab dirty. */
+  const applyPdfStructural = useCallback((next: Uint8Array) => {
+    setOpenFiles((prev) =>
+      prev.map((f) => (f.id === activeFileIdRef.current ? { ...f, pdfBytes: next, isModified: true } : f))
+    );
+  }, []);
+
+  /**
+   * Save the active PDF tab. Annotations are EMBEDDED (still re-editable in
+   * MarkdownX), never flattened — flattening is the explicit "导出压平" action.
+   */
+  const savePdfTab = async (forceDialog: boolean): Promise<void> => {
+    const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+    if (!f?.pdfBytes) return;
+    try {
+      const { writeAnnotsIntoPdf } = await import('./pdf/annotStore');
+      const bytes = await writeAnnotsIntoPdf(f.pdfBytes, f.pdfAnnots ?? []);
+      let targetPath: string | null = forceDialog ? null : f.path;
+      if (!targetPath) {
+        targetPath = await save({ filters: [{ name: 'PDF Document', extensions: ['pdf'] }] });
+      }
+      if (!targetPath) return;
+      lastSelfSaveTimeRef.current = Date.now();
+      await writeFile(targetPath, bytes);
+      const name = targetPath.split(/[\\/]/).pop() || f.name;
+      setOpenFiles((prev) =>
+        prev.map((x) => (x.id === f.id ? { ...x, path: targetPath, name, pdfBytes: bytes, isModified: false } : x))
+      );
+    } catch (e) {
+      console.error('PDF save error:', e);
+      setPdfOpenError(`保存失败：${String((e as Error)?.message || e)}`);
+    }
+  };
+
+  /** Save a single page as a new PDF (structure-edit level). */
+  const handleExtractPdfPage = async (pageIndex: number): Promise<void> => {
+    const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+    if (!f?.pdfBytes) return;
+    try {
+      const { extractPages } = await import('./pdf/structuralOps');
+      const bytes = await extractPages(f.pdfBytes, [pageIndex]);
+      const targetPath = await save({ filters: [{ name: 'PDF Document', extensions: ['pdf'] }] });
+      if (!targetPath) return;
+      await writeFile(targetPath, bytes);
+    } catch (e) {
+      setPdfOpenError(`提取页面失败：${String((e as Error)?.message || e)}`);
+    }
+  };
+
+  /** Burn annotations into a shareable copy (CJK note text included). */
+  const handleExportFlattenedPdf = async (): Promise<void> => {
+    const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+    if (!f?.pdfBytes) return;
+    try {
+      const { flattenAnnotations } = await import('./pdf/flatten');
+      const noteFontBytes = await fetchNoteFontBytes();
+      const flattened = await flattenAnnotations(f.pdfBytes, f.pdfAnnots ?? [], { noteFontBytes });
+      const targetPath = await save({ filters: [{ name: 'PDF Document', extensions: ['pdf'] }] });
+      if (!targetPath) return;
+      await writeFile(targetPath, flattened);
+    } catch (e) {
+      setPdfOpenError(`导出压平副本失败：${String((e as Error)?.message || e)}`);
+    }
+  };
+
+  const openPdfMetadata = async (): Promise<void> => {
+    const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+    if (!f?.pdfBytes) return;
+    try {
+      const { getMetadata } = await import('./pdf/structuralOps');
+      const meta = await getMetadata(f.pdfBytes);
+      setPdfMetaDraft(meta);
+      setPdfMetaOpen(true);
+    } catch (e) {
+      setPdfOpenError(`读取元数据失败：${String((e as Error)?.message || e)}`);
+    }
+  };
+
+  const savePdfMetadata = async (): Promise<void> => {
+    const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+    if (!f?.pdfBytes) return;
+    try {
+      const { setMetadata } = await import('./pdf/structuralOps');
+      const next = await setMetadata(f.pdfBytes, {
+        title: pdfMetaDraft.title,
+        author: pdfMetaDraft.author,
+        subject: pdfMetaDraft.subject,
+        keywords: pdfMetaDraft.keywords
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      });
+      setOpenFiles((prev) =>
+        prev.map((x) => (x.id === activeFileIdRef.current ? { ...x, pdfBytes: next, isModified: true } : x))
+      );
+      setPdfMetaOpen(false);
+    } catch (e) {
+      setPdfOpenError(`写入元数据失败：${String((e as Error)?.message || e)}`);
+    }
+  };
 
   // ==========================================
   // Export Handlers (PDF, HTML, Word, LaTeX)
@@ -3376,6 +3511,62 @@ ${texBody}
         </div>
       )}
 
+      {/* PDF metadata editor */}
+      {pdfMetaOpen && (
+        <div className="typo-modal-overlay" onClick={() => setPdfMetaOpen(false)}>
+          <div className="typo-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="typo-modal-header">
+              <div className="typo-modal-title">
+                <span>📄 PDF 文档元数据</span>
+              </div>
+              <button className="typo-modal-close-btn" onClick={() => setPdfMetaOpen(false)}>
+                ×
+              </button>
+            </div>
+            <div className="typo-modal-body">
+              <div className="pdf-meta-form">
+                <label>
+                  标题 (Title)
+                  <input
+                    value={pdfMetaDraft.title}
+                    onChange={(e) => setPdfMetaDraft((d) => ({ ...d, title: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  作者 (Author)
+                  <input
+                    value={pdfMetaDraft.author}
+                    onChange={(e) => setPdfMetaDraft((d) => ({ ...d, author: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  主题 (Subject)
+                  <input
+                    value={pdfMetaDraft.subject}
+                    onChange={(e) => setPdfMetaDraft((d) => ({ ...d, subject: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  关键词 (Keywords，逗号分隔)
+                  <input
+                    value={pdfMetaDraft.keywords}
+                    onChange={(e) => setPdfMetaDraft((d) => ({ ...d, keywords: e.target.value }))}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="typo-modal-footer">
+              <button className="typora-btn" onClick={() => setPdfMetaOpen(false)}>
+                取消
+              </button>
+              <button className="typora-btn" onClick={() => void savePdfMetadata()}>
+                保存元数据
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 3. Main Workspace & Collapsible Sidebar Container */}
       <div className="typora-main-layout">
         {isInspectorOpen && !isSourceMode && activeFile?.kind !== 'pdf' && (
@@ -3513,6 +3704,13 @@ ${texBody}
               <PdfViewer
                 key={activeFile.id}
                 bytes={activeFile.pdfBytes}
+                annots={activeFile.pdfAnnots ?? []}
+                onAnnotsChange={updateActivePdfAnnots}
+                onStructuralChange={applyPdfStructural}
+                onExtractPage={(idx) => void handleExtractPdfPage(idx)}
+                onRequestMetadata={() => void openPdfMetadata()}
+                onExportFlattened={() => void handleExportFlattenedPdf()}
+                onVisiblePageChange={(page, total) => setPdfPageInfo({ page, total })}
                 onError={(msg) => console.error('PDF render error:', msg)}
               />
             </React.Suspense>
@@ -3591,29 +3789,52 @@ ${texBody}
       {showStatusBar && (
         <footer className="typora-statusbar">
           <div className="status-left">
-            <span
-              onClick={() => setShowWordCountModal(true)}
-              style={{ cursor: 'pointer', fontWeight: 500 }}
-              title="点击查看详细字数与排版统计"
-            >
-              {metrics.cjkCount + metrics.wordsCount} 字 • {metrics.charWithSpaces} 字符 • {metrics.lines} 行
-            </span>
-            <span className="sep">•</span>
-            <span>预估阅读 ~{metrics.readingMinutes} 分钟</span>
-            <span className="sep">•</span>
-            <span>{isSourceMode ? '源码模式' : '沉浸排版'}</span>
-            {isFocusMode && <><span className="sep">•</span><span className="status-pill-badge">专注模式</span></>}
-            {isTypewriterMode && <><span className="sep">•</span><span className="status-pill-badge">打字机模式</span></>}
-            {zoomLevel !== 1 && <><span className="sep">•</span><span>缩放: {Math.round(zoomLevel * 100)}%</span></>}
+            {activeFile?.kind === 'pdf' && pdfPageInfo ? (
+              <>
+                <span className="status-badge" style={{ fontWeight: 500 }}>
+                  第 {pdfPageInfo.page} / {pdfPageInfo.total} 页
+                </span>
+                <span className="sep">•</span>
+                <span>{activeFile.pdfAnnots?.length ?? 0} 个标注</span>
+                {activeFile.isModified && <><span className="sep">•</span><span className="status-pill-badge">未保存</span></>}
+              </>
+            ) : (
+              <>
+                <span
+                  onClick={() => setShowWordCountModal(true)}
+                  style={{ cursor: 'pointer', fontWeight: 500 }}
+                  title="点击查看详细字数与排版统计"
+                >
+                  {metrics.cjkCount + metrics.wordsCount} 字 • {metrics.charWithSpaces} 字符 • {metrics.lines} 行
+                </span>
+                <span className="sep">•</span>
+                <span>预估阅读 ~{metrics.readingMinutes} 分钟</span>
+                <span className="sep">•</span>
+                <span>{isSourceMode ? '源码模式' : '沉浸排版'}</span>
+                {isFocusMode && <><span className="sep">•</span><span className="status-pill-badge">专注模式</span></>}
+                {isTypewriterMode && <><span className="sep">•</span><span className="status-pill-badge">打字机模式</span></>}
+                {zoomLevel !== 1 && <><span className="sep">•</span><span>缩放: {Math.round(zoomLevel * 100)}%</span></>}
+              </>
+            )}
           </div>
           <div className="status-right">
-            <span>对齐: {typography.textAlign === 'justify' ? '两端对齐' : '左对齐'}</span>
-            <span className="sep">•</span>
-            <span>UTF-8</span>
-            <span className="sep">•</span>
-            <span className="status-badge" onClick={toggleSourceMode} style={{ cursor: 'pointer' }}>
-              Ctrl + / 切换
-            </span>
+            {activeFile?.kind === 'pdf' ? (
+              <>
+                <span>PDF 文档</span>
+                <span className="sep">•</span>
+                <span className="status-badge">Ctrl + S 保存（标注可再编辑）</span>
+              </>
+            ) : (
+              <>
+                <span>对齐: {typography.textAlign === 'justify' ? '两端对齐' : '左对齐'}</span>
+                <span className="sep">•</span>
+                <span>UTF-8</span>
+                <span className="sep">•</span>
+                <span className="status-badge" onClick={toggleSourceMode} style={{ cursor: 'pointer' }}>
+                  Ctrl + / 切换
+                </span>
+              </>
+            )}
           </div>
         </footer>
       )}

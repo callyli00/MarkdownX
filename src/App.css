@@ -3403,3 +3403,48 @@ body.theme-dark .pdf-page-wrap { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6); }
   color: var(--text-muted);
   font-size: 13px;
 }
+.pdf-toolbar { flex-wrap: wrap; row-gap: 6px; }
+.pdf-group { display: inline-flex; align-items: center; gap: 4px; }
+.pdf-btn.active {
+  background: var(--wb-accent, #2f6fed);
+  color: #fff;
+  border-color: var(--wb-accent, #2f6fed);
+}
+.pdf-annot-layer { position: absolute; top: 0; left: 0; z-index: 2; }
+.pdf-note-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--wb-sel, #eef2f7);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12.5px;
+  color: var(--text-main);
+  flex-shrink: 0;
+}
+.pdf-note-edit input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-size: 12.5px;
+  background: var(--wb-card, #fff);
+  color: var(--text-main);
+  outline: none;
+}
+.pdf-op-error {
+  padding: 6px 12px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+  font-size: 12.5px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+body.theme-dark .pdf-op-error { color: #fca5a5; }
+.pdf-meta-form { display: flex; flex-direction: column; gap: 10px; }
+.pdf-meta-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-muted); }
+.pdf-meta-form input {
+  padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 4px;
+  font-size: 13px; background: var(--wb-card, #fff); color: var(--text-main); outline: none;
+}
