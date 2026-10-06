@@ -244,8 +244,8 @@ interface TypographyConfig {
 
 
 const DEFAULT_TYPOGRAPHY: TypographyConfig = {
-  latinFont: "'Times New Roman', Cambria",
-  cjkFont: "'Songti SC', 'SimSun', 'Noto Serif CJK SC', 'Source Han Serif SC'",
+  latinFont: 'Times New Roman',
+  cjkFont: '宋体',
   fontSize: 16,
   lineHeight: 1.85,
   paragraphMargin: 1.25,
@@ -297,22 +297,36 @@ function loadStoredPreferences(): AppPreferences {
   return FACTORY_PREFERENCES;
 }
 
-const LATIN_FONT_OPTIONS = [
-  { name: 'Times New Roman (经典学术期刊)', value: "'Times New Roman', Cambria" },
-  { name: 'Cambria (现代自然衬线)', value: "Cambria, 'Times New Roman'" },
-  { name: 'Georgia (典雅大方)', value: "Georgia, 'Times New Roman'" },
-  { name: 'Garamond (人文教材专著)', value: "Garamond, Georgia, serif" },
-  { name: 'Segoe UI / 苹方 (现代清晰无衬线)', value: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto" },
-  { name: 'JetBrains Mono (工程算法等宽)', value: "'JetBrains Mono', Consolas, monospace" },
-  { name: 'Fira Code (编程风格)', value: "'Fira Code', 'JetBrains Mono', monospace" }
+// A font is bucketed as CJK when its family name contains a CJK character
+// (宋体, 微软雅黑, 楷体 ...). Pure-ASCII names are Latin.
+const CJK_FAMILY = /[\u4e00-\u9fff]/;
+const isCJKFamily = (name: string) => CJK_FAMILY.test(name);
+
+// Fallback font buckets, used only when `list_system_fonts` can't run. They
+// also guarantee the dropdowns are never empty. Values are single family
+// names so they match exactly what gets applied as `font-family`.
+const FALLBACK_LATIN_FAMILIES = [
+  'Times New Roman', 'Cambria', 'Georgia', 'Garamond', 'Segoe UI', 'Arial', 'Consolas'
+];
+const FALLBACK_CJK_FAMILIES = [
+  '宋体', '微软雅黑', '楷体', '仿宋', '幼圆', 'Noto Serif SC', 'Noto Sans SC'
 ];
 
-const CJK_FONT_OPTIONS = [
-  { name: '思源宋体 / SimSun (正文出版标准)', value: "'Songti SC', 'SimSun', 'Noto Serif CJK SC', 'Source Han Serif SC'" },
-  { name: '微软雅黑 / 苹方 (屏幕清晰黑体)', value: "'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC'" },
-  { name: '楷体 (KaiTi - 典雅教材风格)', value: "'STKaiti', 'KaiTi', 'SimSun'" },
-  { name: '仿宋 (FangSong - 规范工程报告)', value: "'STFangsong', 'FangSong', 'SimSun'" }
-];
+// Reduce a stored font-family value (which may be a stack like "Georgia, 'Times
+// New Roman'") to a single family that exists in `options`, so the <select>
+// always renders a valid current selection instead of a blank value.
+function matchFamilyValue(raw: string, options: { value: string }[]): string {
+  if (!raw) return options[0]?.value ?? '';
+  const first = raw.split(',')[0].trim().replace(/^['"]+|['"]+$/g, '').toLowerCase();
+  const exact = options.find((o) => o.value.toLowerCase() === first);
+  if (exact) return exact.value;
+  const sub = options.find((o) => {
+    const v = o.value.toLowerCase();
+    return v.includes(first) || first.includes(v);
+  });
+  if (sub) return sub.value;
+  return options[0]?.value ?? '';
+}
 
 const MAX_WIDTH_OPTIONS = [
   { name: '窄版 (760px) - 专注单篇阅读', value: '760px' },
@@ -1277,11 +1291,45 @@ export const App: React.FC = () => {
     return initialPrefs.current.defaultTypography || DEFAULT_TYPOGRAPHY;
   });
 
+  // Font families installed on this machine. Loaded once from the OS registry
+  // (Rust `list_system_fonts`). Empty until resolved, so the module-scope
+  // fallback lists keep the font dropdowns populated meanwhile.
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<string[]>('list_system_fonts')
+      .then((fonts) => {
+        if (!cancelled && Array.isArray(fonts) && fonts.length) setSystemFonts(fonts);
+      })
+      .catch(() => {
+        if (!cancelled) setSystemFonts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Split the loaded families into Latin and CJK buckets, falling back to the
+  // curated lists when `list_system_fonts` couldn't run.
+  const latinFamilies = useMemo(
+    () => (systemFonts.length ? systemFonts.filter((f) => !isCJKFamily(f)) : FALLBACK_LATIN_FAMILIES),
+    [systemFonts]
+  );
+  const cjkFamilies = useMemo(
+    () => (systemFonts.length ? systemFonts.filter(isCJKFamily) : FALLBACK_CJK_FAMILIES),
+    [systemFonts]
+  );
+  const latinOptions = useMemo(
+    () => latinFamilies.map((f) => ({ value: f, label: f })),
+    [latinFamilies]
+  );
+  const cjkOptions = useMemo(
+    () => cjkFamilies.map((f) => ({ value: f, label: f })),
+    [cjkFamilies]
+  );
+
   const [showTypographyModal, setShowTypographyModal] = useState<boolean>(false);
-  // The settings modal holds two different natures of content. Each menu entry
-  // promises one of them, so the opener picks which half is shown: live
-  // document typography, or program-level startup preferences.
-  const [settingsModalView, setSettingsModalView] = useState<'typography' | 'preferences'>('typography');
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
   // Apply typography variables to document root
@@ -1955,7 +2003,6 @@ export const App: React.FC = () => {
           handlePrint();
         } else if (e.key === ',' || e.key === '，') {
           e.preventDefault();
-          setSettingsModalView('preferences');
           setShowTypographyModal(true);
         } else if (e.key === 'w' || e.key === 'W') {
           e.preventDefault();
@@ -3118,7 +3165,7 @@ ${texBody}
           <button
             className="wb-icon-btn"
             data-optional="true"
-            onClick={() => { setSettingsModalView('preferences'); setShowTypographyModal(true); }}
+            onClick={() => { setShowTypographyModal(true); }}
             title="偏好设置 (Ctrl+,)"
           >
             <AppIcon name="settings" size={15} />
@@ -3347,6 +3394,30 @@ ${texBody}
                 >
                   {MAX_WIDTH_OPTIONS.map((opt, i) => (
                     <option key={i} value={opt.value}>{opt.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="insp-group">
+                <div className="insp-label">字体族 (Font Family)</div>
+                <select
+                  className="typo-select"
+                  value={matchFamilyValue(typography.latinFont, latinOptions)}
+                  onChange={(e) => setTypography((t) => ({ ...t, latinFont: e.target.value }))}
+                  title="西文正文字体（读取系统已安装字体）"
+                >
+                  {latinOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <select
+                  className="typo-select"
+                  value={matchFamilyValue(typography.cjkFont, cjkOptions)}
+                  onChange={(e) => setTypography((t) => ({ ...t, cjkFont: e.target.value }))}
+                  title="中文正文字体（读取系统已安装字体）"
+                >
+                  {cjkOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
                 </select>
               </div>
@@ -3809,7 +3880,7 @@ $$`}
           <div className="typo-modal-box" onClick={(e) => e.stopPropagation()}>
             <div className="typo-modal-header">
               <div className="typo-modal-title">
-                <span>{settingsModalView === 'preferences' ? '⚙️ 偏好设置 (Preferences)' : '⚙️ 自定义排版与字体设置 (Typography)'}</span>
+                <span>⚙️ 程序设置 (Preferences)</span>
               </div>
               <button className="typo-modal-close-btn" onClick={() => setShowTypographyModal(false)}>
                 ×
@@ -3817,99 +3888,7 @@ $$`}
             </div>
 
             <div className="typo-modal-body">
-              {/* Group 1: 字体配置 (typography view only) */}
-              {settingsModalView === 'typography' && (<>
-              <div className="typo-config-group">
-                <div className="typo-group-title">字体族选择 (Typography Families)</div>
-                
-                <div className="typo-row">
-                  <span className="typo-label">西文字体族 (Latin):</span>
-                  <select
-                    className="typo-select"
-                    value={typography.latinFont}
-                    onChange={(e) => setTypography((t) => ({ ...t, latinFont: e.target.value }))}
-                  >
-                    {LATIN_FONT_OPTIONS.map((opt, i) => (
-                      <option key={i} value={opt.value}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="typo-row">
-                  <span className="typo-label">中文字体族 (CJK):</span>
-                  <select
-                    className="typo-select"
-                    value={typography.cjkFont}
-                    onChange={(e) => setTypography((t) => ({ ...t, cjkFont: e.target.value }))}
-                  >
-                    {CJK_FONT_OPTIONS.map((opt, i) => (
-                      <option key={i} value={opt.value}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Group 2: 字号与行距 */}
-              <div className="typo-config-group">
-                <div className="typo-group-title">字号与间距 (Size & Spacing)</div>
-                
-                <div className="typo-row">
-                  <span className="typo-label">正文字号 (Font Size):</span>
-                  <div className="typo-input-control">
-                    <input
-                      type="range"
-                      min={12}
-                      max={26}
-                      step={1}
-                      className="typo-slider"
-                      value={typography.fontSize}
-                      onChange={(e) => setTypography((t) => ({ ...t, fontSize: Number(e.target.value) }))}
-                    />
-                    <span className="typo-val-badge">{typography.fontSize}px</span>
-                  </div>
-                </div>
-
-                <div className="typo-row">
-                  <span className="typo-label">段落行高 (Line Height):</span>
-                  <div className="typo-input-control">
-                    <input
-                      type="range"
-                      min={1.4}
-                      max={2.5}
-                      step={0.05}
-                      className="typo-slider"
-                      value={typography.lineHeight}
-                      onChange={(e) => setTypography((t) => ({ ...t, lineHeight: Number(e.target.value) }))}
-                    />
-                    <span className="typo-val-badge">{typography.lineHeight}</span>
-                  </div>
-                </div>
-
-                <div className="typo-row">
-                  <span className="typo-label">段间距 (Paragraph Margin):</span>
-                  <div className="typo-input-control">
-                    <input
-                      type="range"
-                      min={0.5}
-                      max={2.5}
-                      step={0.1}
-                      className="typo-slider"
-                      value={typography.paragraphMargin}
-                      onChange={(e) => setTypography((t) => ({ ...t, paragraphMargin: Number(e.target.value) }))}
-                    />
-                    <span className="typo-val-badge">{typography.paragraphMargin}em</span>
-                  </div>
-                </div>
-              </div>
-
-              </>)}
-
-              {/* Group 4: 程序默认启动行为配置 (preferences view only) */}
-              {settingsModalView === 'preferences' && (<>
+              {/* Group: 程序默认启动行为配置 */}
               <div className="typo-config-group">
                 <div className="typo-group-title">程序默认启动设置 (Default Startup Settings)</div>
                 
@@ -4021,8 +4000,6 @@ $$`}
                 </div>
               </div>
 
-              </>)}
-
               {/* Feedback toast banner */}
               {modalFeedback && (
                 <div style={{
@@ -4038,66 +4015,6 @@ $$`}
                   {modalFeedback}
                 </div>
               )}
-
-              {/* Group 3: 段落版式与对齐 (typography view only) */}
-              {settingsModalView === 'typography' && (<>
-              <div className="typo-config-group">
-                <div className="typo-group-title">段落排版格式 (Paragraph Formatting)</div>
-
-                <div className="typo-row">
-                  <span className="typo-label">文本对齐方式 (Align):</span>
-                  <div className="typo-radio-toggle">
-                    <button
-                      className={`typo-radio-btn ${typography.textAlign === 'justify' ? 'active' : ''}`}
-                      onClick={() => setTypography((t) => ({ ...t, textAlign: 'justify' }))}
-                      title="两端齐行，末行强制左对齐（解决尾行大间距）"
-                    >
-                      两端对齐 (末行靠左)
-                    </button>
-                    <button
-                      className={`typo-radio-btn ${typography.textAlign === 'left' ? 'active' : ''}`}
-                      onClick={() => setTypography((t) => ({ ...t, textAlign: 'left' }))}
-                      title="自然左对齐，完全杜绝拉伸间距"
-                    >
-                      自然左对齐
-                    </button>
-                  </div>
-                </div>
-
-                <div className="typo-row">
-                  <span className="typo-label">首行缩进 (Indent):</span>
-                  <div className="typo-radio-toggle">
-                    <button
-                      className={`typo-radio-btn ${!typography.firstLineIndent ? 'active' : ''}`}
-                      onClick={() => setTypography((t) => ({ ...t, firstLineIndent: false }))}
-                    >
-                      无缩进 (顶格)
-                    </button>
-                    <button
-                      className={`typo-radio-btn ${typography.firstLineIndent ? 'active' : ''}`}
-                      onClick={() => setTypography((t) => ({ ...t, firstLineIndent: true }))}
-                    >
-                      缩进 2 字符 (2em)
-                    </button>
-                  </div>
-                </div>
-
-                <div className="typo-row">
-                  <span className="typo-label">版心最大宽度 (Max Width):</span>
-                  <select
-                    className="typo-select"
-                    value={typography.maxWidth}
-                    onChange={(e) => setTypography((t) => ({ ...t, maxWidth: e.target.value }))}
-                  >
-                    {MAX_WIDTH_OPTIONS.map((opt, i) => (
-                      <option key={i} value={opt.value}>
-                        {opt.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              </>)}
             </div>
 
             <div className="typo-modal-footer" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -4113,7 +4030,7 @@ $$`}
                 <button
                   className="typora-btn"
                   onClick={handleSaveAsProgramDefaults}
-                  title="将当前选定的字体、字号、排版参数及主题固化为软件启动时的全局默认配置"
+                  title="将当前主题、视图、公式引擎等固化为软件启动时的全局默认配置"
                 >
                   ⭐ 设为程序默认值
                 </button>

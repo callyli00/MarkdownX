@@ -164,6 +164,105 @@ fn stop_watching_file(
     Ok(())
 }
 
+// List the font families installed on this machine by reading the Windows
+// registry Fonts key. Returns the primary face name of each entry (the label
+// before the parenthetical, e.g. "宋体 & NSimSun" -> "宋体", "Segoe UI Bold"
+// -> "Segoe UI") sorted case-insensitively, with icon/symbol fonts dropped.
+// The frontend uses this to let the user pick from the fonts actually present,
+// instead of a hardcoded list.
+#[tauri::command]
+fn list_system_fonts() -> Result<Vec<String>, String> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let root = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let mut fonts: Result<RegKey, String> =
+        Err("Fonts registry key not found".to_string());
+    for path in [
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts",
+        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Fonts",
+    ] {
+        if let Ok(sub) = root.open_subkey(path) {
+            fonts = Ok(sub);
+            break;
+        }
+    }
+    let fonts = fonts?;
+
+    let mut names: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for res in fonts.enum_values() {
+        let (name, _) = res.map_err(|e| e.to_string())?;
+        // The label is like "Segoe UI (TrueType)" or "宋体 & NSimSun (TrueType)".
+        let paren = name.find('(').unwrap_or(name.len());
+        let mut family = name[..paren].trim().to_string();
+        if family.is_empty() {
+            continue;
+        }
+        // The label can combine multiple faces; keep the primary one only.
+        family = family
+            .split(" & ")
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        // Collapse a recognized trailing style token ("Segoe UI Bold" -> "Segoe
+        // UI") so every weight of a family becomes a single selectable entry.
+        family = strip_style_token(&family);
+        if family.is_empty() {
+            continue;
+        }
+        let upper = family.to_uppercase();
+        if ICON_SYMBOL_FONTS.iter().any(|s| upper.contains(*s)) {
+            continue;
+        }
+        if seen.insert(family.clone()) {
+            names.push(family);
+        }
+    }
+    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    Ok(names)
+}
+
+const ICON_SYMBOL_FONTS: [&str; 8] = [
+    "Segoe MDL2 Assets", "Segoe Fluent Icons", "Segoe Material", "Webdings",
+    "Wingdings", "Symbol", "Marlett", "Segoe Icons",
+];
+
+// Last whitespace-separated word of `s` (or "" if none). Rust String has no
+// `rsplit_whitespace`, so reimplement the small piece we need.
+fn last_word(s: &str) -> Option<&str> {
+    s.split_whitespace().next_back()
+}
+
+fn strip_style_token(s: &str) -> String {
+    let mut result = s.trim().to_string();
+    loop {
+        let lower = result.to_lowercase();
+        let last = last_word(&lower).unwrap_or("");
+        let is_style = matches!(
+            last,
+            "bold"
+                | "italic"
+                | "light"
+                | "semilight"
+                | "semibold"
+                | "extrabold"
+                | "black"
+                | "thin"
+                | "medium"
+                | "regular"
+                | "demibold"
+                | "deminlight"
+        );
+        if !is_style {
+            break;
+        }
+        result = result[..result.len() - last.len()].trim_end().to_string();
+    }
+    result
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -207,7 +306,8 @@ pub fn run() {
             toggle_always_on_top,
             open_devtools,
             start_watching_file,
-            stop_watching_file
+            stop_watching_file,
+            list_system_fonts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
