@@ -53,7 +53,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.2.0';
+const APP_VERSION = 'v2.2.1';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -79,6 +79,15 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.2.1',
+    date: '2026-10-06',
+    items: [
+      '更新源指向真实仓库（https://github.com/callyli00/MarkdownX）—— 本版是“引导版”',
+      '引导含义：这一版需要手动安装一次；从它开始，后续版本可在应用内检查并一键升级',
+      '界面无功能改动'
+    ]
+  },
   {
     version: 'v2.2.0',
     date: '2026-10-04',

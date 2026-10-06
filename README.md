@@ -1,4 +1,4 @@
-# MarkdownX (v2.2.0)
+# MarkdownX (v2.2.1)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -29,6 +29,16 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v2.2.1] - 2026-10-06
+
+#### 引导版：更新源指向真实仓库
+- 更新源已写入配置：
+  `https://github.com/callyli00/MarkdownX/releases/latest/download/latest.json`
+  （仓库为 Public ✓，因此更新清单可被应用匿名拉取 ✓）
+- **本版需要手动安装一次**（因为旧版本内置的是占位地址）。从本版起，后续版本可在应用内
+  检查更新并一键升级。
+- 界面与功能无改动。
 
 ### [v2.2.0] - 2026-10-04
 
