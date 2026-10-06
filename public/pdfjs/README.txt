@@ -1,0 +1,1 @@
+PDF.js offline assets (cmaps/ and standard_fonts/) are copied here automatically from the npm `pdfjs-dist` package by scripts/copy-pdfjs.cjs on install or build. Do not version them.

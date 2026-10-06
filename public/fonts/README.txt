@@ -1,0 +1,1 @@
+The CJK note font (NotoSansSC-Regular.ttf, SIL OFL) is copied here automatically from the npm `@expo-google-fonts/noto-sans-sc` package by scripts/copy-cjk-font.cjs on install or build. Do not version the ~10 MB binary.
