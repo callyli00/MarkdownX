@@ -53,7 +53,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.2.3';
+const APP_VERSION = 'v2.2.4';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -79,6 +79,14 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.2.4',
+    date: '2026-10-06',
+    items: [
+      '字体设置整合进排版检查器：字体族现在读取系统真实安装字体（Latin + CJK 两组下拉），不再使用硬编码列表',
+      '设置弹窗去掉重复的“自定义排版与字体”标签，回归纯偏好设置（程序启动默认行为）'
+    ]
+  },
   {
     version: 'v2.2.3',
     date: '2026-10-06',
