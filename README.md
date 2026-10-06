@@ -1,4 +1,4 @@
-# MarkdownX (v2.2.1)
+# MarkdownX (v2.2.2)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -29,6 +29,34 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v2.2.2] - 2026-10-06
+
+#### 引导版：更新源改用 raw 分发 + 发布走 GitHub API
+
+**为什么不用 GitHub Releases 的网址**
+本机（= 应用所在网络）实测：`github.com` **12 秒超时/连接重置** ✗，而
+`raw.githubusercontent.com` **0.1 秒** ✓、`api.github.com` **0.23 秒** ✓。
+更新检查按设计是**静默**的，指向拉不到的宿主会表现为"自动升级永远不触发"，因此改为：
+
+```
+更新清单: https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/latest.json
+安装包:   https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/MarkdownX_x.y.z_x64-setup.exe
+```
+
+- 两个文件放在专用分支 `release-assets`（**每次发布覆盖**，分支历史始终只有 1 个提交；`main` 保持干净）
+- 发布经 `gh`（走 api.github.com ✓）完成，**发布后脚本自动 curl 实测这两个地址** ✓
+- GitHub Releases 仍可另外建给人看（其链接在 github.com，需要梯子），**应用不依赖它**
+
+**发布一条命令**
+```bash
+node scripts/release-update.mjs --owner callyli00 --repo MarkdownX            # 签名打包 + 生成 latest.json
+node scripts/release-update.mjs --owner callyli00 --repo MarkdownX --skip-build --publish   # 上传并实测
+```
+
+**许可证**：统一为 **Apache-2.0**（与仓库 LICENSE 一致；此前应用内误写 MIT ✗）。
+
+**本版是"引导版"**：需手动安装一次；从它开始，后续版本可在应用内检查更新并一键升级。
 
 ### [v2.2.1] - 2026-10-06
 
@@ -303,7 +331,7 @@
 - **顶栏 `?` 按钮语义归位**：原先点击 `?` 打开快捷键速查表（用户指出该图标不应给快捷键提示）。现改为 **「关于 MarkdownX」**，内容包含：
   - **版本号**（`v1.9.5`）与**构建/更新时间**（2026-10-04）；
   - **本次更新的改动信息**（逐条列出）与**近期版本**摘要；
-  - **许可证类型**（MIT License）与**技术栈**。
+  - **许可证类型**（Apache-2.0）与**技术栈**。
 - **快捷键提示全部收进菜单**：快捷键速查表 / LaTeX 公式指南 / 关于 三项统一位于 `⋯ 菜单 → 帮助`，顶栏不再承担速查入口。
 - **源码模式点击大纲不再全选标题**（用户反馈）：原先 `setSelectionRange(pos, pos + 行长度)` 会把整行标题选中。现改为**仅定位光标**（`pos == posEnd`），并把光标落在标题**文字首位**（自动跳过 `## ` 前缀），同时保留该行的落点高亮与光标列指示条。
   - 验证（生产包 + 独立镜像测量）：`selectionLength = 0`；光标偏移为行内第 3 字符（标题文字起点）；目标行在视口内且高亮/列指示条出现。
@@ -867,4 +895,4 @@ pnpm tauri build
 ---
 
 ## 许可证
-MIT License
+Apache-2.0

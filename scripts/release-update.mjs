@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_KEY = 'C:/Users/callyli00/.tauri/markdownx-updater.key';
+const ASSET_BRANCH = 'release-assets';
 
 function arg(name, fallback = null) {
   const i = process.argv.indexOf(`--${name}`);
@@ -99,7 +100,7 @@ const manifest = {
   platforms: {
     'windows-x86_64': {
       signature,
-      url: `https://github.com/${owner}/${repo}/releases/download/${tag}/${assetName}`
+      url: `https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${assetName}`
     }
   }
 };
@@ -112,11 +113,69 @@ console.log('\n✓ 产物');
 console.log(`   安装包:   ${installer}`);
 console.log(`   签名:     ${signatureFile}`);
 console.log(`   更新清单: ${manifestPath}`);
-console.log('\n→ 发布（任选其一）');
-console.log(`   有 GitHub CLI：gh release create ${tag} "${installer}" "${manifestPath}" --title ${tag} --notes-file -`);
-console.log('   手动：在 GitHub 上创建 Release');
-console.log(`         - tag: ${tag}`);
-console.log(`         - 上传两个文件：${assetName} 与 latest.json`);
-console.log('\n注意：latest.json 必须能被匿名访问（release 资产可以），因为应用在启动时直接拉取它。');
-console.log('另外别忘了把 tauri.conf.json 的 plugins.updater.endpoints 指向：');
-console.log(`   https://github.com/${owner}/${repo}/releases/latest/download/latest.json`);
+console.log(`\n   应用将拉取: https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/latest.json`);
+
+// 5. publish through the API (api.github.com is reachable here; github.com is not)
+function gh(args, inputFile) {
+  const full = ['api', ...args];
+  if (inputFile) full.push('--input', inputFile);
+  return execFileSync('gh', full, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim();
+}
+
+function ensureAssetBranch() {
+  try {
+    gh([`repos/${owner}/${repo}/git/ref/heads/${ASSET_BRANCH}`]);
+    console.log(`   ${ASSET_BRANCH} 分支已存在`);
+    return;
+  } catch {
+    /* does not exist yet */
+  }
+  const head = JSON.parse(gh([`repos/${owner}/${repo}/git/ref/heads/main`]));
+  const payload = join(bundleDir, '.tmp-branch.json');
+  writeFileSync(payload, JSON.stringify({ ref: `refs/heads/${ASSET_BRANCH}`, sha: head.object.sha }));
+  gh([`repos/${owner}/${repo}/git/refs`, '--method', 'POST'], payload);
+  console.log(`   已创建 ${ASSET_BRANCH} 分支（基于 main）`);
+}
+
+function uploadFile(localPath, remoteName) {
+  const apiPath = `repos/${owner}/${repo}/contents/${remoteName}`;
+  let sha;
+  try {
+    sha = JSON.parse(gh([`${apiPath}?ref=${ASSET_BRANCH}`])).sha;
+  } catch {
+    sha = undefined;
+  }
+  const payload = join(bundleDir, `.tmp-${remoteName.replace(/[^\w.-]/g, '_')}.json`);
+  writeFileSync(
+    payload,
+    JSON.stringify({
+      message: `release ${tag}: ${remoteName}`,
+      content: readFileSync(localPath).toString('base64'),
+      branch: ASSET_BRANCH,
+      ...(sha ? { sha } : {})
+    })
+  );
+  gh([apiPath, '--method', 'PUT'], payload);
+  console.log(`   已上传 ${remoteName}${sha ? '（覆盖）' : ''}`);
+}
+
+function verifyRaw() {
+  for (const url of [`https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/latest.json`,
+                     `https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${assetName}`]) {
+    const code = execFileSync('curl', ['-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '20', '-L', url], { encoding: 'utf8' }).trim();
+    console.log(`   ${code === '200' ? '✓' : '✗'} HTTP ${code}  ${url}`);
+  }
+}
+
+if (process.argv.includes('--publish')) {
+  console.log('\n→ 经 GitHub API 发布（api.github.com 可达，绕开 github.com）');
+  ensureAssetBranch();
+  uploadFile(installer, assetName);
+  uploadFile(manifestPath, 'latest.json');
+  console.log('\n→ 实测两个 raw 地址（应用启动时拉的就是它们）');
+  verifyRaw();
+  console.log('\n完成。raw 有几分钟缓存；客户端 20 秒后开始检查，失败会静默重试。');
+} else {
+  console.log('\n→ 发布：加 --publish 由脚本经 API 上传；或手动把两个文件放进 release-assets 分支');
+  console.log(`   node scripts/release-update.mjs --owner ${owner} --repo ${repo} --skip-build --publish`);
+}
