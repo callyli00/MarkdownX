@@ -3448,3 +3448,41 @@ body.theme-dark .pdf-op-error { color: #fca5a5; }
   padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 4px;
   font-size: 13px; background: var(--wb-card, #fff); color: var(--text-main); outline: none;
 }
+
+/* ---- PDF.js selectable text layer ------------------------------------------
+   Glyphs are transparent spans positioned exactly over the canvas, which is what
+   makes the page selectable/copyable. z-index 1 keeps it above the canvas but
+   below the annotation overlay (z-index 2, pointer-events:none). */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 1;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.pdf-text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.pdf-text-layer ::selection {
+  background: rgba(47, 111, 237, 0.35);
+}
+body.theme-dark .pdf-text-layer ::selection {
+  background: rgba(91, 141, 239, 0.45);
+}
+.pdf-hint {
+  padding: 5px 12px;
+  background: rgba(47, 111, 237, 0.10);
+  color: var(--wb-accent, #2f6fed);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}

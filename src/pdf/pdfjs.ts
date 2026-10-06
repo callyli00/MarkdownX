@@ -29,3 +29,6 @@ export function loadPdfDocument(bytes: Uint8Array) {
 }
 
 export type PdfDoc = Awaited<ReturnType<typeof loadPdfDocument>>;
+
+/** pdf.js's selectable text layer, re-exported so callers need one import. */
+export const PdfTextLayer = pdfjsLib.TextLayer;

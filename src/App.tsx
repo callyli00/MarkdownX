@@ -71,7 +71,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.3.0';
+const APP_VERSION = 'v2.3.1';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -97,6 +97,15 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.3.1',
+    date: '2026-10-06',
+    items: [
+      '修复：PDF 页面文字无法选中 —— 新增 PDF.js 文本层，现在可正常选中与复制文字',
+      '修复：高亮 / 下划线 / 删除线 改为「选中文字即标注」（原先要求拖框，且会与文字选择冲突）',
+      '「选择」模式下点击已有标注可删除；缩放后标注仍精确对齐'
+    ]
+  },
   {
     version: 'v2.3.0',
     date: '2026-10-06',

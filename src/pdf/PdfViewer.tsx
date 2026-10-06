@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { loadPdfDocument, type PdfDoc } from './pdfjs';
+import { loadPdfDocument, PdfTextLayer, type PdfDoc } from './pdfjs';
 import { PdfAnnotLayer } from './PdfAnnotLayer';
-import type { PdfAnnot, AnnotKind } from './annotations';
+import { createAnnot, type PdfAnnot, type AnnotKind } from './annotations';
 import { rotatePage, deletePages, insertBlankPage } from './structuralOps';
 
 interface PdfViewerProps {
@@ -23,16 +23,20 @@ interface PdfViewerProps {
 }
 
 const TOOLS: { id: AnnotKind; label: string; title: string }[] = [
-  { id: 'highlight', label: '高亮', title: '拖动框选高亮' },
-  { id: 'underline', label: '下划线', title: '拖动框选下划线' },
-  { id: 'strikeout', label: '删除线', title: '拖动框选删除线' },
-  { id: 'note', label: '便签', title: '拖动框选放置便签' },
-  { id: 'ink', label: '墨迹', title: '按住手绘' },
+  { id: 'highlight', label: '高亮', title: '先用鼠标选中文字，松手即高亮' },
+  { id: 'underline', label: '下划线', title: '先用鼠标选中文字，松手即加下划线' },
+  { id: 'strikeout', label: '删除线', title: '先用鼠标选中文字，松手即加删除线' },
+  { id: 'note', label: '便签', title: '在页面上拖动框选便签位置' },
+  { id: 'ink', label: '墨迹', title: '在页面上按住鼠标手绘' },
 ];
 
+/** Tools implemented by dragging a box on the SVG layer, not by text selection. */
+const DRAG_TOOLS: AnnotKind[] = ['note', 'ink'];
+
 /**
- * Renders every page into its own <canvas>, stacks them in a scroll container and
- * overlays an annotation layer per page. One scale multiplier applies to all pages.
+ * Renders every page into its own <canvas>, lays a selectable PDF.js text layer on
+ * top, and overlays an annotation layer. Highlight/underline/strikeout are created
+ * from a real TEXT SELECTION; note/ink are created by dragging on the SVG layer.
  */
 export const PdfViewer: React.FC<PdfViewerProps> = ({
   bytes,
@@ -60,6 +64,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  const textLayerRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // Keep the newest annots reachable from the load effect without re-running it.
   const annotsRef = useRef(annots);
@@ -75,6 +80,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setLoadError(null);
     setPageSizes([]);
     canvasRefs.current = [];
+    textLayerRefs.current = [];
 
     loadPdfDocument(bytes)
       .then((d) => {
@@ -101,8 +107,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bytes]);
 
-  // Paint every page when the document or the scale changes; record page sizes so
-  // the annotation overlay matches its canvas exactly.
+  // Paint every page when the document or the scale changes: canvas first, then the
+  // selectable text layer at the same viewport, then record the page size so the
+  // annotation overlay matches exactly.
   useEffect(() => {
     if (!doc) return;
     let cancelled = false;
@@ -132,6 +139,26 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
             await page.render({ canvasContext: ctx, viewport, transform }).promise;
           }
         }
+
+        // Selectable text layer — without this, nothing on the page can be selected
+        // (pdf.js paints glyphs into the canvas as pixels) and highlighting would be
+        // impossible.
+        const textDiv = textLayerRefs.current[i];
+        if (textDiv) {
+          if (cancelled) return;
+          const textContent = await page.getTextContent();
+          if (cancelled) return;
+          textDiv.replaceChildren();
+          textDiv.style.width = `${cssW}px`;
+          textDiv.style.height = `${cssH}px`;
+          const textLayer = new PdfTextLayer({
+            textContentSource: textContent,
+            container: textDiv,
+            viewport,
+          });
+          await textLayer.render();
+        }
+
         if (cancelled) return;
         setPageSizes(sizes.slice());
       }
@@ -180,6 +207,34 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     }
   };
 
+  /**
+   * Turn a finished text selection into an annotation. Each client rect of the
+   * selection becomes one normalized band, so a multi-line selection produces one
+   * annotation covering every line.
+   */
+  const annotFromSelection = (pageIndex: number, wrap: HTMLDivElement) => {
+    if (!tool || DRAG_TOOLS.includes(tool)) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    if (!wrap.contains(range.commonAncestorContainer)) return;
+
+    const box = wrap.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) return;
+    const rects = Array.from(range.getClientRects())
+      .filter((r) => r.width > 1 && r.height > 1)
+      .map((r) => ({
+        x: (r.left - box.left) / box.width,
+        y: (r.top - box.top) / box.height,
+        w: r.width / box.width,
+        h: r.height / box.height,
+      }));
+    if (!rects.length) return;
+
+    onAnnotsChange([...annots, createAnnot({ page: pageIndex, kind: tool, rects })]);
+    sel.removeAllRanges(); // consume the selection so the new mark is what you see
+  };
+
   const commitNote = () => {
     if (!noteEditId) return;
     onAnnotsChange(annots.map((x) => (x.id === noteEditId ? { ...x, text: noteDraft } : x)));
@@ -215,6 +270,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     [tool]
   );
 
+  const isDragTool = tool !== null && DRAG_TOOLS.includes(tool);
+
   return (
     <div className="pdf-viewer">
       <div className="pdf-toolbar">
@@ -222,7 +279,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           {toolButtons}
           <button
             className={`pdf-btn ${tool === null ? 'active' : ''}`}
-            title="选择：点击一个标注即可删除它"
+            title="选择：可自由选中文字；点击已有标注即可删除它"
             onClick={() => setTool(null)}
           >
             选择
@@ -302,6 +359,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         </span>
       </div>
 
+      {/* Once a text-selection tool is picked, say so — otherwise users drag boxes
+          and think the tool is broken. */}
+      {tool !== null && !isDragTool && (
+        <div className="pdf-hint">
+          已选择「{TOOLS.find((t) => t.id === tool)?.label}」：用鼠标选中文字，松手即生成标注。
+        </div>
+      )}
+
       {noteEditId && (
         <div className="pdf-note-edit">
           <span>便签文字：</span>
@@ -347,11 +412,18 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
                 width: pageSizes[i]?.width,
                 height: pageSizes[i]?.height,
               }}
+              onMouseUp={(e) => annotFromSelection(i, e.currentTarget)}
             >
               <canvas
                 className="pdf-page-canvas"
                 ref={(el) => {
                   canvasRefs.current[i] = el;
+                }}
+              />
+              <div
+                className="pdf-text-layer textLayer"
+                ref={(el) => {
+                  textLayerRefs.current[i] = el;
                 }}
               />
               {pageSizes[i] && (

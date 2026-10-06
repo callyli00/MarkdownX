@@ -31,13 +31,18 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [ink, setInk] = useState<{ x: number; y: number }[]>([]);
 
+  // Only note/ink are drawn by dragging on this layer. For highlight/underline/
+  // strikeout the layer must stay transparent to pointer events so the underlying
+  // PDF.js text layer keeps its native SELECTION behaviour.
+  const drawing = tool === 'note' || tool === 'ink';
+
   const local = useCallback((e: React.PointerEvent) => {
     const box = ref.current!.getBoundingClientRect();
     return { x: e.clientX - box.left, y: e.clientY - box.top };
   }, []);
 
   const onPointerDown = (e: React.PointerEvent) => {
-    if (!tool || width <= 0 || height <= 0) return;
+    if (!drawing || width <= 0 || height <= 0) return;
     ref.current?.setPointerCapture(e.pointerId);
     const p = local(e);
     if (tool === 'ink') setInk([p]);
@@ -45,14 +50,14 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!tool) return;
+    if (!drawing) return;
     const p = local(e);
     if (tool === 'ink' && ink.length) setInk((prev) => [...prev, p]);
     else if (drag) setDrag((d) => (d ? { ...d, x1: p.x, y1: p.y } : d));
   };
 
   const onPointerUp = () => {
-    if (!tool) return;
+    if (!drawing) return;
     if (tool === 'ink' && ink.length > 1) {
       onAdd(
         createAnnot({
@@ -89,7 +94,7 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
       className="pdf-annot-layer"
       width={width}
       height={height}
-      style={{ pointerEvents: tool ? 'auto' : 'none', cursor: tool ? 'crosshair' : 'default' }}
+      style={{ pointerEvents: drawing ? 'auto' : 'none', cursor: drawing ? 'crosshair' : 'default' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -100,7 +105,12 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
           onClick={() => {
             if (!tool && onDelete) onDelete(a.id);
           }}
-          style={{ cursor: !tool && onDelete ? 'pointer' : 'inherit' }}
+          style={{
+            // Clicking an existing mark deletes it, but only in select mode — while a
+            // text-selection tool is active the click must reach the text layer.
+            pointerEvents: !tool && onDelete ? 'auto' : 'none',
+            cursor: !tool && onDelete ? 'pointer' : 'inherit',
+          }}
         >
           {a.kind === 'ink' && (
             <polyline
