@@ -159,6 +159,27 @@ function ensureAssetBranch() {
   console.log(`   已创建 ${ASSET_BRANCH} 分支（基于 main）`);
 }
 
+/** No rollback is wanted, so superseded installers are removed: the branch keeps two files. */
+function pruneOldInstallers(keepName) {
+  let listing;
+  try {
+    listing = JSON.parse(gh([`repos/${owner}/${repo}/contents?ref=${ASSET_BRANCH}`]));
+  } catch (err) {
+    console.log(`   （读不到分支文件列表，跳过清理：${String(err).split('\n')[0]}）`);
+    return;
+  }
+  for (const item of listing) {
+    if (item.type !== 'file') continue;
+    if (!/^MarkdownX_.*_x64-setup\.exe$/.test(item.name) || item.name === keepName) continue;
+    const payload = join(bundleDir, '.tmp-delete.json');
+    writeFileSync(payload, JSON.stringify({ message: `release ${tag}: drop superseded ${item.name}`, sha: item.sha, branch: ASSET_BRANCH }));
+    gh([`repos/${owner}/${repo}/contents/${item.name}`, '--method', 'DELETE'], payload);
+    console.log(`   已移除旧安装包 ${item.name}`);
+  }
+  const after = JSON.parse(gh([`repos/${owner}/${repo}/contents?ref=${ASSET_BRANCH}`])).map((i) => i.name);
+  console.log(`   分支现有文件: ${after.join(', ')}`);
+}
+
 function uploadFile(localPath, remoteName) {
   const apiPath = `repos/${owner}/${repo}/contents/${remoteName}`;
   let sha;
@@ -215,6 +236,7 @@ function verifyRaw() {
 if (process.argv.includes('--publish')) {
   console.log('\n→ 经 GitHub API 发布（api.github.com 可达，绕开 github.com）');
   ensureAssetBranch();
+  pruneOldInstallers(assetName);
   uploadFile(installer, assetName);
   uploadFile(manifestPath, 'latest.json');
   // Also (re)create the GitHub Release: human-facing page, tag, and the fallback endpoint.
@@ -229,8 +251,8 @@ if (process.argv.includes('--publish')) {
       '--latest'
     ];
     try {
-      execFileSync(ghBin(), [...args, '--clobber'], { stdio: 'pipe' });
-      console.log(`   已更新 GitHub Release ${tag}`);
+      execFileSync(ghBin(), ['release', 'upload', tag, installer, manifestPath, '--clobber'], { stdio: 'pipe' });
+      console.log(`   已更新 GitHub Release ${tag} 的资产`);
     } catch {
       execFileSync(ghBin(), args, { stdio: 'pipe' });
       console.log(`   已创建 GitHub Release ${tag}`);

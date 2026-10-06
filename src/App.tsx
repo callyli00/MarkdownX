@@ -53,7 +53,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.2.2';
+const APP_VERSION = 'v2.2.3';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -79,6 +79,15 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.2.3',
+    date: '2026-10-06',
+    items: [
+      '自动升级端点多路兜底：raw 优先（不依赖 github.com），GitHub Release 作为后备',
+      '发布流程同时更新 raw 与 Release，并自动实测两条链路的可达性',
+      '这是第一次由应用自身完成的升级 —— 若你看到这条说明，说明自动升级已跑通 🎉'
+    ]
+  },
   {
     version: 'v2.2.2',
     date: '2026-10-06',
