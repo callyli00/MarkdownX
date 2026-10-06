@@ -169,7 +169,12 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .manage(WatcherState::default())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        // Auto-update: the UI asks the plugin to check a signed manifest; the user
+        // decides whether to download and install it. The private signing key never
+        // enters this project - only the public key is in tauri.conf.json.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
 
     #[cfg(desktop)]
     {

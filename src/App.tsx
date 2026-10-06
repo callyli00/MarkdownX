@@ -6,6 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
 import { renderDocument } from './utils/renderClient';
+import { checkForUpdate, installUpdate, type UpdateCheckResult, type UpdateProgress } from './utils/updater';
 import { AppIcon } from './AppIcon';
 import './App.css';
 
@@ -52,7 +53,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.1.1';
+const APP_VERSION = 'v2.2.0';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'MIT License';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -79,7 +80,17 @@ const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
   {
-    version: 'v2.1.0',
+    version: 'v2.2.0',
+    date: '2026-10-04',
+    items: [
+      '自动升级（GitHub/HTTPS + 官方 updater 插件）：启动后静默检查，发现新版本只在帮助图标上点一个小圆点',
+      '更新由用户决定：帮助菜单「检查更新…」查看版本与说明，点「下载并安装」才下载、校验签名、静默安装并重启',
+      '更新包经 minisign 签名校验；私钥保存在仓库之外，配置里只有公钥',
+      '任何检查/下载失败都静默跳过、只记日志，绝不阻塞启动或打断编辑'
+    ]
+  },
+  {
+    version: 'v2.1.1',
     date: '2026-10-04',
     items: [
       '菜单摆放重构（D 方案）：取消“全能菜单”，改按性质分布到图标与右键菜单',
@@ -1088,6 +1099,33 @@ export const App: React.FC = () => {
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   }, [isSidebarOpen, sidebarWidth]);
+  /** Auto-update: the app checks, the user decides. Nothing installs on its own. */
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult>({ status: 'idle' });
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [updateInstallError, setUpdateInstallError] = useState<string | null>(null);
+
+  const runUpdateCheck = useCallback(async (showDialog: boolean) => {
+    setUpdateInfo({ status: 'checking' });
+    const result = await checkForUpdate();
+    setUpdateInfo(result);
+    if (showDialog) setShowUpdateModal(true);
+    return result;
+  }, []);
+
+  // Silent check a little after startup: never a popup, never in the reader's way.
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void runUpdateCheck(false); }, 20000);
+    return () => window.clearTimeout(timer);
+  }, [runUpdateCheck]);
+
+  const startUpdateInstall = useCallback(async () => {
+    if (updateInfo.status !== 'available' || !updateInfo.update) return;
+    setUpdateInstallError(null);
+    const result = await installUpdate(updateInfo.update, setUpdateProgress);
+    if (!result.ok) setUpdateInstallError(result.error);
+  }, [updateInfo]);
+
   /** Right-click menu: tabs carry document actions, the paper carries output actions. */
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; kind: 'tab' | 'content'; fileId?: string } | null>(null);
 
@@ -3061,7 +3099,7 @@ ${texBody}
           {/* Help: cheat sheet, LaTeX guide, about (version / release notes / licence). */}
           <div className="wb-menu-host">
             <button
-              className={`wb-icon-btn ${activeMenu === 'help' ? 'active' : ''}`}
+              className={`wb-icon-btn ${activeMenu === 'help' ? 'active' : ''} ${updateInfo.status === 'available' ? 'has-update' : ''}`}
               data-optional="true"
               onClick={(e) => { e.stopPropagation(); setActiveMenu(activeMenu === 'help' ? null : 'help'); }}
               title="帮助：快捷键速查 / LaTeX 指南 / 关于"
@@ -3077,6 +3115,13 @@ ${texBody}
                   <span>LaTeX 公式与排版指南</span>
                 </div>
                 <div className="dropdown-divider" />
+                <div className="dropdown-item" onClick={() => { setActiveMenu(null); void runUpdateCheck(true); }}>
+                  <span>
+                    {updateInfo.status === 'available'
+                      ? `检查更新（有新版本 ${updateInfo.version}）`
+                      : updateInfo.status === 'checking' ? '正在检查更新…' : '检查更新…'}
+                  </span>
+                </div>
                 <div className="dropdown-item" onClick={() => { setShowAboutModal(true); setActiveMenu(null); }}>
                   <span>关于 MarkdownX</span>
                 </div>
@@ -3442,6 +3487,79 @@ ${texBody}
             )}
           </div>
         </>
+      )}
+
+      {/* Auto-update dialog: shown only when the user asks, or after a manual check */}
+      {showUpdateModal && (
+        <div className="typo-modal-overlay" onClick={() => { if (!updateProgress) setShowUpdateModal(false); }}>
+          <div className="typo-modal-box update-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="typo-modal-header">
+              <div className="typo-modal-title">
+                <span>软件更新</span>
+              </div>
+              <button className="typo-modal-close-btn" onClick={() => { if (!updateProgress) setShowUpdateModal(false); }}>×</button>
+            </div>
+            <div className="typo-modal-body update-body">
+              {updateInfo.status === 'checking' && <p className="update-line">正在检查更新…</p>}
+
+              {updateInfo.status === 'none' && (
+                <p className="update-line">已是最新版本 ✓（当前 {APP_VERSION}）</p>
+              )}
+
+              {updateInfo.status === 'error' && (
+                <>
+                  <p className="update-line">检查更新失败 ✗</p>
+                  <p className="update-detail">{updateInfo.error}</p>
+                  <p className="update-hint">
+                    请确认更新源已配置（<code>tauri.conf.json → plugins.updater.endpoints</code>）
+                    且网络可达；未配置时不影响正常使用。
+                  </p>
+                </>
+              )}
+
+              {updateInfo.status === 'available' && (
+                <>
+                  <p className="update-line">
+                    发现新版本 <strong>{updateInfo.version}</strong>
+                    <span className="update-dim">（当前 {updateInfo.currentVersion || APP_VERSION}）</span>
+                  </p>
+                  {updateInfo.notes ? <pre className="update-notes">{updateInfo.notes}</pre> : null}
+                  {updateProgress && (
+                    <div className="update-progress">
+                      <div className="update-progress-track">
+                        <div
+                          className="update-progress-bar"
+                          style={{ width: `${Math.round((updateProgress.ratio ?? 0) * 100)}%` }}
+                        />
+                      </div>
+                      <span className="update-progress-label">
+                        {updateProgress.phase === 'downloading'
+                          ? `下载中 ${Math.round((updateProgress.ratio ?? 0) * 100)}%`
+                          : updateProgress.phase === 'installing'
+                            ? '正在安装…'
+                            : '安装完成，正在重启…'}
+                      </span>
+                    </div>
+                  )}
+                  {updateInstallError && <p className="update-error">安装失败：{updateInstallError}</p>}
+                  <p className="update-hint">
+                    更新包经过签名校验；安装程序会保持当前安装位置与文件关联。
+                  </p>
+                </>
+              )}
+            </div>
+            {updateInfo.status === 'available' && (
+              <div className="typo-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button className="typora-btn" onClick={() => setShowUpdateModal(false)} disabled={!!updateProgress}>
+                  稍后
+                </button>
+                <button className="typora-btn typora-btn-primary" onClick={() => void startUpdateInstall()} disabled={!!updateProgress}>
+                  {updateProgress ? '正在更新…' : '下载并安装'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
             {/* Drag & Drop Visual Feedback Overlay */}
