@@ -34,10 +34,17 @@
 
 #### 引导版：更新源改用 raw 分发 + 发布走 GitHub API
 
-**为什么不用 GitHub Releases 的网址**
-本机（= 应用所在网络）实测：`github.com` **12 秒超时/连接重置** ✗，而
-`raw.githubusercontent.com` **0.1 秒** ✓、`api.github.com` **0.23 秒** ✓。
-更新检查按设计是**静默**的，指向拉不到的宿主会表现为"自动升级永远不触发"，因此改为：
+**为什么以 raw 为主、Release 为备**
+本机（= 应用所在网络）实测两种路线**都能用**，差别在依赖与速度：
+
+| 路线 | 实测 | 是否依赖 github.com 前门 |
+|---|---|---|
+| raw（`release-assets` 分支） | 清单 0.42s / 包 1.76s，**0 次跳转** | **否** ✓ |
+| GitHub Release | 清单 1.28s（2 跳）/ 包 2.84s（1 跳） | **是** ✗（该主机在本网络时通时断：曾测得 12s 超时/连接重置） |
+
+更新检查按设计是**静默**的：若某个宿主当时不可达，表现就是"自动升级不触发"而没有任何提示。
+因此 `plugins.updater.endpoints` 配成**两条按序尝试**（raw 优先、Release 兜底），
+两种路线都会在每次发布时一并更新：
 
 ```
 更新清单: https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/latest.json
@@ -47,7 +54,8 @@
 - 两个文件放在专用分支 `release-assets`（**每次发布覆盖**这两个文件，`main` 保持干净；
   分支上每次覆盖会留下一个提交，属正常，可定期清理）
 - 发布经 `gh`（走 api.github.com ✓）完成，**发布后脚本自动 curl 实测这两个地址** ✓
-- GitHub Releases 仍可另外建给人看（其链接在 github.com，需要梯子），**应用不依赖它**
+- 同时也会创建 GitHub Release（标签、发布页、订阅、CDN 资产），供人查看与作为兜底端点 ✓
+- **我方案的代价**：raw 那份文件进 git 历史，每版约 +5.6 MB ✗（Release 的资产不占仓库 ✓）
 
 **发布一条命令**（已实测可用 ✓）
 ```bash

@@ -181,6 +181,18 @@ function uploadFile(localPath, remoteName) {
   console.log(`   已上传 ${remoteName}${sha ? '（覆盖）' : ''}`);
 }
 
+function verifyEndpoints() {
+  const url = `https://github.com/${owner}/${repo}/releases/latest/download/latest.json`;
+  let code = 'unknown';
+  try {
+    code = execFileSync('curl', ['-s', '-o', 'NUL', '-w', '%{http_code}', '--max-time', '25', '-L', url],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (err) {
+    code = String(err.stdout || '').trim() || 'failed';
+  }
+  console.log(`   ${code === '200' ? '✓' : '✗'} HTTP ${code}  ${url}`);
+}
+
 function verifyRaw() {
   // `-o /dev/null` is a POSIX path: on Windows curl exits 23 (write error) even though it
   // fetched fine, which used to crash this check. Ask curl for the code and ignore the
@@ -205,8 +217,31 @@ if (process.argv.includes('--publish')) {
   ensureAssetBranch();
   uploadFile(installer, assetName);
   uploadFile(manifestPath, 'latest.json');
-  console.log('\n→ 实测两个 raw 地址（应用启动时拉的就是它们）');
+  // Also (re)create the GitHub Release: human-facing page, tag, and the fallback endpoint.
+  try {
+    const notesFile = join(bundleDir, '.tmp-notes.md');
+    writeFileSync(notesFile, notes + '\n');
+    const args = [
+      'release', 'create', tag,
+      installer, manifestPath,
+      '--title', `MarkdownX ${tag}`,
+      '--notes-file', notesFile,
+      '--latest'
+    ];
+    try {
+      execFileSync(ghBin(), [...args, '--clobber'], { stdio: 'pipe' });
+      console.log(`   已更新 GitHub Release ${tag}`);
+    } catch {
+      execFileSync(ghBin(), args, { stdio: 'pipe' });
+      console.log(`   已创建 GitHub Release ${tag}`);
+    }
+  } catch (err) {
+    console.log(`   注意：GitHub Release 未创建（${String(err).split('\n')[0]}）——不影响 raw 端点`);
+  }
+
+  console.log('\n→ 实测全部端点（raw 优先，Release 兜底）');
   verifyRaw();
+  verifyEndpoints();
   console.log('\n完成。raw 有几分钟缓存；客户端 20 秒后开始检查，失败会静默重试。');
 } else {
   console.log('\n→ 发布：加 --publish 由脚本经 API 上传；或手动把两个文件放进 release-assets 分支');
