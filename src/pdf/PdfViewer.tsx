@@ -15,6 +15,8 @@ interface PdfViewerProps {
   onRequestMetadata?: () => void;
   /** Flatten annotations into a shareable, non-editable copy. */
   onExportFlattened?: () => void;
+  /** Merge other PDFs into a new document. */
+  onMergePdfs?: () => void;
   onVisiblePageChange?: (page: number, total: number) => void;
   onDocumentReady?: (doc: PdfDoc) => void;
   onError?: (message: string) => void;
@@ -40,6 +42,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   onExtractPage,
   onRequestMetadata,
   onExportFlattened,
+  onMergePdfs,
   onVisiblePageChange,
   onDocumentReady,
   onError,
@@ -286,6 +289,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
             onClick={() => onExportFlattened?.()}
           >
             导出压平
+          </button>
+          <button className="pdf-btn" title="选择多个 PDF 合并为一个新文档" onClick={() => onMergePdfs?.()}>
+            合并 PDF…
           </button>
         </span>
 

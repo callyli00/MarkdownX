@@ -3,7 +3,7 @@
 面向"接手/续做这个项目的人（或 AI）"的操作文档。README 讲**功能与历史**，本手册讲**怎么改、怎么验证、怎么发版**，
 以及**哪些坑真的踩过、哪些结论真的验证过**。
 
-> 对应版本：v2.2.4（2026-10-06）。每条操作都来自本项目的实际执行记录，不是推测。
+> 对应版本：v2.3.0（2026-10-06）。每条操作都来自本项目的实际执行记录，不是推测。
 
 ---
 
@@ -47,6 +47,8 @@ npm run tauri build          # 缺私钥则不会产出 .sig，自动升级即�
 | `scripts/release-update.mjs` | ~271 | 发布：签名打包 → 清单 → 上传 raw + 建 Release → **自动实测** |
 | `scripts/copy-mathjax.cjs` | ~85 | 离线 MathJax 打包（含 35 个 TeX 扩展；缺了公式会报错） |
 | `tools/render-equivalence-gate/` | — | 渲染等价护栏（语料 + 黄金文件 + gate） |
+| `src/pdf/` | — | PDF 预览/标注/结构编辑（v2.3.0 新增；纯逻辑带 Vitest 覆盖） |
+| `scripts/copy-pdfjs.cjs` / `scripts/copy-cjk-font.cjs` | — | 离线拷贝 PDF.js 资源与 CJK 便签字体 |
 
 Tauri 命令：`get_cli_args`、`read_file_from_path`、`read_dir_files`、`toggle_fullscreen`、
 `toggle_always_on_top`、`open_devtools`、`start_watching_file`、`stop_watching_file`。
@@ -187,7 +189,7 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 ## 10. 已知边界（诚实声明）
 
 - 自动升级端到端**已实测一次**（2.2.2 → 2.2.3，系统侧确认文件版本变化）；其余版本依赖同一路径。
-- 尚无 CI/自动化测试；`gate.cjs` 需手动执行。
+- 单元测试：`npm run test`（Vitest，覆盖 `src/pdf/` 纯逻辑）；**渲染护栏 `gate.cjs` 仍需手动执行**；无 CI。
 - `README.md` 变更日志很长（历史包袱），新改动只需在顶部加一节。
 
 ---
@@ -197,3 +199,46 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 - targets 已收敛为 `["nsis"]`；若需要 Linux 包再补 `appimage`/`deb`。
 - 状态栏保持通栏（用户明确要求不动）；侧边栏贯通到状态栏上沿。
 - 可选：把 `git`/`gh` 加入 PATH、把浏览器 harness 固化到 `tools/ui-harness/`、加 `npm run gate` 脚本。
+- PDF 后续可选：页面缩略图导航、PDF 内文本搜索、标注清单导出、原生 `/Annots` 字典。
+
+---
+
+## 12. PDF 模块（v2.3.0 新增）
+
+### 12.1 分层
+
+| 文件 | 职责 |
+|---|---|
+| `src/pdf/pathKind.ts` | 零依赖 `isPdfPath`（可在 Node 测） |
+| `src/pdf/openPdf.ts` | 经 plugin-fs `readFile` 读字节；`%PDF` 魔数在前 1024 字节内搜索 |
+| `src/pdf/pdfjs.ts` | PDF.js 启动：worker(`?url`) + 离线 cMaps/标准字体 |
+| `src/pdf/PdfViewer.tsx` | 多页 canvas + 工具条 + 可见页追踪（IntersectionObserver） |
+| `src/pdf/PdfAnnotLayer.tsx` | SVG 标注覆盖层（高亮/下划线/删除线/便签/墨迹） |
+| `src/pdf/annotations.ts` | 标注模型（归一化坐标 0..1，top-left 原点） |
+| `src/pdf/coords.ts` | CSS 像素 ↔ 归一化 ↔ PDF 点（含 /Rotate 处理） |
+| `src/pdf/annotStore.ts` | 标注嵌入 PDF 目录私有键 `MarkdownXAnnots`（base64 JSON） |
+| `src/pdf/flatten.ts` | 压平到内容流；CJK 便签用 Noto Sans SC 子集 |
+| `src/pdf/structuralOps.ts` | 旋转/删页/插页/重排/提取/合并/拆分/元数据 |
+| `src/pdf/cjkFont.ts` | 记忆化 fetch `/fonts/NotoSansSC-Regular.ttf` |
+
+### 12.2 三条必须记住的坑
+
+1. **`bytes.slice()` 是强制的**：pdf.js 会把 `data` 的 ArrayBuffer **转移（transfer）**给 worker；
+   不复制的话调用方手里的 `Uint8Array` 会变成零长度，保存时写出空文件。
+2. **中文 PDF 必须有 cMaps**：否则 pdf.js 渲染成方框（空白/豆腐块）。资源靠
+   `scripts/copy-pdfjs.cjs` 从 node_modules 拷到 `public/pdfjs/`；换 pdfjs 版本后要重跑。
+3. **不要把 pdf-lib 静态导入 `App.tsx`**：pdf-lib + fontkit ≈ 1 MB。它们在各个调用点用
+   `await import()` 动态引入；一旦改回静态导入，启动包会从 ~350 kB 涨回 ~1.4 MB。
+
+### 12.3 保存语义（用户拍板）
+
+- **Ctrl+S**：标注写回 PDF 内嵌私有键 → **仍可再编辑**（不压平）。
+- **导出压平副本**：烧进页面内容流 → 任何阅读器可见、不可再编辑；中文便签用
+  Noto Sans SC（SIL OFL）子集嵌入。
+
+### 12.4 已核实的字体来源
+
+`@expo-google-fonts/noto-sans-sc@0.4.4` 的 `400Regular/NotoSansSC_400Regular.ttf`
+（10,559,284 B，SIL OFL，允许再分发）。
+**反例**：`@fontsource/noto-sans-sc` 只发按 Unicode 分片的 woff2，字形表不完整，pdf-lib 不能用。
+**禁用**：Windows 系统字体（微软 EULA 不允许把其字体嵌入再分发的 PDF）。

@@ -71,7 +71,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.2.4';
+const APP_VERSION = 'v2.3.0';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -97,6 +97,17 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.3.0',
+    date: '2026-10-06',
+    items: [
+      'PDF 预览：以独立标签页打开 PDF，多页渲染、缩放、翻页；中文 PDF 正常显示（内嵌 cMaps）',
+      'PDF 标注：高亮 / 下划线 / 删除线 / 便签 / 墨迹；保存后标注嵌入 PDF，可再次编辑',
+      'PDF 结构编辑：旋转、删除页、插入空白页、提取单页、合并多个 PDF、编辑文档元数据',
+      '导出压平副本：标注烧进页面，任何阅读器可见；中文便签用 Noto Sans SC 子集嵌入',
+      'pdf.js / pdf-lib 按需懒加载 —— Markdown 的启动速度不受影响'
+    ]
+  },
   {
     version: 'v2.2.4',
     date: '2026-10-06',
@@ -2380,6 +2391,42 @@ export const App: React.FC = () => {
     }
   };
 
+  /** Merge several PDFs (picked from disk) into a new unsaved tab. */
+  const handleMergePdfs = async (): Promise<void> => {
+    try {
+      const selected = await open({
+        filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
+        multiple: true,
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length < 2) {
+        setPdfOpenError('请至少选择两个 PDF 文件进行合并');
+        return;
+      }
+      const { mergePdfs } = await import('./pdf/structuralOps');
+      const docs: Uint8Array[] = [];
+      for (const p of paths) docs.push(await loadPdfBytes(p));
+      const merged = await mergePdfs(docs);
+      const newId = `pdf-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const mergedTab: FileTab = {
+        id: newId,
+        name: `合并结果-${paths.length}份.pdf`,
+        path: null,
+        content: '',
+        isModified: true,
+        kind: 'pdf',
+        pdfBytes: merged,
+        pdfAnnots: [],
+      };
+      openFilesRef.current = [...openFilesRef.current, mergedTab];
+      setOpenFiles((prev) => [...prev, mergedTab]);
+      setActiveFileId(newId);
+    } catch (e) {
+      setPdfOpenError(`合并失败：${String((e as Error)?.message || e)}`);
+    }
+  };
+
   const openPdfMetadata = async (): Promise<void> => {
     const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
     if (!f?.pdfBytes) return;
@@ -3710,6 +3757,7 @@ ${texBody}
                 onExtractPage={(idx) => void handleExtractPdfPage(idx)}
                 onRequestMetadata={() => void openPdfMetadata()}
                 onExportFlattened={() => void handleExportFlattenedPdf()}
+                onMergePdfs={() => void handleMergePdfs()}
                 onVisiblePageChange={(page, total) => setPdfPageInfo({ page, total })}
                 onError={(msg) => console.error('PDF render error:', msg)}
               />
