@@ -3,7 +3,7 @@
 面向"接手/续做这个项目的人（或 AI）"的操作文档。README 讲**功能与历史**，本手册讲**怎么改、怎么验证、怎么发版**，
 以及**哪些坑真的踩过、哪些结论真的验证过**。
 
-> 对应版本：v2.3.7（2026-10-07）。每条操作都来自本项目的实际执行记录，不是推测。
+> 对应版本：v2.4.0（2026-10-07）。每条操作都来自本项目的实际执行记录，不是推测。
 
 ---
 
@@ -304,7 +304,29 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 
 已知边界：**逐页尺寸不同的 PDF 只能按第一页的纸张尺寸输出**（CSS 一个文档只能有一条 `@page size`）。
 
-### 12.6 标注的两种操作习惯都要支持
+### 12.6 右键菜单架构（v2.4.0 起）
+
+三件套，新增菜单项只改三处：
+
+1. **模型** `src/ui/contextMenuModel.ts`：纯函数 `buildMenu(ContextTarget) → MenuItem[]`。
+   6 种 surface（tab / preview / sidebar-file / sidebar-doc / pdf-page / pdf-annot），
+   条目顺序 = 特异性（选区 > 命中元素 > surface 默认）。有 18 条单测锁行为。
+2. **分类器** `classifyPreviewTarget()`（App.tsx）：从事件目标解析选区/链接/图片/代码/公式。
+   源码切片靠渲染器的 `data-src-start/end` 锚点，**禁止**用文本搜索猜位置。
+3. **分发器** `runContextAction(id, ctx)`（App.tsx）：switch on item id 调既有 handler。
+
+接线要点（漏一个就会出现"右键没反应"）：
+- 捕获阶段抑制器（App.tsx `handleContextMenu`）的 `customMenuSurface` 选择器必须包含新 surface
+  的根类名（`.pdf-page-wrap` / `.file-tree-item` / `.sidebar-doc-item` …），否则事件在到达
+  React 前就被 `stopPropagation` 吃掉；
+- PDF 标注命中用 `annotAtPoint` **几何命中**（annotations.ts，有单测），不要改成 DOM 命中——
+  标注 SVG 在选择工具下是 `pointer-events:none`，事件永远落不到它上面；
+- 菜单渲染由 `buildMenu` 驱动，不要再手写 per-surface 的 JSX 三元分支。
+
+外部动作（打开链接 / 在文件夹中显示）走 `@tauri-apps/plugin-opener` 的**动态导入**；
+capabilities 只给了 `opener:allow-open-url` 与 `opener:allow-reveal-item-in-dir`，不要扩权。
+
+### 12.7 标注的两种操作习惯都要支持
 
 - **先选工具再选文字**：松手即标注（`PdfViewer` 内部完成）。
 - **先选文字再按工具按钮**：`PdfViewer` 通过 `onSelectionChange` 把待应用选区上报给 `App`，

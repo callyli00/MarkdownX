@@ -87,7 +87,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.3.7';
+const APP_VERSION = 'v2.4.0';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -129,6 +129,16 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.0',
+    date: '2026-10-07',
+    items: [
+      '全新右键菜单（模型驱动，随右键目标变化）：Markdown 预览支持复制选中文字 / 复制此块 Markdown / 复制 LaTeX 源码 / 复制代码 / 在源码处打开 / 打开链接·复制链接 / 图片复制路径·在文件夹中显示',
+      'PDF 页面右键：复制选中文字 / 旋转·插页·提取·删除此页 / 打印 / 缩放；标注右键：删除此标注·复制便签文字',
+      '侧栏文件树、已打开文档、最近文件右键：打开 / 复制完整路径 / 在文件夹中显示',
+      '菜单项按目标智能启用/禁用（如单页 PDF 不可删页、网络图片不可在文件夹显示），并做视口边界钳制不出屏'
+    ]
+  },
   {
     version: 'v2.3.7',
     date: '2026-10-07',
