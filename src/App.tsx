@@ -86,7 +86,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.3.5';
+const APP_VERSION = 'v2.3.6';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -112,6 +112,15 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.3.6',
+    date: '2026-10-07',
+    items: [
+      '修复：打印 PDF 出现「一页正常、一页空白」—— 图像纵横比哪怕比页面高一丝，每张图都会溢出并多出一个近乎空白的 sheet',
+      '修法：每页图像改用严格小于页面的盒子 + object-fit: contain，任何纵横比都不可能溢出',
+      '该缺陷已在真实打印管线中离线复现（3 页内容打出 6 页）并验证修复后才应用'
+    ]
+  },
   {
     version: 'v2.3.5',
     date: '2026-10-07',

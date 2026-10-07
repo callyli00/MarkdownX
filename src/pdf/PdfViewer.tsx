@@ -252,12 +252,21 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       return;
     }
 
+    const wStr = wMm.toFixed(2);
+    const hStr = hMm.toFixed(2);
     fdoc.open();
     fdoc.write(
       '<!doctype html><html><head><meta charset="utf-8"><style>' +
-        `@page { size: ${wMm.toFixed(2)}mm ${hMm.toFixed(2)}mm; margin: 0; }` +
+        `@page { size: ${wStr}mm ${hStr}mm; margin: 0; }` +
         'html,body{margin:0;padding:0;background:#fff;}' +
-        'img{display:block;width:100%;height:auto;}' +
+        // Each image gets a box STRICTLY smaller than the page, with object-fit
+        // contain. `width:100%;height:auto` looks right but overflows the moment an
+        // image's aspect is a hair taller than the page — canvas rounding, or a page
+        // whose size differs from the first one. Each overflow emits an almost-blank
+        // extra sheet, i.e. the "one normal page, one blank page" symptom. Shrinking
+        // the box by 0.6mm (0.3mm margin, invisible) makes overflow impossible for any
+        // aspect ratio.
+        `img{display:block;width:calc(${wStr}mm - 0.6mm);height:calc(${hStr}mm - 0.6mm);margin:0 auto;object-fit:contain;}` +
         'img:not(:last-child){page-break-after:always;break-after:page;}' +
         '</style></head><body>' +
         sources.map((s) => `<img src="${s}">`).join('') +
