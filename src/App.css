@@ -3555,35 +3555,12 @@ body.theme-dark .pdf-hint.pending { color: #fbbf24; }
 }
 
 /* ---- PDF printing ----------------------------------------------------------
-   The live viewer must NOT be printed: the A4 print stylesheet would re-flow and
-   re-paginate the canvases. PdfViewer instead builds .pdf-print-root with one
-   image per PDF page and injects an @page rule carrying the PDF's real paper
-   size, so output is one PDF page per sheet at true size. */
-/* Laid out OFF-SCREEN rather than display:none: a never-laid-out subtree can be
-   treated as empty by the print pipeline (blank sheets). Off-screen keeps it
-   invisible on screen while giving the engine real boxes to paint. */
-.pdf-print-root {
-  position: fixed;
-  left: -10000px;
-  top: 0;
-  display: block;
-  pointer-events: none;
-  z-index: -1;
-}
+   Printing a PDF never goes through the app's own DOM: PdfViewer writes the pages
+   into a hidden IFRAME with its own minimal document (@page sized to the PDF's
+   real paper, one image per sheet) and prints THAT. Nothing here is needed for
+   print output, so no print rules for the viewer are required.
+
+   Kept only so the live viewer is excluded if anything else ever prints: */
 @media print {
   .pdf-viewer { display: none !important; }
-  .pdf-print-root {
-    position: static !important;
-    left: auto !important;
-    z-index: auto !important;
-    display: block !important;
-  }
-  .pdf-print-page {
-    display: block;
-    width: 100%;
-    height: auto;
-    page-break-after: always;
-    break-after: page;
-  }
-  .pdf-print-page:last-child { page-break-after: auto; break-after: auto; }
 }

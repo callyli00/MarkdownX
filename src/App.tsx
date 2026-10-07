@@ -86,7 +86,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.3.4';
+const APP_VERSION = 'v2.3.5';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -112,6 +112,15 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.3.5',
+    date: '2026-10-07',
+    items: [
+      '修复：打印 PDF 出现空白页（首张空白）—— 改为在隔离的 iframe 文档中打印，彻底避开应用自身的打印样式表',
+      '打印内容只含 PDF 页面本身：按 PDF 真实纸张尺寸、一页一版、无界面元素',
+      '打印前等待页面图像解码完成，杜绝“图还没画好就打印”导致的空白'
+    ]
+  },
   {
     version: 'v2.3.4',
     date: '2026-10-07',

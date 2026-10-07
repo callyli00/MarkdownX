@@ -3,7 +3,7 @@
 面向"接手/续做这个项目的人（或 AI）"的操作文档。README 讲**功能与历史**，本手册讲**怎么改、怎么验证、怎么发版**，
 以及**哪些坑真的踩过、哪些结论真的验证过**。
 
-> 对应版本：v2.3.4（2026-10-07）。每条操作都来自本项目的实际执行记录，不是推测。
+> 对应版本：v2.3.5（2026-10-07）。每条操作都来自本项目的实际执行记录，不是推测。
 
 ---
 
@@ -284,11 +284,14 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 又被按 A4 重新分页（尤其实 PDF 本身不是 A4 时）。正确做法（v2.3.4 起）：
 
 1. `PdfViewer` 把每页 canvas 转成 `data:image/png`；
-2. 拼进一个 `.pdf-print-root` 容器，每页一个 `<img class="pdf-print-page">`，
-   用 `page-break-after: always` 保证**一页一版**；
-3. 动态注入 `@page { size: <W>mm <H>mm; margin: 0 }`，尺寸取 `viewport.rawDims`（72dpi 页面单位）
-   换算 mm（`× 25.4 / 72`），所以**纸张尺寸跟 PDF 自己的一致**；
-4. `@media print` 里隐藏 `.pdf-viewer`、显示 `.pdf-print-root`；打印后清理容器与样式。
+2. **写进一个隐藏 iframe 的独立文档**再打印 —— 这是关键：把内容放进应用自己的 DOM 里
+   （哪怕离屏、哪怕 `@page` 后注入）都会被应用打印样式表干扰，实测出现空白页/首张空白。
+   iframe 文档只含 `@page { size: <W>mm <H>mm; margin: 0 }` + `html,body{margin:0}` +
+   每页一张 `<img>`（`width:100%`、`img:not(:last-child){page-break-after:always}`）；
+3. 纸张尺寸取 `viewport.rawDims`（72dpi 页面单位）换算 mm（`× 25.4 / 72`），与 PDF 自身一致；
+4. **打印前必须等图像解码**：轮询 `img.complete && naturalWidth > 0` 后再 `contentWindow.print()`
+   （留 5s 兜底），否则打印管线可能对着未绘制的图像输出空白；
+5. 打印结束后移除 iframe。
 
 已知边界：**逐页尺寸不同的 PDF 只能按第一页的纸张尺寸输出**（CSS 一个文档只能有一条 `@page size`）。
 

@@ -221,50 +221,70 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // stylesheet and re-paginate them. Instead each page is emitted as an image at the
   // PDF's own paper size, one per sheet, and the app chrome is hidden.
   const printPages = useCallback(async () => {
-    const pages: HTMLImageElement[] = [];
+    const sources: string[] = [];
     for (let i = 0; i < pageCount; i++) {
       const canvas = canvasRefs.current[i];
-      if (!canvas) continue;
-      const img = document.createElement('img');
-      img.className = 'pdf-print-page';
-      img.src = canvas.toDataURL('image/png');
-      pages.push(img);
+      if (canvas) sources.push(canvas.toDataURL('image/png'));
     }
-    if (!pages.length) return;
+    if (!sources.length) return;
 
     const first = pageMmRef.current[0];
     const wMm = first ? first.w : 210;
     const hMm = first ? first.h : 297;
 
-    const style = document.createElement('style');
-    style.id = 'mdx-pdf-print-style';
-    style.textContent = `@page { size: ${wMm.toFixed(2)}mm ${hMm.toFixed(2)}mm; margin: 0; }`;
+    // Print from an ISOLATED document in a hidden iframe rather than from the app's
+    // own DOM. The app's print stylesheet (A4 @page, body margins, hidden-chrome
+    // rules) fights any in-document approach and produced blank / extra sheets; a
+    // separate document the app CSS cannot reach removes that whole class of bug.
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+    document.body.appendChild(frame);
 
-    const root = document.createElement('div');
-    root.className = 'pdf-print-root';
-    pages.forEach((p) => root.appendChild(p));
+    const fdoc = frame.contentDocument;
+    const fwin = frame.contentWindow;
+    if (!fdoc || !fwin) {
+      frame.remove();
+      return;
+    }
 
-    document.head.appendChild(style);
-    document.body.appendChild(root);
-
-    // The images must be DECODED before print(): assigning a data URL is
-    // asynchronous, and printing right away yields blank sheets. The container is
-    // also kept laid out (off-screen) rather than display:none so the engine has a
-    // real box to paint.
-    await Promise.all(
-      pages.map((p) => (typeof p.decode === 'function' ? p.decode().catch(() => undefined) : Promise.resolve()))
+    fdoc.open();
+    fdoc.write(
+      '<!doctype html><html><head><meta charset="utf-8"><style>' +
+        `@page { size: ${wMm.toFixed(2)}mm ${hMm.toFixed(2)}mm; margin: 0; }` +
+        'html,body{margin:0;padding:0;background:#fff;}' +
+        'img{display:block;width:100%;height:auto;}' +
+        'img:not(:last-child){page-break-after:always;break-after:page;}' +
+        '</style></head><body>' +
+        sources.map((s) => `<img src="${s}">`).join('') +
+        '</body></html>'
     );
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
+    fdoc.close();
 
-    const cleanup = () => {
-      root.remove();
-      style.remove();
-      window.removeEventListener('afterprint', cleanup);
-    };
-    window.addEventListener('afterprint', cleanup);
-    window.print();
-    // Safety net in case `afterprint` never fires (some WebView2 builds).
-    window.setTimeout(cleanup, 120000);
+    // Wait until every image in the isolated document is decoded; printing against
+    // not-yet-painted images yields blank sheets.
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      };
+      const check = () => {
+        const imgs = Array.from(fdoc.images);
+        if (imgs.length >= sources.length && imgs.every((im) => im.complete && im.naturalWidth > 0)) finish();
+        else window.setTimeout(check, 50);
+      };
+      check();
+      window.setTimeout(finish, 5000); // never hang forever
+    });
+
+    fwin.focus();
+    fwin.print();
+
+    // The iframe is invisible; drop it once printing is done.
+    fwin.addEventListener('afterprint', () => window.setTimeout(() => frame.remove(), 2000));
+    window.setTimeout(() => frame.remove(), 120000);
   }, [pageCount]);
 
   const lastPrintToken = useRef(printToken);
