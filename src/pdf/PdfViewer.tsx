@@ -238,7 +238,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     // separate document the app CSS cannot reach removes that whole class of bug.
     const frame = document.createElement('iframe');
     frame.setAttribute('aria-hidden', 'true');
-    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+    // Real size, parked OUTSIDE the viewport. A 0x0 frame is a common recipe but some
+    // engines derive the print layout viewport from the frame, and a zero-size frame
+    // can print blank — the exact failure we are fixing. Being off-screen (position
+    // fixed) keeps it invisible without any scrollbars.
+    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:800px;height:1100px;border:0;';
     document.body.appendChild(frame);
 
     const fdoc = frame.contentDocument;
