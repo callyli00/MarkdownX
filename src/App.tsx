@@ -520,6 +520,7 @@ interface FileTreeNodeProps {
   dirChildrenCache: Record<string, FileEntry[]>;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
+  onFileContextMenu: (x: number, y: number, path: string) => void;
 }
 
 const FileTreeNode: React.FC<FileTreeNodeProps> = ({
@@ -530,6 +531,7 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
   dirChildrenCache,
   onToggleDir,
   onOpenFile,
+  onFileContextMenu,
 }) => {
   const isExpanded = !!expandedDirs[item.path];
   const children = dirChildrenCache[item.path];
@@ -568,6 +570,7 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
                   dirChildrenCache={dirChildrenCache}
                   onToggleDir={onToggleDir}
                   onOpenFile={onOpenFile}
+                  onFileContextMenu={onFileContextMenu}
                 />
               ))
             )}
@@ -582,6 +585,11 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
       className={`file-tree-item is-file level-${level} ${item.path === activePath ? 'active' : ''}`}
       style={{ paddingLeft: `${level * 12 + 20}px` }}
       onClick={() => onOpenFile(item.path)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onFileContextMenu(e.clientX, e.clientY, item.path);
+      }}
       title={item.path}
     >
       <span className="file-icon">{/\.pdf$/i.test(item.name) ? '📕' : '📝'}</span>
@@ -1568,6 +1576,12 @@ export const App: React.FC = () => {
   const openContextMenu = (x: number, y: number, target: ContextTarget) => {
     const pos = clampMenuPosition(x, y, 230, 300, window.innerWidth, window.innerHeight);
     setContextMenu({ ...pos, target });
+  };
+
+  /** Right-click on a not-yet-open file (workspace tree / recent list). */
+  const openSidebarFileMenu = (x: number, y: number, path: string) => {
+    ctxAnchorElementRef.current = null;
+    openContextMenu(x, y, { surface: 'sidebar-file', path });
   };
 
   const [sidebarPanel, setSidebarPanel] = useState<'workspace' | 'search'>('workspace');
@@ -3541,6 +3555,16 @@ ${texBody}
                             key={file.id}
                             className={`sidebar-doc-item ${file.id === activeFileId ? 'active' : ''}`}
                             onClick={() => setActiveFileId(file.id)}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              ctxAnchorElementRef.current = null;
+                              openContextMenu(e.clientX, e.clientY, {
+                                surface: 'tab',
+                                fileId: file.id,
+                                path: file.path || undefined,
+                              });
+                            }}
                             title={file.path || '未保存于磁盘'}
                           >
                             <AppIcon name="file-text" size={14} className="doc-icon-2" />
@@ -3589,6 +3613,7 @@ ${texBody}
                                 dirChildrenCache={dirChildrenCache}
                                 onToggleDir={handleToggleDirectory}
                                 onOpenFile={openFileByPath}
+                                onFileContextMenu={openSidebarFileMenu}
                               />
                             ))}
                           </>
@@ -3604,7 +3629,17 @@ ${texBody}
                         </div>
                         <div className="sb-region-body">
                           {recentFiles.slice(0, 6).map((rf, idx) => (
-                            <div key={idx} className="sidebar-doc-item" onClick={() => handleOpenFile(rf.path)} title={rf.path}>
+                            <div
+                              key={idx}
+                              className="sidebar-doc-item"
+                              onClick={() => handleOpenFile(rf.path)}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                openSidebarFileMenu(e.clientX, e.clientY, rf.path);
+                              }}
+                              title={rf.path}
+                            >
                               <AppIcon name="file-text" size={14} className="doc-icon-2" />
                               <span className="doc-name">{rf.name}</span>
                             </div>

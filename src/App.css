@@ -3313,6 +3313,12 @@ body.theme-dark .doc-tab-badge {
   white-space: nowrap;
 }
 .ctx-menu .dropdown-item:hover { background: var(--wb-sel, rgba(9, 105, 218, 0.10)); }
+.ctx-menu .dropdown-item.disabled {
+  color: var(--wb-fg3, #8a93a3);
+  cursor: default;
+}
+.ctx-menu .dropdown-item.disabled:hover { background: transparent; }
+.ctx-menu { max-height: 70vh; overflow-y: auto; }
 .ctx-menu .dropdown-divider { height: 1px; margin: 4px 6px; background: var(--wb-line); }
 .ctx-menu .shortcut { margin-left: auto; font-size: 11px; opacity: 0.55; }
 
