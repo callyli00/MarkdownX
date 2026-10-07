@@ -12,7 +12,7 @@ import { isPdfPath, loadPdfBytes } from './pdf/openPdf';
 // pdf-lib-backed modules are imported DYNAMICALLY at each call site (they are all
 // async) so ~300 kB of pdf-lib never lands in the startup bundle.
 import { fetchNoteFontBytes } from './pdf/cjkFont';
-import type { PdfAnnot, ViewerTool } from './pdf/annotations';
+import { createAnnot, type PdfAnnot, type NormRect, type ViewerTool } from './pdf/annotations';
 // Lazy: pdf.js + pdf-lib are ~1 MB of the bundle and are only needed once a PDF
 // tab is opened, so they must not delay first paint of a Markdown session.
 const PdfViewer = React.lazy(() =>
@@ -1146,6 +1146,8 @@ export const App: React.FC = () => {
   const [pdfTool, setPdfTool] = useState<ViewerTool | null>(null);
   const [pdfScale, setPdfScale] = useState<number>(1.25);
   const [pdfPrintToken, setPdfPrintToken] = useState<number>(0);
+  /** Text selected in the viewer, waiting for a toolbar mark button to be pressed. */
+  const [pdfPendingSel, setPdfPendingSel] = useState<{ pageIndex: number; rects: NormRect[] } | null>(null);
   const [pdfPageInfo, setPdfPageInfo] = useState<{ page: number; total: number } | null>(null);
   const [pdfMetaOpen, setPdfMetaOpen] = useState<boolean>(false);
   const [pdfMetaDraft, setPdfMetaDraft] = useState<{ title: string; author: string; subject: string; keywords: string }>({
@@ -2430,6 +2432,34 @@ export const App: React.FC = () => {
   /** 0-based index of the page currently most visible in the viewer. */
   const currentPdfPageIndex = (): number => (pdfPageInfo ? pdfPageInfo.page - 1 : 0);
 
+  /** A pending selection belongs to one tab; drop it when the tab changes. */
+  useEffect(() => {
+    setPdfPendingSel(null);
+  }, [activeFileId]);
+
+  /**
+   * Toolbar behaviour for the PDF mark buttons. Supports both mental models:
+   *  1. select text first, then press the highlighter -> marks that selection;
+   *  2. press the highlighter first, then select text -> PdfViewer marks on release.
+   */
+  const onPdfToolButton = (id: ViewerTool | null) => {
+    const isMark = id === 'highlight' || id === 'underline' || id === 'strikeout';
+    if (isMark && pdfPendingSel) {
+      const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+      if (f) {
+        updateActivePdfAnnots([
+          ...(f.pdfAnnots ?? []),
+          createAnnot({ page: pdfPendingSel.pageIndex, kind: id, rects: pdfPendingSel.rects }),
+        ]);
+      }
+      setPdfPendingSel(null);
+      window.getSelection()?.removeAllRanges();
+      setPdfTool(id); // stay armed so the next selection can be marked the same way
+      return;
+    }
+    setPdfTool((cur) => (cur === id ? null : id));
+  };
+
   const rotateCurrentPdfPage = async () => {
     const idx = currentPdfPageIndex();
     await applyPdfStructuralOp(async (b) => (await import('./pdf/structuralOps')).rotatePage(b, idx, 90));
@@ -3403,7 +3433,7 @@ ${texBody}
                   key={String(t.id)}
                   className={`wb-icon-btn ${pdfTool === t.id ? 'active' : ''}`}
                   title={t.title}
-                  onClick={() => setPdfTool((cur) => (cur === t.id ? null : t.id))}
+                  onClick={() => onPdfToolButton(t.id)}
                 >
                   <AppIcon name={t.icon} size={16} />
                 </button>
@@ -3929,6 +3959,7 @@ ${texBody}
                 scale={pdfScale}
                 onScaleChange={setPdfScale}
                 printToken={pdfPrintToken}
+                onSelectionChange={setPdfPendingSel}
               />
             </React.Suspense>
           ) : isSourceMode ? (

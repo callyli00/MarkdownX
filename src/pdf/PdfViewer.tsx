@@ -15,6 +15,11 @@ interface PdfViewerProps {
   onScaleChange: (next: number) => void;
   /** Increment to request printing the rendered pages at their true page size. */
   printToken: number;
+  /**
+   * Reports the text selection currently waiting to be marked, so the toolbar's
+   * mark buttons can apply it ("select text, then press the highlighter").
+   */
+  onSelectionChange?: (sel: { pageIndex: number; rects: NormRect[] } | null) => void;
 }
 
 /** Marks created from a text selection (select text, then click once to apply). */
@@ -45,6 +50,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   scale,
   onScaleChange,
   printToken,
+  onSelectionChange,
 }) => {
   const [doc, setDoc] = useState<PdfDoc | null>(null);
   const [pageCount, setPageCount] = useState(0);
@@ -292,9 +298,18 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     const wrap = e.currentTarget;
 
     if (moved > CLICK_SLOP) {
+      const rects = readSelectionRects(wrap);
+      if (!rects.length) return;
       if (isTextMarkTool(tool)) {
-        const rects = readSelectionRects(wrap);
-        if (rects.length) setPendingSel({ pageIndex, rects });
+        // Tool-first flow: the highlighter is already chosen, so apply on release.
+        onAnnotsChange([...annots, createAnnot({ page: pageIndex, kind: tool, rects })]);
+        window.getSelection()?.removeAllRanges();
+        setPendingSel(null);
+        onSelectionChange?.(null);
+      } else {
+        // Selection-first flow: remember it so a toolbar mark button can apply it.
+        setPendingSel({ pageIndex, rects });
+        onSelectionChange?.({ pageIndex, rects });
       }
       return;
     }
@@ -302,6 +317,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     if (pendingSel && pendingSel.pageIndex === pageIndex && isTextMarkTool(tool)) {
       onAnnotsChange([...annots, createAnnot({ page: pageIndex, kind: tool, rects: pendingSel.rects })]);
       setPendingSel(null);
+      onSelectionChange?.(null);
       window.getSelection()?.removeAllRanges();
     }
   };
@@ -337,7 +353,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     <div className="pdf-viewer">
       {pendingSel ? (
         <div className="pdf-hint pending">
-          已选中文字 —— 现在<b>单击页面</b>即可应用「{activeLabel}」。
+          已选中文字 —— 点击工具栏的<b>相应图标</b>（或单击页面）即可应用标注。
         </div>
       ) : activeLabel ? (
         <div className="pdf-hint">
