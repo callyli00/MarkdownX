@@ -3559,10 +3559,25 @@ body.theme-dark .pdf-hint.pending { color: #fbbf24; }
    re-paginate the canvases. PdfViewer instead builds .pdf-print-root with one
    image per PDF page and injects an @page rule carrying the PDF's real paper
    size, so output is one PDF page per sheet at true size. */
-.pdf-print-root { display: none; }
+/* Laid out OFF-SCREEN rather than display:none: a never-laid-out subtree can be
+   treated as empty by the print pipeline (blank sheets). Off-screen keeps it
+   invisible on screen while giving the engine real boxes to paint. */
+.pdf-print-root {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  display: block;
+  pointer-events: none;
+  z-index: -1;
+}
 @media print {
   .pdf-viewer { display: none !important; }
-  .pdf-print-root { display: block !important; }
+  .pdf-print-root {
+    position: static !important;
+    left: auto !important;
+    z-index: auto !important;
+    display: block !important;
+  }
   .pdf-print-page {
     display: block;
     width: 100%;

@@ -220,7 +220,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // Printing the live viewer would re-flow the canvases through the app's A4 print
   // stylesheet and re-paginate them. Instead each page is emitted as an image at the
   // PDF's own paper size, one per sheet, and the app chrome is hidden.
-  const printPages = useCallback(() => {
+  const printPages = useCallback(async () => {
     const pages: HTMLImageElement[] = [];
     for (let i = 0; i < pageCount; i++) {
       const canvas = canvasRefs.current[i];
@@ -247,6 +247,15 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     document.head.appendChild(style);
     document.body.appendChild(root);
 
+    // The images must be DECODED before print(): assigning a data URL is
+    // asynchronous, and printing right away yields blank sheets. The container is
+    // also kept laid out (off-screen) rather than display:none so the engine has a
+    // real box to paint.
+    await Promise.all(
+      pages.map((p) => (typeof p.decode === 'function' ? p.decode().catch(() => undefined) : Promise.resolve()))
+    );
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
+
     const cleanup = () => {
       root.remove();
       style.remove();
@@ -262,7 +271,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   useEffect(() => {
     if (printToken > lastPrintToken.current) {
       lastPrintToken.current = printToken;
-      printPages();
+      void printPages();
     }
   }, [printToken, printPages]);
 
