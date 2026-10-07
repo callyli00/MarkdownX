@@ -277,3 +277,25 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 （10,559,284 B，SIL OFL，允许再分发）。
 **反例**：`@fontsource/noto-sans-sc` 只发按 Unicode 分片的 woff2，字形表不完整，pdf-lib 不能用。
 **禁用**：Windows 系统字体（微软 EULA 不允许把其字体嵌入再分发的 PDF）。
+
+### 12.5 PDF 打印为什么不能用 `window.print()` 直接打
+
+直接打印实时查看器会把 canvas **塞进通用 A4 打印样式表重新排版**：结果既带上工具条/界面元素，
+又被按 A4 重新分页（尤其实 PDF 本身不是 A4 时）。正确做法（v2.3.4 起）：
+
+1. `PdfViewer` 把每页 canvas 转成 `data:image/png`；
+2. 拼进一个 `.pdf-print-root` 容器，每页一个 `<img class="pdf-print-page">`，
+   用 `page-break-after: always` 保证**一页一版**；
+3. 动态注入 `@page { size: <W>mm <H>mm; margin: 0 }`，尺寸取 `viewport.rawDims`（72dpi 页面单位）
+   换算 mm（`× 25.4 / 72`），所以**纸张尺寸跟 PDF 自己的一致**；
+4. `@media print` 里隐藏 `.pdf-viewer`、显示 `.pdf-print-root`；打印后清理容器与样式。
+
+已知边界：**逐页尺寸不同的 PDF 只能按第一页的纸张尺寸输出**（CSS 一个文档只能有一条 `@page size`）。
+
+### 12.6 标注的两种操作习惯都要支持
+
+- **先选工具再选文字**：松手即标注（`PdfViewer` 内部完成）。
+- **先选文字再按工具按钮**：`PdfViewer` 通过 `onSelectionChange` 把待应用选区上报给 `App`，
+  由工具栏按钮触发；按完保持该工具激活，方便连续标注。
+
+两条路径共用同一份归一化选区数据，避免两套逻辑漂移。
