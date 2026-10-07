@@ -12,6 +12,7 @@ import { isPdfPath, loadPdfBytes } from './pdf/openPdf';
 // pdf-lib-backed modules are imported DYNAMICALLY at each call site (they are all
 // async) so ~300 kB of pdf-lib never lands in the startup bundle.
 import { fetchNoteFontBytes } from './pdf/cjkFont';
+import { buildMenu, clampMenuPosition, type ContextTarget, type MenuItem } from './ui/contextMenuModel';
 import { createAnnot, type PdfAnnot, type NormRect, type ViewerTool } from './pdf/annotations';
 // Lazy: pdf.js + pdf-lib are ~1 MB of the bundle and are only needed once a PDF
 // tab is opened, so they must not delay first paint of a Markdown session.
@@ -106,6 +107,22 @@ function fileBaseName(pathOrName: string | null | undefined): string {
   const parts = normalized.split('/').filter((part) => part.length > 0);
   return parts.length ? parts[parts.length - 1] : raw;
 }
+
+/** One row of the model-driven context menu. */
+const ContextMenuItem: React.FC<{
+  item: MenuItem;
+  ctx: ContextTarget;
+  onRun: (id: string, ctx: ContextTarget) => void;
+}> = ({ item, ctx, onRun }) => (
+  <div
+    className={`dropdown-item ${item.disabled ? 'disabled' : ''}`}
+    onClick={() => { if (!item.disabled) onRun(item.id, ctx); }}
+    role="menuitem"
+  >
+    <span>{item.icon ? `${item.icon}  ` : ''}{item.label}</span>
+    {item.shortcut ? <span className="shortcut">{item.shortcut}</span> : null}
+  </div>
+);
 
 /** Sidebar width: dragged range, and the width used on a fresh profile. */
 const SIDEBAR_MIN_W = 180;
@@ -1302,8 +1319,10 @@ export const App: React.FC = () => {
     if (!result.ok) setUpdateInstallError(result.error);
   }, [updateInfo]);
 
-  /** Right-click menu: tabs carry document actions, the paper carries output actions. */
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; kind: 'tab' | 'content'; fileId?: string } | null>(null);
+  /** Right-click menus are model-driven: classify target → buildMenu() → render → dispatch. */
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; target: ContextTarget } | null>(null);
+  /** The exact element right-clicked, for "open in source" offset resolution. */
+  const ctxAnchorElementRef = useRef<HTMLElement | null>(null);
 
   /** Clipboard with a fallback: navigator.clipboard is unavailable in some webviews. */
   const copyTextToClipboard = useCallback(async (text: string) => {
@@ -1327,6 +1346,229 @@ export const App: React.FC = () => {
     }
     helper.remove();
   }, []);
+
+  /** Open a URL in the system browser (never navigate the webview itself). */
+  const openExternalUrl = useCallback(async (url: string) => {
+    try {
+      const { openUrl } = await import('@tauri-apps/plugin-opener');
+      await openUrl(url);
+    } catch (e) {
+      console.error('openExternalUrl failed:', e);
+      setModalFeedback(`无法打开链接：${String(e)}`);
+      window.setTimeout(() => setModalFeedback(null), 2500);
+    }
+  }, []);
+
+  /** Reveal a local file in Windows Explorer. */
+  const revealInFolder = useCallback(async (path: string) => {
+    try {
+      const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+      await revealItemInDir(path);
+    } catch (e) {
+      console.error('revealInFolder failed:', e);
+      setModalFeedback(`无法打开文件夹：${String(e)}`);
+      window.setTimeout(() => setModalFeedback(null), 2500);
+    }
+  }, []);
+
+  /**
+   * Classify a right-click inside the rendered paper into a ContextTarget:
+   * selection first, then the specific element hit (link/image/code/formula),
+   * using the deterministic data-src anchors for source slices.
+   */
+  const classifyPreviewTarget = (e: React.MouseEvent): ContextTarget => {
+    const el = e.target as HTMLElement;
+    ctxAnchorElementRef.current = el;
+    const sel = window.getSelection();
+    const selectedText = sel && !sel.isCollapsed ? sel.toString() : undefined;
+
+    const a = el.closest('a') as HTMLAnchorElement | null;
+    const img = el.closest('img') as HTMLImageElement | null;
+    const pre = el.closest('pre');
+    const code = pre?.querySelector('code');
+    const math = el.closest('.math-equation-row, mjx-container');
+
+    let codeText: string | undefined;
+    let codeLang: string | undefined;
+    if (code) {
+      codeText = code.textContent || undefined;
+      // The renderer stamps `class="hljs language-xxx"` on the <code>.
+      codeLang = /language-(\w+)/.exec(code.className)?.[1] || undefined;
+      if (codeLang === 'plaintext') codeLang = undefined;
+    }
+
+    let latexSource: string | undefined;
+    let imagePath: string | undefined;
+    // Read through the refs, not `activeFile`: this classifier is declared before
+    // that binding, and the refs always hold the freshest tab list.
+    const source = openFilesRef.current.find((x) => x.id === activeFileIdRef.current)?.content || '';
+    if (math) {
+      const holder = (math as HTMLElement).closest('[data-src-start]') as HTMLElement | null;
+      if (holder) {
+        const s = Number(holder.getAttribute('data-src-start'));
+        const en = Number(holder.getAttribute('data-src-end'));
+        if (Number.isFinite(s) && Number.isFinite(en) && en > s) latexSource = source.slice(s, en);
+      }
+    }
+    if (img) {
+      const holder = img.closest('[data-src-start]') as HTMLElement | null;
+      if (holder) {
+        const s = Number(holder.getAttribute('data-src-start'));
+        const en = Number(holder.getAttribute('data-src-end'));
+        if (Number.isFinite(s) && Number.isFinite(en) && en > s) {
+          const m = /!?\[[^\]]*\]\(([^)\s]+)/.exec(source.slice(s, en));
+          if (m) imagePath = m[1];
+        }
+      }
+      if (!imagePath) imagePath = img.getAttribute('src') || undefined;
+    }
+
+    return { surface: 'preview', selectedText, linkHref: a?.getAttribute('href') || undefined, imagePath, codeText, codeLang, latexSource };
+  };
+
+  /** The markdown source slice of the block that was right-clicked. */
+  const blockSourceSlice = (ctx: ContextTarget): string => {
+    const el = ctxAnchorElementRef.current;
+    const source = openFilesRef.current.find((x) => x.id === activeFileIdRef.current)?.content || '';
+    if (el) {
+      const holder = el.closest('[data-src-start]') as HTMLElement | null;
+      if (holder) {
+        const s = Number(holder.getAttribute('data-src-start'));
+        const en = Number(holder.getAttribute('data-src-end'));
+        if (Number.isFinite(s) && Number.isFinite(en) && en > s) return source.slice(s, en);
+      }
+      // No anchor: fall back to the rendered text of the enclosing block.
+      const block = el.closest('p, li, pre, blockquote, h1, h2, h3, h4, h5, h6, table');
+      if (block?.textContent?.trim()) return block.textContent.trim();
+    }
+    return ctx.selectedText || '';
+  };
+
+  /** Zoom the PDF so one page fills the viewport width. */
+  const fitPdfWidth = () => {
+    const el = document.querySelector('.pdf-scroll') as HTMLElement | null;
+    const wrap = document.querySelector('.pdf-page-wrap') as HTMLElement | null;
+    if (!el || !wrap) { setPdfScale(1); return; }
+    const avail = el.clientWidth - 48; // scroll padding (20px each side) + slack
+    const atCurrent = wrap.getBoundingClientRect().width;
+    if (atCurrent <= 0) return;
+    setPdfScale(Math.min(4, Math.max(0.25, +(pdfScale * (avail / atCurrent)).toFixed(2))));
+  };
+
+  /** Single dispatch point for every context-menu action id. */
+  const runContextAction = (id: string, ctx: ContextTarget) => {
+    setContextMenu(null);
+    const activeId = ctx.fileId || activeFileIdRef.current;
+    switch (id) {
+      // ---- shared ----
+      case 'copy-selection':
+        void copyTextToClipboard(ctx.selectedText || '');
+        return;
+      // ---- tab ----
+      case 'tab-close':
+        handleCloseFile(activeId);
+        return;
+      case 'tab-close-others':
+        openFilesRef.current.filter((x) => x.id !== activeId).forEach((x) => handleCloseFile(x.id));
+        return;
+      case 'tab-copy-path':
+        void copyTextToClipboard(ctx.path || '');
+        return;
+      case 'tab-reveal':
+        if (ctx.path) void revealInFolder(ctx.path);
+        return;
+      // ---- sidebar file/doc ----
+      case 'file-open':
+        if (ctx.path) void openFileByPath(ctx.path);
+        return;
+      case 'file-copy-path':
+        void copyTextToClipboard(ctx.path || '');
+        return;
+      case 'file-reveal':
+        if (ctx.path) void revealInFolder(ctx.path);
+        return;
+      // ---- preview ----
+      case 'link-open':
+        if (ctx.linkHref) void openExternalUrl(ctx.linkHref);
+        return;
+      case 'link-copy':
+        void copyTextToClipboard(ctx.linkHref || '');
+        return;
+      case 'img-copy-path':
+        void copyTextToClipboard(ctx.imagePath || '');
+        return;
+      case 'img-reveal':
+        if (ctx.imagePath) void revealInFolder(ctx.imagePath);
+        return;
+      case 'code-copy':
+        void copyTextToClipboard(ctx.codeText || '');
+        return;
+      case 'math-copy-latex':
+        void copyTextToClipboard(ctx.latexSource || '');
+        return;
+      case 'copy-block-md':
+        void copyTextToClipboard(blockSourceSlice(ctx));
+        return;
+      case 'open-in-source': {
+        const el = ctxAnchorElementRef.current;
+        const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+        const offset = el && f
+          ? sourceOffsetForElement(el, f.content, previewRef.current)
+          : null;
+        enterSourceMode(offset);
+        return;
+      }
+      case 'print':
+        handlePrint();
+        return;
+      case 'export-html':
+        void handleExportHtmlWithStyles();
+        return;
+      case 'toggle-view':
+        toggleSourceMode();
+        return;
+      // ---- pdf ----
+      case 'pdf-rotate':
+        void applyPdfStructuralOp(async (b) => (await import('./pdf/structuralOps')).rotatePage(b, ctx.pageIndex ?? 0, 90));
+        return;
+      case 'pdf-insert-after':
+        void applyPdfStructuralOp(async (b) => (await import('./pdf/structuralOps')).insertBlankPage(b, ctx.pageIndex ?? 0));
+        return;
+      case 'pdf-extract':
+        void handleExtractPdfPage(ctx.pageIndex ?? 0);
+        return;
+      case 'pdf-delete-page':
+        void applyPdfStructuralOp(async (b) => (await import('./pdf/structuralOps')).deletePages(b, [ctx.pageIndex ?? 0]));
+        return;
+      case 'pdf-print':
+        handlePrint();
+        return;
+      case 'pdf-zoom-fit':
+        fitPdfWidth();
+        return;
+      case 'pdf-zoom-actual':
+        setPdfScale(1);
+        return;
+      case 'annot-delete': {
+        const target = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+        if (ctx.annotId && target) {
+          updateActivePdfAnnots((target.pdfAnnots ?? []).filter((a) => a.id !== ctx.annotId));
+        }
+        return;
+      }
+      case 'annot-copy-text':
+        void copyTextToClipboard(ctx.annotText || '');
+        return;
+      default:
+        console.warn('unhandled context action:', id);
+    }
+  };
+
+  /** Open the model-driven menu for a classified target at (x, y). */
+  const openContextMenu = (x: number, y: number, target: ContextTarget) => {
+    const pos = clampMenuPosition(x, y, 230, 300, window.innerWidth, window.innerHeight);
+    setContextMenu({ ...pos, target });
+  };
 
   const [sidebarPanel, setSidebarPanel] = useState<'workspace' | 'search'>('workspace');
   const [outlineRegionOpen, setOutlineRegionOpen] = useState<boolean>(true);
@@ -1562,7 +1804,7 @@ export const App: React.FC = () => {
       // They still need the native one suppressed, but the event must reach React, so
       // stopPropagation is skipped for them - otherwise the capture-phase handler here
       // swallows the event before any React onContextMenu can run.
-      const customMenuSurface = target && target.closest('.doc-tab, .typora-paper-article, [data-ctx-menu]');
+      const customMenuSurface = target && target.closest('.doc-tab, .typora-paper-article, .pdf-page-wrap, .file-tree-item, .sidebar-doc-item, [data-ctx-menu]');
       e.preventDefault();
       if (!customMenuSurface) e.stopPropagation();
     };
@@ -3645,7 +3887,11 @@ ${texBody}
             className={`doc-tab ${f.id === activeFileId ? 'active' : ''}`}
             title={f.path || f.name || '未保存'}
             onClick={() => setActiveFileId(f.id)}
-            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, kind: 'tab', fileId: f.id }); }}
+            onContextMenu={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              ctxAnchorElementRef.current = null;
+              openContextMenu(e.clientX, e.clientY, { surface: 'tab', fileId: f.id, path: f.path || undefined });
+            }}
           >
             {f.kind === 'pdf' ? <span className="doc-tab-badge" title="PDF 文档">PDF</span> : null}
             <span className="doc-tab-name">{fileBaseName(f.path) || f.name || '未保存'}</span>
@@ -4034,7 +4280,10 @@ ${texBody}
             <div className="typora-document-scroll">
               <div
                 className="typora-paper-article"
-                onContextMenu={(e) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, kind: 'content' }); }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  openContextMenu(e.clientX, e.clientY, classifyPreviewTarget(e));
+                }}
               >
                 {activeFile?.content?.trim() ? (
                   <article
@@ -4129,41 +4378,12 @@ ${texBody}
             onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
           />
           <div className="ctx-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu">
-            {contextMenu.kind === 'tab' ? (
-              <>
-                <div className="dropdown-item" onClick={() => { handleCloseFile(contextMenu.fileId || activeFileId); setContextMenu(null); }}>
-                  <span>关闭此标签</span><span className="shortcut">Ctrl+W</span>
-                </div>
-                <div className="dropdown-item" onClick={() => {
-                  const keep = contextMenu.fileId;
-                  openFiles.filter((f) => f.id !== keep).forEach((f) => handleCloseFile(f.id));
-                  setContextMenu(null);
-                }}>
-                  <span>关闭其他标签</span>
-                </div>
-                <div className="dropdown-divider" />
-                <div className="dropdown-item" onClick={() => {
-                  const target = openFiles.find((f) => f.id === contextMenu.fileId);
-                  if (target) void copyTextToClipboard(target.path || target.name || '');
-                  setContextMenu(null);
-                }}>
-                  <span>复制完整路径</span>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="dropdown-item" onClick={() => { handlePrint(); setContextMenu(null); }}>
-                  <span>打印 / 导出 PDF</span><span className="shortcut">Ctrl+P</span>
-                </div>
-                <div className="dropdown-item" onClick={() => { setContextMenu(null); handleExportHtmlWithStyles(); }}>
-                  <span>导出 HTML (带样式)</span>
-                </div>
-                <div className="dropdown-divider" />
-                <div className="dropdown-item" onClick={() => { toggleSourceMode(); setContextMenu(null); }}>
-                  <span>{isSourceMode ? '切换到排版视图' : '切换到源码视图'}</span><span className="shortcut">Ctrl+/</span>
-                </div>
-              </>
-            )}
+            {buildMenu(contextMenu.target).map((item) => (
+              <React.Fragment key={item.id}>
+                {item.dividerBefore && <div className="dropdown-divider" />}
+                <ContextMenuItem item={item} ctx={contextMenu.target} onRun={runContextAction} />
+              </React.Fragment>
+            ))}
           </div>
         </>
       )}
