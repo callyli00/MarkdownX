@@ -71,7 +71,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.3.2';
+const APP_VERSION = 'v2.3.3';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -97,6 +97,15 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.3.3',
+    date: '2026-10-06',
+    items: [
+      '修复：工作区（侧栏文件树）不显示 PDF 文件 —— 文件列表的扩展名白名单里缺少 pdf',
+      '文件类型关联：安装包现在注册独立的「PDF Document」类型，MarkdownX 会出现在 .pdf 的「打开方式」中',
+      '若 .pdf 已被 Edge / Acrobat 占用（存在 UserChoice），安装不会抢占默认，只把 MarkdownX 加为可选项'
+    ]
+  },
   {
     version: 'v2.3.2',
     date: '2026-10-06',
@@ -505,7 +514,7 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
       onClick={() => onOpenFile(item.path)}
       title={item.path}
     >
-      <span className="file-icon">📝</span>
+      <span className="file-icon">{/\.pdf$/i.test(item.name) ? '📕' : '📝'}</span>
       <span className="file-title">{item.name}</span>
     </div>
   );

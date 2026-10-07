@@ -3,10 +3,17 @@
 ; bundle.windows.nsis.installerHooks).
 ;
 ; Tauri's own fileAssociations block already writes, per extension:
-;   HKCU\Software\Classes\<ext>            (default) = "Markdown Document"
-;   HKCU\Software\Classes\Markdown Document\DefaultIcon
-;   HKCU\Software\Classes\Markdown Document\shell\open\command
+;   HKCU\Software\Classes\<ext>            (default) = "<ProgID>"
+;   HKCU\Software\Classes\<ProgID>\DefaultIcon
+;   HKCU\Software\Classes\<ProgID>\shell\open\command
 ; and removes them again on uninstall.
+;
+; Two ProgIDs are in play:
+;   "Markdown Document" (Editor) -> .md .markdown .mdown .mkd .mdx
+;   "PDF Document"      (Viewer) -> .pdf
+; .pdf almost always already has a UserChoice (Edge / Acrobat), so in practice it is
+; never hijacked: MarkdownX is merely offered, and the user picks it in
+; Settings -> Default apps -> Choose defaults by file type.
 ;
 ; These hooks add the two things that block a *clean* automatic association:
 ;
@@ -27,20 +34,22 @@
 ; ---------------------------------------------------------------------------
 
 !define MDX_PROGID "Markdown Document"
+!define MDX_PDF_PROGID "PDF Document"
 !define MDX_SHCNE_ASSOCCHANGED 0x08000000
 
-!macro MDXClaimExt EXT
+; ${PROGID} = the type this extension offers/claims, ${EXT} = extension without dot.
+!macro MDXClaimExt PROGID EXT
   ; Visible in "Open with" via the ProgID (idempotent; the same key on every install).
-  WriteRegStr HKCU "Software\Classes\.${EXT}\OpenWithProgids" "${MDX_PROGID}" ""
+  WriteRegStr HKCU "Software\Classes\.${EXT}\OpenWithProgids" "${PROGID}" ""
   ; Claim only when the type is unclaimed: an existing UserChoice belongs to the user.
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.${EXT}\UserChoice" "ProgId"
   StrCmp $0 "" 0 mdx_claimed_${EXT}
-    WriteRegStr HKCU "Software\Classes\.${EXT}" "" "${MDX_PROGID}"
+    WriteRegStr HKCU "Software\Classes\.${EXT}" "" "${PROGID}"
   mdx_claimed_${EXT}:
 !macroend
 
-!macro MDXReleaseExt EXT
-  DeleteRegValue HKCU "Software\Classes\.${EXT}\OpenWithProgids" "${MDX_PROGID}"
+!macro MDXReleaseExt PROGID EXT
+  DeleteRegValue HKCU "Software\Classes\.${EXT}\OpenWithProgids" "${PROGID}"
   ; Give back only what we took: if the user never chose anything for this type, our
   ; mapping is removed; an explicit UserChoice is never touched.
   ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.${EXT}\UserChoice" "ProgId"
@@ -50,19 +59,21 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  !insertmacro MDXClaimExt "md"
-  !insertmacro MDXClaimExt "markdown"
-  !insertmacro MDXClaimExt "mdown"
-  !insertmacro MDXClaimExt "mkd"
-  !insertmacro MDXClaimExt "mdx"
+  !insertmacro MDXClaimExt "${MDX_PROGID}" "md"
+  !insertmacro MDXClaimExt "${MDX_PROGID}" "markdown"
+  !insertmacro MDXClaimExt "${MDX_PROGID}" "mdown"
+  !insertmacro MDXClaimExt "${MDX_PROGID}" "mkd"
+  !insertmacro MDXClaimExt "${MDX_PROGID}" "mdx"
+  !insertmacro MDXClaimExt "${MDX_PDF_PROGID}" "pdf"
   System::Call 'shell32::SHChangeNotify(i ${MDX_SHCNE_ASSOCCHANGED}, i 0, i 0, i 0)'
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  !insertmacro MDXReleaseExt "md"
-  !insertmacro MDXReleaseExt "markdown"
-  !insertmacro MDXReleaseExt "mdown"
-  !insertmacro MDXReleaseExt "mkd"
-  !insertmacro MDXReleaseExt "mdx"
+  !insertmacro MDXReleaseExt "${MDX_PROGID}" "md"
+  !insertmacro MDXReleaseExt "${MDX_PROGID}" "markdown"
+  !insertmacro MDXReleaseExt "${MDX_PROGID}" "mdown"
+  !insertmacro MDXReleaseExt "${MDX_PROGID}" "mkd"
+  !insertmacro MDXReleaseExt "${MDX_PROGID}" "mdx"
+  !insertmacro MDXReleaseExt "${MDX_PDF_PROGID}" "pdf"
   System::Call 'shell32::SHChangeNotify(i ${MDX_SHCNE_ASSOCCHANGED}, i 0, i 0, i 0)'
 !macroend

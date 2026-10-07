@@ -1,4 +1,4 @@
-# MarkdownX (v2.3.2)
+# MarkdownX (v2.3.3)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -33,6 +33,17 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v2.3.3] - 2026-10-06
+
+#### 工作区显示 PDF + PDF 文件类型关联
+- **修复：工作区文件树不显示 PDF。** 侧栏文件列表的扩展名白名单（`read_dir_files`）里缺少
+  `pdf`，所以工作目录中根本看不到 PDF 文件；现已加入，文件树里用 📕 图标区分。
+- **PDF 文件类型关联**：安装包新增独立的 `PDF Document` 类型（ProgID），MarkdownX 会出现在
+  资源管理器 `.pdf` 的「打开方式」中，也可在「设置 → 默认应用 → 按文件类型选择默认应用」里
+  为 `.pdf` 指定 MarkdownX。
+- 安装器遵循 Windows 规则：已存在 `UserChoice`（通常由 Edge/Acrobat 占用）时**不抢占默认**，
+  只把 MarkdownX 加为可选项。
 
 ### [v2.3.2] - 2026-10-06
 

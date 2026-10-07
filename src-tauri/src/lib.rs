@@ -58,7 +58,7 @@ fn read_dir_files(dir_path: String) -> Result<Vec<FileEntry>, String> {
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_lowercase();
-                if ["md", "markdown", "txt", "png", "jpg", "jpeg", "svg", "tex"].contains(&ext.as_str()) {
+                if ["md", "markdown", "txt", "pdf", "png", "jpg", "jpeg", "svg", "tex"].contains(&ext.as_str()) {
                     entries.push(FileEntry {
                         name,
                         path: item_path.to_string_lossy().to_string(),
