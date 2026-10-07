@@ -93,7 +93,13 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (!interactive || width <= 0 || height <= 0) return;
-    ref.current?.setPointerCapture(e.pointerId);
+    // Guarded: setPointerCapture throws NotFoundError for an unknown pointer id,
+    // and a throw here would abort the whole gesture.
+    try {
+      ref.current?.setPointerCapture(e.pointerId);
+    } catch {
+      /* capture is an optimisation; dragging still works without it */
+    }
     const p = local(e);
     if (tool === 'ink') setInk([p]);
     else setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y });
