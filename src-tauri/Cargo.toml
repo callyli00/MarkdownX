@@ -1,6 +1,6 @@
 [package]
 name = "markdown-x"
-version = "2.3.3"
+version = "2.3.4"
 description = "A lightweight Markdown editor optimized for computational mechanics"
 authors = ["you"]
 edition = "2021"

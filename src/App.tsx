@@ -7,12 +7,12 @@ import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
 import { renderDocument } from './utils/renderClient';
 import { checkForUpdate, installUpdate, type UpdateCheckResult, type UpdateProgress } from './utils/updater';
-import { AppIcon } from './AppIcon';
+import { AppIcon, type IconName } from './AppIcon';
 import { isPdfPath, loadPdfBytes } from './pdf/openPdf';
 // pdf-lib-backed modules are imported DYNAMICALLY at each call site (they are all
 // async) so ~300 kB of pdf-lib never lands in the startup bundle.
 import { fetchNoteFontBytes } from './pdf/cjkFont';
-import type { PdfAnnot } from './pdf/annotations';
+import type { PdfAnnot, ViewerTool } from './pdf/annotations';
 // Lazy: pdf.js + pdf-lib are ~1 MB of the bundle and are only needed once a PDF
 // tab is opened, so they must not delay first paint of a Markdown session.
 const PdfViewer = React.lazy(() =>
@@ -62,6 +62,21 @@ type AppTheme = 'light' | 'dark' | 'sepia';
 // a paper tone is a deliberate taste, not a system signal).
 type ThemePreference = 'auto' | AppTheme;
 
+/**
+ * PDF annotation tools shown as icon buttons in the app top bar, right after the
+ * print/export button. They exist ONLY while a PDF tab is active — Markdown never
+ * shows them.
+ */
+const PDF_TOOL_ICONS: { id: ViewerTool | null; icon: IconName; title: string }[] = [
+  { id: null, icon: 'cursor-text', title: '选择：选中文本或图片（不创建、不删除标注）' },
+  { id: 'highlight', icon: 'marker', title: '高亮：先选中文字，再单击页面即可应用' },
+  { id: 'underline', icon: 'underline-text', title: '下划线：先选中文字，再单击页面即可应用' },
+  { id: 'strikeout', icon: 'strike-text', title: '删除线：先选中文字，再单击页面即可应用' },
+  { id: 'note', icon: 'sticky-note', title: '便签：在页面上拖动框选位置' },
+  { id: 'ink', icon: 'pencil', title: '墨迹：在页面上按住鼠标手绘' },
+  { id: 'delete', icon: 'eraser', title: '橡皮：在页面上拖出一个框，删除框内所有标注' },
+];
+
 const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
   { id: 'auto', name: '跟随系统 (Auto)', icon: '🖥️' },
   { id: 'light', name: '经典纯白学术 (Light)', icon: '☀️' },
@@ -71,7 +86,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.3.3';
+const APP_VERSION = 'v2.3.4';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -97,6 +112,17 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.3.4',
+    date: '2026-10-07',
+    items: [
+      '修复：打印 PDF 时带上工具条、且被按 A4 重新分页 —— 现在按 PDF 自己的纸张尺寸逐页打印（一页一版，不再重排）',
+      'PDF 工具条重构：删除页等“编辑类”按钮移入右侧「编辑器」面板（原排版检查器改名，PDF 时显示 PDF 操作）',
+      '批注工具改为图标按钮，放在打印/导出按钮之后：选择、高亮、下划线、删除线、便签、墨迹、橡皮',
+      '缩放比例移到状态栏（支持 Ctrl + 滚轮缩放）',
+      '以上 PDF 相关按钮只在浏览 PDF 时出现，Markdown 界面不受影响'
+    ]
+  },
   {
     version: 'v2.3.3',
     date: '2026-10-06',
@@ -1115,6 +1141,11 @@ export const App: React.FC = () => {
   const [autoWatchSetting, setAutoWatchSetting] = useState<boolean>(() => initialPrefs.current.autoWatchExternalChanges !== false);
   const [externalReloadNotice, setExternalReloadNotice] = useState<string | null>(null);
   const [pdfOpenError, setPdfOpenError] = useState<string | null>(null);
+  // PDF viewing state lives here (not inside PdfViewer) because the controls are
+  // spread across the app chrome: tool icons in the top bar, zoom in the status bar.
+  const [pdfTool, setPdfTool] = useState<ViewerTool | null>(null);
+  const [pdfScale, setPdfScale] = useState<number>(1.25);
+  const [pdfPrintToken, setPdfPrintToken] = useState<number>(0);
   const [pdfPageInfo, setPdfPageInfo] = useState<{ page: number; total: number } | null>(null);
   const [pdfMetaOpen, setPdfMetaOpen] = useState<boolean>(false);
   const [pdfMetaDraft, setPdfMetaDraft] = useState<{ title: string; author: string; subject: string; keywords: string }>({
@@ -2354,13 +2385,6 @@ export const App: React.FC = () => {
     );
   }, []);
 
-  /** Structural ops hand back fresh bytes; store them and mark the tab dirty. */
-  const applyPdfStructural = useCallback((next: Uint8Array) => {
-    setOpenFiles((prev) =>
-      prev.map((f) => (f.id === activeFileIdRef.current ? { ...f, pdfBytes: next, isModified: true } : f))
-    );
-  }, []);
-
   /**
    * Save the active PDF tab. Annotations are EMBEDDED (still re-editable in
    * MarkdownX), never flattened — flattening is the explicit "导出压平" action.
@@ -2386,6 +2410,38 @@ export const App: React.FC = () => {
       console.error('PDF save error:', e);
       setPdfOpenError(`保存失败：${String((e as Error)?.message || e)}`);
     }
+  };
+
+  /** Run a structural op on the active PDF tab's bytes. */
+  const applyPdfStructuralOp = async (fn: (b: Uint8Array) => Promise<Uint8Array>): Promise<void> => {
+    const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+    if (!f?.pdfBytes) return;
+    try {
+      const next = await fn(f.pdfBytes);
+      setOpenFiles((prev) =>
+        prev.map((x) => (x.id === f.id ? { ...x, pdfBytes: next, isModified: true } : x))
+      );
+    } catch (e) {
+      setPdfOpenError(`操作失败：${String((e as Error)?.message || e)}`);
+    }
+  };
+
+  /** 0-based index of the page currently most visible in the viewer. */
+  const currentPdfPageIndex = (): number => (pdfPageInfo ? pdfPageInfo.page - 1 : 0);
+
+  const rotateCurrentPdfPage = async () => {
+    const idx = currentPdfPageIndex();
+    await applyPdfStructuralOp(async (b) => (await import('./pdf/structuralOps')).rotatePage(b, idx, 90));
+  };
+
+  const deleteCurrentPdfPage = async () => {
+    const idx = currentPdfPageIndex();
+    await applyPdfStructuralOp(async (b) => (await import('./pdf/structuralOps')).deletePages(b, [idx]));
+  };
+
+  const insertBlankAfterCurrent = async () => {
+    const idx = currentPdfPageIndex();
+    await applyPdfStructuralOp(async (b) => (await import('./pdf/structuralOps')).insertBlankPage(b, idx));
   };
 
   /** Save a single page as a new PDF (structure-edit level). */
@@ -2534,6 +2590,13 @@ export const App: React.FC = () => {
   // 1. Independent Print handler (Ctrl + P) - Keeps system print dialog 100% active
   const handlePrint = () => {
     setActiveMenu(null);
+    // A PDF must be printed at its OWN page size, one PDF page per sheet. Pouring the
+    // live viewer through the A4 print stylesheet re-flows and re-paginates it, so the
+    // PDF path renders each page to an image at true size instead (see PdfViewer).
+    if (activeFile?.kind === 'pdf') {
+      setPdfPrintToken((t) => t + 1);
+      return;
+    }
     // Print only after React has committed the menu-closed state and the browser has
     // laid it out: calling print() synchronously here snapped the print while an open
     // dropdown (the very menu the user clicked through) was still in the DOM, so the
@@ -3329,6 +3392,23 @@ ${texBody}
               </div>
             )}
           </div>
+
+          {/* PDF annotation tools: icon buttons placed AFTER print/export, and only
+              rendered while a PDF tab is active (Markdown never shows them). */}
+          {activeFile?.kind === 'pdf' && (
+            <div className="pdf-tool-icons">
+              {PDF_TOOL_ICONS.map((t) => (
+                <button
+                  key={String(t.id)}
+                  className={`wb-icon-btn ${pdfTool === t.id ? 'active' : ''}`}
+                  title={t.title}
+                  onClick={() => setPdfTool((cur) => (cur === t.id ? null : t.id))}
+                >
+                  <AppIcon name={t.icon} size={16} />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="wb-tb-center" data-tauri-drag-region>
@@ -3644,10 +3724,71 @@ ${texBody}
 
       {/* 3. Main Workspace & Collapsible Sidebar Container */}
       <div className="typora-main-layout">
-        {isInspectorOpen && !isSourceMode && activeFile?.kind !== 'pdf' && (
+        {isInspectorOpen && activeFile?.kind === 'pdf' ? (
           <aside className="typo-inspector">
             <div className="insp-head">
-              <span className="insp-title">排版检查器</span>
+              <span className="insp-title">编辑器</span>
+              <button className="sb-mini-btn" onClick={() => setIsInspectorOpen(false)} title="关闭">
+                <AppIcon name="close" size={13} />
+              </button>
+            </div>
+            <div className="insp-body">
+              <div className="insp-group">
+                <div className="insp-label">
+                  页面操作 <span className="insp-val">第 {pdfPageInfo?.page ?? 1} / {pdfPageInfo?.total ?? '?'} 页</span>
+                </div>
+                <div className="insp-btn-grid">
+                  <button className="insp-op-btn" title="把当前页旋转 90°" onClick={() => void rotateCurrentPdfPage()}>
+                    <AppIcon name="rotate-cw" size={15} /><span>旋转</span>
+                  </button>
+                  <button className="insp-op-btn" title="删除当前页" onClick={() => void deleteCurrentPdfPage()}>
+                    <AppIcon name="trash" size={15} /><span>删页</span>
+                  </button>
+                  <button className="insp-op-btn" title="在当前页后插入空白页" onClick={() => void insertBlankAfterCurrent()}>
+                    <AppIcon name="page-plus" size={15} /><span>插页</span>
+                  </button>
+                  <button className="insp-op-btn" title="把当前页另存为新的 PDF" onClick={() => void handleExtractPdfPage(currentPdfPageIndex())}>
+                    <AppIcon name="page-extract" size={15} /><span>提取页</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="insp-group">
+                <div className="insp-label">文档</div>
+                <div className="insp-btn-grid">
+                  <button className="insp-op-btn" title="编辑 PDF 元数据" onClick={() => void openPdfMetadata()}>
+                    <AppIcon name="info" size={15} /><span>元数据</span>
+                  </button>
+                  <button className="insp-op-btn" title="导出压平副本：标注烧进页面，任何阅读器可见" onClick={() => void handleExportFlattenedPdf()}>
+                    <AppIcon name="flatten" size={15} /><span>导出压平</span>
+                  </button>
+                  <button className="insp-op-btn" title="选择多个 PDF 合并为一个新文档" onClick={() => void handleMergePdfs()}>
+                    <AppIcon name="merge-pdf" size={15} /><span>合并 PDF</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="insp-group">
+                <div className="insp-label">标注说明</div>
+                <div className="insp-help">
+                  高亮 / 下划线 / 删除线：先选中文字，再单击页面。<br />
+                  便签、墨迹：在页面上拖动。<br />
+                  橡皮：拖出一个框，删除框内所有标注。
+                </div>
+                <button
+                  className="typo-radio-btn insp-reset"
+                  onClick={() => updateActivePdfAnnots([])}
+                  title="删除当前 PDF 的全部标注"
+                >
+                  清空全部标注
+                </button>
+              </div>
+            </div>
+          </aside>
+        ) : isInspectorOpen && !isSourceMode ? (
+          <aside className="typo-inspector">
+            <div className="insp-head">
+              <span className="insp-title">编辑器</span>
               <button className="sb-mini-btn" onClick={() => setIsInspectorOpen(false)} title="关闭">
                 <AppIcon name="close" size={13} />
               </button>
@@ -3767,7 +3908,7 @@ ${texBody}
               </button>
             </div>
           </aside>
-        )}
+        ) : null}
 
         {/* Main Workspace */}
         <main
@@ -3781,13 +3922,12 @@ ${texBody}
                 bytes={activeFile.pdfBytes}
                 annots={activeFile.pdfAnnots ?? []}
                 onAnnotsChange={updateActivePdfAnnots}
-                onStructuralChange={applyPdfStructural}
-                onExtractPage={(idx) => void handleExtractPdfPage(idx)}
-                onRequestMetadata={() => void openPdfMetadata()}
-                onExportFlattened={() => void handleExportFlattenedPdf()}
-                onMergePdfs={() => void handleMergePdfs()}
                 onVisiblePageChange={(page, total) => setPdfPageInfo({ page, total })}
                 onError={(msg) => console.error('PDF render error:', msg)}
+                tool={pdfTool}
+                scale={pdfScale}
+                onScaleChange={setPdfScale}
+                printToken={pdfPrintToken}
               />
             </React.Suspense>
           ) : isSourceMode ? (
@@ -3873,6 +4013,12 @@ ${texBody}
                 <span className="sep">•</span>
                 <span>{activeFile.pdfAnnots?.length ?? 0} 个标注</span>
                 {activeFile.isModified && <><span className="sep">•</span><span className="status-pill-badge">未保存</span></>}
+                <span className="sep">•</span>
+                <span className="pdf-status-zoom" title="缩放（Ctrl + 滚轮也可缩放）">
+                  <button className="pdf-zoom-btn" onClick={() => setPdfScale((s) => Math.max(0.25, +(s - 0.25).toFixed(2)))}>−</button>
+                  <span className="pdf-zoom-val">{Math.round(pdfScale * 100)}%</span>
+                  <button className="pdf-zoom-btn" onClick={() => setPdfScale((s) => Math.min(4, +(s + 0.25).toFixed(2)))}>＋</button>
+                </span>
               </>
             ) : (
               <>

@@ -3492,3 +3492,83 @@ body.theme-dark .pdf-text-layer ::selection {
   font-weight: 500;
 }
 body.theme-dark .pdf-hint.pending { color: #fbbf24; }
+
+/* PDF annotation tool icons, sitting in the app top bar right after print/export. */
+.pdf-tool-icons {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--wb-line, #e2e5ea);
+}
+
+/* Editor panel (the inspector, renamed) — PDF operation buttons. */
+.insp-btn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+.insp-op-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--wb-card, #fff);
+  color: var(--text-main);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.insp-op-btn:hover {
+  background: var(--wb-sel, #e1e5ec);
+  border-color: var(--wb-accent, #2f6fed);
+  color: var(--wb-accent, #2f6fed);
+}
+.insp-help {
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* Status-bar zoom control (PDF tabs only). */
+.pdf-status-zoom { display: inline-flex; align-items: center; gap: 2px; }
+.pdf-zoom-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 3px;
+  border-radius: 3px;
+}
+.pdf-zoom-btn:hover { background: var(--wb-sel, #e1e5ec); color: var(--wb-accent, #2f6fed); }
+.pdf-zoom-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-width: 34px;
+  text-align: center;
+}
+
+/* ---- PDF printing ----------------------------------------------------------
+   The live viewer must NOT be printed: the A4 print stylesheet would re-flow and
+   re-paginate the canvases. PdfViewer instead builds .pdf-print-root with one
+   image per PDF page and injects an @page rule carrying the PDF's real paper
+   size, so output is one PDF page per sheet at true size. */
+.pdf-print-root { display: none; }
+@media print {
+  .pdf-viewer { display: none !important; }
+  .pdf-print-root { display: block !important; }
+  .pdf-print-page {
+    display: block;
+    width: 100%;
+    height: auto;
+    page-break-after: always;
+    break-after: page;
+  }
+  .pdf-print-page:last-child { page-break-after: auto; break-after: auto; }
+}

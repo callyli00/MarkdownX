@@ -1,73 +1,55 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { loadPdfDocument, PdfTextLayer, type PdfDoc } from './pdfjs';
 import { PdfAnnotLayer } from './PdfAnnotLayer';
 import { createAnnot, type PdfAnnot, type AnnotKind, type NormRect, type ViewerTool } from './annotations';
-import { rotatePage, deletePages, insertBlankPage } from './structuralOps';
 
 interface PdfViewerProps {
   bytes: Uint8Array;
   annots: PdfAnnot[];
   onAnnotsChange: (next: PdfAnnot[]) => void;
-  /** Structural ops produce new bytes; the parent stores them on the tab. */
-  onStructuralChange: (next: Uint8Array) => void;
-  /** "Extract current page" yields a NEW document -> parent owns the save dialog. */
-  onExtractPage?: (pageIndex: number) => void;
-  onRequestMetadata?: () => void;
-  /** Flatten annotations into a shareable, non-editable copy. */
-  onExportFlattened?: () => void;
-  /** Merge other PDFs into a new document. */
-  onMergePdfs?: () => void;
   onVisiblePageChange?: (page: number, total: number) => void;
-  onDocumentReady?: (doc: PdfDoc) => void;
   onError?: (message: string) => void;
+  /** Controlled by the app chrome: toolbar tool icons + status-bar zoom. */
+  tool: ViewerTool | null;
+  scale: number;
+  onScaleChange: (next: number) => void;
+  /** Increment to request printing the rendered pages at their true page size. */
+  printToken: number;
 }
 
 /** Marks created from a text selection (select text, then click once to apply). */
 const isTextMarkTool = (t: ViewerTool | null): t is AnnotKind =>
   t === 'highlight' || t === 'underline' || t === 'strikeout';
 
-const DRAW_TOOLS: { id: ViewerTool; label: string; title: string }[] = [
-  { id: 'highlight', label: '高亮', title: '选中文字后，单击页面即可高亮' },
-  { id: 'underline', label: '下划线', title: '选中文字后，单击页面即可加下划线' },
-  { id: 'strikeout', label: '删除线', title: '选中文字后，单击页面即可加删除线' },
-  { id: 'note', label: '便签', title: '在页面上拖动框选便签位置' },
-  { id: 'ink', label: '墨迹', title: '在页面上按住鼠标手绘' },
-];
-
 /** Movement (CSS px) above which a mousedown→mouseup counts as a drag, not a click. */
 const CLICK_SLOP = 4;
 
 /**
  * Renders every page into a <canvas>, lays a selectable PDF.js text layer on top,
- * and overlays an annotation layer.
+ * and overlays an annotation layer. It owns NO toolbar: the tool buttons live in the
+ * app's top bar and the zoom control in the status bar, so they only exist once.
  *
  * Interaction model:
- *  - 选择        : pure selection (text/images). Nothing is created or deleted.
- *  - 高亮/下划线/删除线 : select text, then a single click applies the mark.
- *  - 便签/墨迹    : drag on the page.
- *  - 删除        : drag a box; every annotation it touches is removed.
+ *  - select          : pure selection (text/images). Nothing is created or deleted.
+ *  - highlight/underline/strikeout : select text, then a single click applies the mark.
+ *  - note / ink      : drag on the page.
+ *  - delete          : drag a box; every annotation it touches is removed.
  */
 export const PdfViewer: React.FC<PdfViewerProps> = ({
   bytes,
   annots,
   onAnnotsChange,
-  onStructuralChange,
-  onExtractPage,
-  onRequestMetadata,
-  onExportFlattened,
-  onMergePdfs,
   onVisiblePageChange,
-  onDocumentReady,
   onError,
+  tool,
+  scale,
+  onScaleChange,
+  printToken,
 }) => {
   const [doc, setDoc] = useState<PdfDoc | null>(null);
   const [pageCount, setPageCount] = useState(0);
-  const [scale, setScale] = useState(1.25);
-  const [tool, setTool] = useState<ViewerTool | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pageSizes, setPageSizes] = useState<{ width: number; height: number }[]>([]);
-  const [visiblePage, setVisiblePage] = useState(1);
-  const [opError, setOpError] = useState<string | null>(null);
   const [noteEditId, setNoteEditId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   /** Text selection waiting for the confirming click. */
@@ -77,6 +59,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
   const textLayerRefs = useRef<(HTMLDivElement | null)[]>([]);
   const downRef = useRef<{ x: number; y: number } | null>(null);
+  /** Physical page size in mm, for the print stylesheet. */
+  const pageMmRef = useRef<{ w: number; h: number }[]>([]);
 
   const annotsRef = useRef(annots);
   useEffect(() => {
@@ -93,13 +77,13 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setPendingSel(null);
     canvasRefs.current = [];
     textLayerRefs.current = [];
+    pageMmRef.current = [];
 
     loadPdfDocument(bytes)
       .then((d) => {
         if (cancelled) return;
         setDoc(d);
         setPageCount(d.numPages);
-        onDocumentReady?.(d);
         const live = annotsRef.current.filter((a) => a.page < d.numPages);
         if (live.length !== annotsRef.current.length) onAnnotsChange(live);
       })
@@ -123,6 +107,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
     (async () => {
       const sizes: { width: number; height: number }[] = [];
+      const mms: { w: number; h: number }[] = [];
       for (let i = 0; i < doc.numPages; i++) {
         if (cancelled) return;
         const page = await doc.getPage(i + 1);
@@ -131,6 +116,12 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         const cssW = Math.floor(viewport.width);
         const cssH = Math.floor(viewport.height);
         sizes[i] = { width: cssW, height: cssH };
+        // rawDims are page units at 72 dpi, so pt -> mm is the right conversion and
+        // the printed sheet matches the PDF's real paper size.
+        // rawDims is typed as a bare Object by pdf.js; it carries the page size in
+        // page units (72 dpi), which is what the print stylesheet needs in mm.
+        const rd = viewport.rawDims as unknown as { pageWidth: number; pageHeight: number };
+        mms[i] = { w: (rd.pageWidth * 25.4) / 72, h: (rd.pageHeight * 25.4) / 72 };
 
         const canvas = canvasRefs.current[i];
         if (canvas) {
@@ -155,9 +146,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
           textDiv.replaceChildren();
           // pdf.js positions every span as calc(var(--scale-factor) * Xpx) and sizes
           // the layer the same way, but it does NOT set the variable itself — the
-          // host must. Without it the layer misaligns with the canvas (marks land
-          // off their text, worst at small scale). Do not set width/height here:
-          // TextLayer.render() derives them from --scale-factor.
+          // host must. Without it the layer misaligns with the canvas.
           textDiv.style.setProperty('--scale-factor', String(scale));
           const textLayer = new PdfTextLayer({
             textContentSource: textContent,
@@ -168,6 +157,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         }
 
         if (cancelled) return;
+        pageMmRef.current = mms;
         setPageSizes(sizes.slice());
       }
     })();
@@ -177,7 +167,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     };
   }, [doc, scale]);
 
-  // Report the most-visible page so the status bar can show "page x / y".
+  // Report the most-visible page so the status bar / inspector can act on "current".
   useEffect(() => {
     const root = scrollRef.current;
     if (!root || !pageCount) return;
@@ -196,7 +186,6 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
             best = i;
           }
         });
-        setVisiblePage(best + 1);
         onVisiblePageChange?.(best + 1, pageCount);
       },
       { root, threshold: [0, 0.25, 0.5, 0.75, 1] }
@@ -206,6 +195,70 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageCount, scale]);
+
+  // Ctrl + wheel zooms. Must be a manual non-passive listener: React's onWheel is
+  // passive, so preventDefault() there would be ignored and the app would zoom too.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      onScaleChange(Math.min(4, Math.max(0.25, +(scale - e.deltaY * 0.0015).toFixed(2))));
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, [scale, onScaleChange]);
+
+  // ---- printing -----------------------------------------------------------
+  // Printing the live viewer would re-flow the canvases through the app's A4 print
+  // stylesheet and re-paginate them. Instead each page is emitted as an image at the
+  // PDF's own paper size, one per sheet, and the app chrome is hidden.
+  const printPages = useCallback(() => {
+    const pages: HTMLImageElement[] = [];
+    for (let i = 0; i < pageCount; i++) {
+      const canvas = canvasRefs.current[i];
+      if (!canvas) continue;
+      const img = document.createElement('img');
+      img.className = 'pdf-print-page';
+      img.src = canvas.toDataURL('image/png');
+      pages.push(img);
+    }
+    if (!pages.length) return;
+
+    const first = pageMmRef.current[0];
+    const wMm = first ? first.w : 210;
+    const hMm = first ? first.h : 297;
+
+    const style = document.createElement('style');
+    style.id = 'mdx-pdf-print-style';
+    style.textContent = `@page { size: ${wMm.toFixed(2)}mm ${hMm.toFixed(2)}mm; margin: 0; }`;
+
+    const root = document.createElement('div');
+    root.className = 'pdf-print-root';
+    pages.forEach((p) => root.appendChild(p));
+
+    document.head.appendChild(style);
+    document.body.appendChild(root);
+
+    const cleanup = () => {
+      root.remove();
+      style.remove();
+      window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
+    window.print();
+    // Safety net in case `afterprint` never fires (some WebView2 builds).
+    window.setTimeout(cleanup, 120000);
+  }, [pageCount]);
+
+  const lastPrintToken = useRef(printToken);
+  useEffect(() => {
+    if (printToken > lastPrintToken.current) {
+      lastPrintToken.current = printToken;
+      printPages();
+    }
+  }, [printToken, printPages]);
 
   /** Rectangles (normalized) of the current native text selection on `wrap`. */
   const readSelectionRects = (wrap: HTMLDivElement): NormRect[] => {
@@ -231,8 +284,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
 
   /**
    * Two-step mark creation: the drag that makes a selection only REMEMBERS it; the
-   * next plain click commits it. A drag must not commit, otherwise you can never
-   * inspect or fix the selection before marking.
+   * next plain click commits it, so the selection can still be inspected or redone.
    */
   const onWrapMouseUp = (e: React.MouseEvent<HTMLDivElement>, pageIndex: number) => {
     const start = downRef.current;
@@ -275,144 +327,25 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setNoteDraft('');
   };
 
-  const applyStructural = async (fn: (b: Uint8Array) => Promise<Uint8Array>): Promise<void> => {
-    setOpError(null);
-    try {
-      onStructuralChange(await fn(bytes));
-    } catch (e) {
-      setOpError(`操作失败：${String((e as Error)?.message || e)}`);
-    }
-  };
-
-  const pickTool = (t: ViewerTool | null) => {
-    setTool((cur) => (cur === t ? null : t));
-    setPendingSel(null);
-  };
-
-  const toolButtons = useMemo(
-    () =>
-      DRAW_TOOLS.map((t) => (
-        <button
-          key={t.id}
-          className={`pdf-btn ${tool === t.id ? 'active' : ''}`}
-          title={t.title}
-          onClick={() => pickTool(t.id)}
-        >
-          {t.label}
-        </button>
-      )),
-    // pickTool is stable enough for this list; the only real dependency is `tool`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tool]
-  );
-
-  const activeLabel = tool && tool !== 'delete' ? DRAW_TOOLS.find((t) => t.id === tool)?.label : null;
+  const activeLabel =
+    tool === 'highlight' ? '高亮'
+    : tool === 'underline' ? '下划线'
+    : tool === 'strikeout' ? '删除线'
+    : null;
 
   return (
     <div className="pdf-viewer">
-      <div className="pdf-toolbar">
-        <span className="pdf-group">
-          <button
-            className={`pdf-btn ${tool === null ? 'active' : ''}`}
-            title="选择：自由选中文本或图片，不创建也不删除任何标注"
-            onClick={() => pickTool(null)}
-          >
-            选择
-          </button>
-          {toolButtons}
-          <button
-            className={`pdf-btn ${tool === 'delete' ? 'active' : ''}`}
-            title="框选一个区域，删除区域内的所有标注"
-            onClick={() => pickTool('delete')}
-          >
-            框选删除
-          </button>
-        </span>
-
-        <span className="pdf-sep" />
-
-        <span className="pdf-group">
-          <button
-            className="pdf-btn"
-            title="缩小"
-            onClick={() => setScale((s) => Math.max(0.25, +(s - 0.25).toFixed(2)))}
-          >
-            −
-          </button>
-          <span className="pdf-zoom">{Math.round(scale * 100)}%</span>
-          <button
-            className="pdf-btn"
-            title="放大"
-            onClick={() => setScale((s) => Math.min(4, +(s + 0.25).toFixed(2)))}
-          >
-            ＋
-          </button>
-        </span>
-
-        <span className="pdf-sep" />
-
-        <span className="pdf-group">
-          <button
-            className="pdf-btn"
-            title={`旋转第 ${visiblePage} 页 90°`}
-            onClick={() => void applyStructural((b) => rotatePage(b, visiblePage - 1, 90))}
-          >
-            ⟳
-          </button>
-          <button
-            className="pdf-btn"
-            title={`删除第 ${visiblePage} 页`}
-            onClick={() => void applyStructural((b) => deletePages(b, [visiblePage - 1]))}
-          >
-            🗑
-          </button>
-          <button
-            className="pdf-btn"
-            title={`在第 ${visiblePage} 页后插入空白页`}
-            onClick={() => void applyStructural((b) => insertBlankPage(b, visiblePage - 1))}
-          >
-            ＋页
-          </button>
-          <button
-            className="pdf-btn"
-            title={`把第 ${visiblePage} 页另存为新的 PDF`}
-            onClick={() => onExtractPage?.(visiblePage - 1)}
-          >
-            提取页
-          </button>
-          <button className="pdf-btn" title="编辑文档元数据" onClick={() => onRequestMetadata?.()}>
-            元数据
-          </button>
-          <button
-            className="pdf-btn"
-            title="导出压平副本：标注烧进页面，任何阅读器可见但不可再编辑"
-            onClick={() => onExportFlattened?.()}
-          >
-            导出压平
-          </button>
-          <button className="pdf-btn" title="选择多个 PDF 合并为一个新文档" onClick={() => onMergePdfs?.()}>
-            合并 PDF…
-          </button>
-        </span>
-
-        <span className="pdf-sep" />
-        <span className="pdf-pagecount">
-          {pageCount ? `第 ${visiblePage} / ${pageCount} 页` : '加载中…'}
-          {annots.length ? ` · ${annots.length} 标注` : ''}
-        </span>
-      </div>
-
       {pendingSel ? (
         <div className="pdf-hint pending">
           已选中文字 —— 现在<b>单击页面</b>即可应用「{activeLabel}」。
         </div>
-      ) : isTextMarkTool(tool) ? (
+      ) : activeLabel ? (
         <div className="pdf-hint">
           已选择「{activeLabel}」：先用鼠标<b>选中文字</b>，再<b>单击一次</b>即可生成标注。
         </div>
       ) : tool === 'delete' ? (
         <div className="pdf-hint">
-          已选择「框选删除」：在页面上<b>拖出一个框</b>，框内的所有标注都会被删除。
+          已选择「橡皮（删除标注）」：在页面上<b>拖出一个框</b>，框内的所有标注都会被删除。
         </div>
       ) : null}
 
@@ -438,12 +371,6 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         </div>
       )}
 
-      {opError && (
-        <div className="pdf-op-error" onClick={() => setOpError(null)} title="点击关闭">
-          ⚠️ {opError}
-        </div>
-      )}
-
       <div className="pdf-scroll" ref={scrollRef}>
         {loadError ? (
           <div className="pdf-error-card">
@@ -457,10 +384,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
               key={i}
               className="pdf-page-wrap"
               data-page-index={i}
-              style={{
-                width: pageSizes[i]?.width,
-                height: pageSizes[i]?.height,
-              }}
+              style={{ width: pageSizes[i]?.width, height: pageSizes[i]?.height }}
               onMouseDown={onWrapMouseDown}
               onMouseUp={(e) => onWrapMouseUp(e, i)}
             >

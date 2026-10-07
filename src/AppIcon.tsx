@@ -14,6 +14,8 @@ export type IconName =
   | 'chevron-down' | 'save' | 'new-file' | 'open-file' | 'eye' | 'pencil'
   | 'align-justify' | 'align-left' | 'indent' | 'undo' | 'redo' | 'trash' | 'download'
   | 'scissors' | 'clipboard'
+  | 'cursor-text' | 'marker' | 'underline-text' | 'strike-text' | 'sticky-note' | 'eraser'
+  | 'rotate-cw' | 'page-plus' | 'page-extract' | 'flatten' | 'merge-pdf'
   | 'win-min' | 'win-max' | 'win-restore';
 
 const PATHS: Record<IconName, React.ReactNode> = {
@@ -64,6 +66,25 @@ const PATHS: Record<IconName, React.ReactNode> = {
   'download': <><path d="M12 4v10M8 10.5l4 4 4-4" /><path d="M4.5 19.5h15" /></>,
   'scissors': <><circle cx="6.5" cy="6.5" r="2.5" /><circle cx="6.5" cy="17.5" r="2.5" /><path d="M8.6 8.2L20 18M20 6L8.6 15.8" /></>,
   'clipboard': <><rect x="6" y="5" width="12" height="15.5" rx="2" /><path d="M9.5 5V3.8a1.3 1.3 0 0 1 1.3-1.3h2.4a1.3 1.3 0 0 1 1.3 1.3V5" /><path d="M12 10.5v6M9.2 13.3h5.6" /></>,
+  // --- PDF annotation tools ---
+  // I-beam text cursor with a mouse pointer ("select").
+  'cursor-text': <><path d="M8 4.5v11M6 4.5h4M6 15.5h4" /><path d="M12 10.5l7 4.3-3.1.9-.9 3.1z" /></>,
+  // Highlighter / marker.
+  'marker': <><path d="M15.1 4.4a1.6 1.6 0 0 1 2.3 0l2.2 2.2a1.6 1.6 0 0 1 0 2.3l-7.9 7.9H8.1l-3.2-3.2z" /><path d="M4 20.5h16" /></>,
+  // Letter A over a baseline.
+  'underline-text': <><path d="M5.5 13.5L9.5 5l4 8.5M7.2 10.5h4.6" /><path d="M4.5 18.5h15" /></>,
+  // Letter A with a line through it.
+  'strike-text': <><path d="M5.5 14.5L9.5 6l4 8.5M7.2 11.5h4.6" /><path d="M3.5 10h17" /></>,
+  // Sticky note with a folded corner.
+  'sticky-note': <><path d="M5 4.5h14v10L14.5 19.5H5z" /><path d="M19 14.5h-4.5v5" /></>,
+  // Eraser.
+  'eraser': <><path d="M7.2 16.8l6.9-6.9a1.7 1.7 0 0 1 2.4 0l2.6 2.6a1.7 1.7 0 0 1 0 2.4l-4.5 4.5H9.8z" /><path d="M5 20.5h14" /></>,
+  // --- PDF structural operations (inspector) ---
+  'rotate-cw': <><path d="M20 12a8 8 0 1 1-2.4-5.7" /><path d="M20.5 4.5v6h-6" /></>,
+  'page-plus': <><path d="M6 3.5h8L18.5 8v12.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1z" /><path d="M13.5 3.5V9h5" /><path d="M11.5 12.5v5M9 15h5" /></>,
+  'page-extract': <><path d="M6 3.5h8L18.5 8v12.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1z" /><path d="M13.5 3.5V9h5" /><path d="M8.5 15h7M13 12.5L15.5 15 13 17.5" /></>,
+  'flatten': <><path d="M12 3.5l8 4-8 4-8-4z" /><path d="M4 13l8 4 8-4" /></>,
+  'merge-pdf': <><path d="M4 7.5h7.5v13H4z" /><path d="M12.5 4H20v13h-7.5" /></>,
   'win-min': <path d="M6 12h12" />,
   'win-max': <rect x="7" y="7" width="10" height="10" />,
   'win-restore': <><rect x="6" y="9" width="9" height="9" /><path d="M9 9V6h9v9h-3" /></>,
