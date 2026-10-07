@@ -137,9 +137,19 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 
 ## 7. 文件关联（安装时由 NSIS 钩子完成）
 
-- `bundle.fileAssociations`：`md / markdown / mdown / mkd / mdx`。
+- `bundle.fileAssociations`：两个类型 —— `md / markdown / mdown / mkd / mdx`（`Markdown Document`，
+  role=Editor）与 `pdf`（`PDF Document`，role=Viewer）。
 - `installer-hooks.nsh`：写 `OpenWithProgids`；**仅在该扩展名无 `UserChoice` 时**认领默认值；
   结束调用 `SHChangeNotify` 立即刷新；卸载对称回收。
+- **新增一个文件类型要同时改三处，缺一处就会"能手选但看不到/或能看到但关联不上"**：
+  1. `tauri.conf.json` → `bundle.fileAssociations` 增加条目（决定 ProgID、图标、打开命令）。
+  2. `installer-hooks.nsh` → `MDXClaimExt` / `MDXReleaseExt` 各加一行（宏已参数化为
+     `PROGID EXT` 两参，新类型用自己的 ProgID）。只改 ① 不改 ②：能关联但不会出现在
+     "打开方式"里；只改 ② 不改 ①：ProgID 没有 command，双击会失败。
+  3. 若该类型要出现在**侧栏工作区文件树**，还要在 `src-tauri/src/lib.rs` 的
+     `read_dir_files` 扩展名白名单里加上它（这是独立的一处，与系统关联无关）。
+- PDF 关联的默认行为：`.pdf` 通常已被 Edge/Acrobat 占用 `UserChoice`，所以安装**不会**抢占默认，
+  只是把 MarkdownX 加进"打开方式"；用户可在「设置 → 默认应用 → 按文件类型选择默认应用」指定。
 - 关键注册表位置（均为 HKCU，无需管理员）：
 
 | 键 | 作用 |
