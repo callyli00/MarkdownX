@@ -4233,6 +4233,17 @@ ${texBody}
                 onScaleChange={setPdfScale}
                 printToken={pdfPrintToken}
                 onSelectionChange={setPdfPendingSel}
+                onSurfaceContextMenu={({ clientX, clientY, pageIndex, annotId, annotText, selectedText }) => {
+                  ctxAnchorElementRef.current = null;
+                  openContextMenu(clientX, clientY, {
+                    surface: annotId ? 'pdf-annot' : 'pdf-page',
+                    annotId,
+                    annotText,
+                    selectedText,
+                    pageIndex,
+                    pageCount: pdfPageInfo?.total ?? undefined,
+                  });
+                }}
               />
             </React.Suspense>
           ) : isSourceMode ? (

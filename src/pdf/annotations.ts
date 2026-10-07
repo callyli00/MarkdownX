@@ -76,3 +76,54 @@ export function hexToRgb(hex: string): { r: number; g: number; b: number } {
 export function annotsForPage(annots: PdfAnnot[], page: number): PdfAnnot[] {
   return annots.filter((a) => a.page === page);
 }
+
+/**
+ * Geometric hit-test: which annotation (if any) covers the point (px, py), given in
+ * page-local CSS pixels? Returns the SMALLEST hit so overlapping marks resolve to
+ * the innermost one. A few px of slack make thin lines (underline/strikeout/ink)
+ * easy to click.
+ *
+ * Geometric rather than DOM-based on purpose: the annotation SVG layer keeps
+ * `pointer-events: none` while text-selection tools are active, so right-click
+ * events never land on its children — coordinates are the only reliable signal.
+ */
+export function annotAtPoint(
+  annots: PdfAnnot[],
+  pageIndex: number,
+  px: number,
+  py: number,
+  pageSize: { width: number; height: number }
+): PdfAnnot | null {
+  const PAD = 3;
+  let best: PdfAnnot | null = null;
+  let bestArea = Infinity;
+
+  for (const a of annots) {
+    if (a.page !== pageIndex) continue;
+    let boxes: NormRect[];
+    if (a.kind === 'ink') {
+      if (!a.points.length) continue;
+      const xs = a.points.map((p) => p.x);
+      const ys = a.points.map((p) => p.y);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      boxes = [{ x: minX, y: minY, w: Math.max(...xs) - minX, h: Math.max(...ys) - minY }];
+    } else {
+      boxes = a.rects;
+    }
+    for (const b of boxes) {
+      const x = b.x * pageSize.width;
+      const y = b.y * pageSize.height;
+      const w = b.w * pageSize.width;
+      const h = b.h * pageSize.height;
+      if (px >= x - PAD && px <= x + w + PAD && py >= y - PAD && py <= y + h + PAD) {
+        const area = (w + 2 * PAD) * (h + 2 * PAD);
+        if (area < bestArea) {
+          bestArea = area;
+          best = a;
+        }
+      }
+    }
+  }
+  return best;
+}

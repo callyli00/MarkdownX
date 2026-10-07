@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { loadPdfDocument, PdfTextLayer, type PdfDoc } from './pdfjs';
 import { PdfAnnotLayer } from './PdfAnnotLayer';
-import { createAnnot, type PdfAnnot, type AnnotKind, type NormRect, type ViewerTool } from './annotations';
+import { annotAtPoint, createAnnot, type PdfAnnot, type AnnotKind, type NormRect, type ViewerTool } from './annotations';
 
 interface PdfViewerProps {
   bytes: Uint8Array;
@@ -20,6 +20,11 @@ interface PdfViewerProps {
    * mark buttons can apply it ("select text, then press the highlighter").
    */
   onSelectionChange?: (sel: { pageIndex: number; rects: NormRect[] } | null) => void;
+  /** Right-click report: which page, and (if hit geometrically) which annotation. */
+  onSurfaceContextMenu?: (e: {
+    clientX: number; clientY: number; pageIndex: number;
+    annotId?: string; annotText?: string; selectedText?: string;
+  }) => void;
 }
 
 /** Marks created from a text selection (select text, then click once to apply). */
@@ -58,6 +63,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   onScaleChange,
   printToken,
   onSelectionChange,
+  onSurfaceContextMenu,
 }) => {
   const [doc, setDoc] = useState<PdfDoc | null>(null);
   const [pageCount, setPageCount] = useState(0);
@@ -527,6 +533,27 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
               style={{ width: pageSizes[i]?.width, height: pageSizes[i]?.height }}
               onMouseDown={onWrapMouseDown}
               onMouseUp={(e) => onWrapMouseUp(e, i)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!onSurfaceContextMenu) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const size = pageSizes[i];
+                // Geometric hit-test: the annotation SVG keeps pointer-events:none
+                // under selection tools, so DOM-based detection cannot work.
+                const hit = size
+                  ? annotAtPoint(annots, i, e.clientX - rect.left, e.clientY - rect.top, size)
+                  : null;
+                const sel = window.getSelection();
+                onSurfaceContextMenu({
+                  clientX: e.clientX,
+                  clientY: e.clientY,
+                  pageIndex: i,
+                  annotId: hit?.id,
+                  annotText: hit?.text,
+                  selectedText: sel && !sel.isCollapsed ? sel.toString() : undefined,
+                });
+              }}
             >
               <canvas
                 className="pdf-page-canvas"
