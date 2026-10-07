@@ -273,7 +273,8 @@ pub fn run() {
         // decides whether to download and install it. The private signing key never
         // enters this project - only the public key is in tauri.conf.json.
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init());
 
     #[cfg(desktop)]
     {
