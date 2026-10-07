@@ -1,5 +1,11 @@
 import React, { useRef, useState, useCallback } from 'react';
-import { createAnnot, annotsForPage, type PdfAnnot, type AnnotKind } from './annotations';
+import {
+  createAnnot,
+  annotsForPage,
+  type PdfAnnot,
+  type ViewerTool,
+  type NormRect,
+} from './annotations';
 import { cssRectToNorm } from './coords';
 
 interface PdfAnnotLayerProps {
@@ -8,15 +14,47 @@ interface PdfAnnotLayerProps {
   /** Rendered page size in CSS pixels (must match the canvas it overlays). */
   width: number;
   height: number;
-  /** Active drawing tool; null means "select" (annotations are clickable). */
-  tool: AnnotKind | null;
+  /**
+   * Active tool:
+   *  - null            -> passive; the layer stays transparent to pointer events so
+   *                       the PDF.js text layer keeps native selection behaviour.
+   *  - 'delete'        -> drag a box; every annotation inside it is removed.
+   *  - 'note' | 'ink'  -> drag to draw that mark.
+   *  - highlight/underline/strikeout -> drawn from a TEXT SELECTION, so the layer
+   *    stays passive here too (handled by the viewer, not by this component).
+   */
+  tool: ViewerTool | null;
   onAdd: (a: PdfAnnot) => void;
-  onDelete?: (id: string) => void;
+  /** Ids collected by a box-delete gesture. */
+  onDeleteMany?: (ids: string[]) => void;
+}
+
+/** Axis-aligned bounding box of an annotation, in normalized page space. */
+function annotBBox(a: PdfAnnot): NormRect | null {
+  if (a.kind === 'ink') {
+    if (!a.points.length) return null;
+    const xs = a.points.map((p) => p.x);
+    const ys = a.points.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    return { x: minX, y: minY, w: Math.max(...xs) - minX, h: Math.max(...ys) - minY };
+  }
+  if (!a.rects.length) return null;
+  const minX = Math.min(...a.rects.map((r) => r.x));
+  const minY = Math.min(...a.rects.map((r) => r.y));
+  const maxX = Math.max(...a.rects.map((r) => r.x + r.w));
+  const maxY = Math.max(...a.rects.map((r) => r.y + r.h));
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function intersects(a: NormRect, b: NormRect): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
 
 /**
- * Interaction layer sitting exactly on top of a page canvas. It converts pointer
- * gestures into normalized-coordinate annotations and draws the existing ones.
+ * Sits exactly on top of a page's canvas. It draws existing annotations and, for
+ * the drag-based tools (delete / note / ink), converts pointer gestures into
+ * actions. It never intercepts events for text-selection tools.
  */
 export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
   pageIndex,
@@ -25,24 +63,36 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
   height,
   tool,
   onAdd,
-  onDelete,
+  onDeleteMany,
 }) => {
   const ref = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [ink, setInk] = useState<{ x: number; y: number }[]>([]);
 
-  // Only note/ink are drawn by dragging on this layer. For highlight/underline/
-  // strikeout the layer must stay transparent to pointer events so the underlying
-  // PDF.js text layer keeps its native SELECTION behaviour.
+  // Only these tools are drawn by dragging on this layer.
   const drawing = tool === 'note' || tool === 'ink';
+  const deleting = tool === 'delete';
+  const interactive = drawing || deleting;
 
   const local = useCallback((e: React.PointerEvent) => {
     const box = ref.current!.getBoundingClientRect();
     return { x: e.clientX - box.left, y: e.clientY - box.top };
   }, []);
 
+  const boxFromDrag = (d: { x0: number; y0: number; x1: number; y1: number }) =>
+    cssRectToNorm(
+      {
+        left: Math.min(d.x0, d.x1),
+        top: Math.min(d.y0, d.y1),
+        width: Math.abs(d.x1 - d.x0),
+        height: Math.abs(d.y1 - d.y0),
+      },
+      width,
+      height
+    );
+
   const onPointerDown = (e: React.PointerEvent) => {
-    if (!drawing || width <= 0 || height <= 0) return;
+    if (!interactive || width <= 0 || height <= 0) return;
     ref.current?.setPointerCapture(e.pointerId);
     const p = local(e);
     if (tool === 'ink') setInk([p]);
@@ -50,14 +100,15 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!drawing) return;
+    if (!interactive) return;
     const p = local(e);
     if (tool === 'ink' && ink.length) setInk((prev) => [...prev, p]);
     else if (drag) setDrag((d) => (d ? { ...d, x1: p.x, y1: p.y } : d));
   };
 
   const onPointerUp = () => {
-    if (!drawing) return;
+    if (!interactive) return;
+
     if (tool === 'ink' && ink.length > 1) {
       onAdd(
         createAnnot({
@@ -67,19 +118,19 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
         })
       );
     } else if (drag) {
-      const rect = cssRectToNorm(
-        {
-          left: Math.min(drag.x0, drag.x1),
-          top: Math.min(drag.y0, drag.y1),
-          width: Math.abs(drag.x1 - drag.x0),
-          height: Math.abs(drag.y1 - drag.y0),
-        },
-        width,
-        height
-      );
-      // Ignore accidental micro-drags (a click, not a selection).
+      const rect = boxFromDrag(drag);
       if (rect.w > 0.002 && rect.h > 0.002) {
-        onAdd(createAnnot({ page: pageIndex, kind: tool, rects: [rect] }));
+        if (deleting) {
+          const doomed = annotsForPage(annots, pageIndex)
+            .filter((a) => {
+              const bb = annotBBox(a);
+              return bb ? intersects(bb, rect) : false;
+            })
+            .map((a) => a.id);
+          if (doomed.length) onDeleteMany?.(doomed);
+        } else {
+          onAdd(createAnnot({ page: pageIndex, kind: tool as PdfAnnot['kind'], rects: [rect] }));
+        }
       }
     }
     setDrag(null);
@@ -94,24 +145,13 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
       className="pdf-annot-layer"
       width={width}
       height={height}
-      style={{ pointerEvents: drawing ? 'auto' : 'none', cursor: drawing ? 'crosshair' : 'default' }}
+      style={{ pointerEvents: interactive ? 'auto' : 'none', cursor: interactive ? 'crosshair' : 'default' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     >
       {pageAnnots.map((a) => (
-        <g
-          key={a.id}
-          onClick={() => {
-            if (!tool && onDelete) onDelete(a.id);
-          }}
-          style={{
-            // Clicking an existing mark deletes it, but only in select mode — while a
-            // text-selection tool is active the click must reach the text layer.
-            pointerEvents: !tool && onDelete ? 'auto' : 'none',
-            cursor: !tool && onDelete ? 'pointer' : 'inherit',
-          }}
-        >
+        <g key={a.id} style={{ pointerEvents: 'none' }}>
           {a.kind === 'ink' && (
             <polyline
               points={a.points.map((p) => `${p.x * width},${p.y * height}`).join(' ')}
@@ -182,9 +222,9 @@ export const PdfAnnotLayer: React.FC<PdfAnnotLayerProps> = ({
           y={Math.min(drag.y0, drag.y1)}
           width={Math.abs(drag.x1 - drag.x0)}
           height={Math.abs(drag.y1 - drag.y0)}
-          fill={tool === 'highlight' ? '#ffd400' : 'none'}
-          opacity={0.35}
-          stroke="#e11d48"
+          fill={deleting ? 'rgba(239, 68, 68, 0.18)' : tool === 'highlight' ? '#ffd400' : 'none'}
+          opacity={deleting ? 1 : 0.35}
+          stroke={deleting ? '#ef4444' : '#e11d48'}
           strokeDasharray="4 2"
         />
       )}

@@ -3486,3 +3486,9 @@ body.theme-dark .pdf-text-layer ::selection {
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
+.pdf-hint.pending {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+  font-weight: 500;
+}
+body.theme-dark .pdf-hint.pending { color: #fbbf24; }

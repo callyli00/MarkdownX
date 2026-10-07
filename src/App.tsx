@@ -71,7 +71,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.3.1';
+const APP_VERSION = 'v2.3.2';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -97,6 +97,16 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.3.2',
+    date: '2026-10-06',
+    items: [
+      '修复：低缩放下「选中区域」与高亮/下划线错位 —— 文本层缺少 --scale-factor，导致 pdf.js 的 span 定位失效',
+      '「选择」不再兼作删除：选择就是选中文本/图片，不创建也不删除任何标注',
+      '新增「框选删除」工具：拖出一个方框，框内所有标注一并删除',
+      '高亮 / 下划线 / 删除线 改为两步操作：先选中文字，再单击一次应用（选错了还能改）'
+    ]
+  },
   {
     version: 'v2.3.1',
     date: '2026-10-06',

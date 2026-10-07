@@ -11,6 +11,12 @@ export interface NormPoint { x: number; y: number; }
 
 export type AnnotKind = 'highlight' | 'underline' | 'strikeout' | 'note' | 'ink';
 
+/**
+ * What the viewer's tool buttons select. `AnnotKind` draws a mark; 'delete' is a
+ * box-select that removes every annotation it touches.
+ */
+export type ViewerTool = AnnotKind | 'delete';
+
 export interface PdfAnnot {
   id: string;
   /** 0-based page index. */
