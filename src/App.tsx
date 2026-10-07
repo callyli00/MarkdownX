@@ -2067,8 +2067,8 @@ export const App: React.FC = () => {
             return;
           } else if (e.key === '2' || e.key === '@') {
             e.preventDefault();
-            // The typography inspector is Markdown-only.
-            if (!pdfTabActive) setIsInspectorOpen((v) => !v);
+            // The panel now serves both: typography for Markdown, PDF ops for a PDF.
+            setIsInspectorOpen((v) => !v);
             return;
           } else if (e.key === 'F' || e.key === 'f') {
             e.preventDefault();
@@ -2109,7 +2109,8 @@ export const App: React.FC = () => {
           handleNewFile();
         } else if (e.key === 'p' || e.key === 'P') {
           e.preventDefault();
-          if (!pdfTabActive) handlePrint();
+          // handlePrint routes a PDF to its own true-page-size print path.
+          handlePrint();
         } else if (e.key === ',' || e.key === '，') {
           e.preventDefault();
           setShowTypographyModal(true);
