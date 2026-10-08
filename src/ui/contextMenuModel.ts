@@ -122,7 +122,21 @@ export function buildMenu(t: ContextTarget): MenuItem[] {
     case 'pdf-page':
       if (hasSel) items.push({ id: 'copy-selection', label: '复制选中文字', icon: '⧉' });
       items.push(
-        { id: 'pdf-rotate', label: '旋转此页 90°', icon: '⟳', dividerBefore: hasSel },
+        // Annotation. With a text selection these apply straight to it — the whole
+        // point of having them here instead of only in the toolbar. Without a
+        // selection they ARM the tool (a menu arms, it never toggles off).
+        {
+          id: 'pdf-mark-highlight',
+          label: hasSel ? '高亮选中文字' : '高亮工具',
+          icon: '🖍',
+          dividerBefore: hasSel,
+        },
+        { id: 'pdf-mark-underline', label: hasSel ? '给选中文字加下划线' : '下划线工具', icon: '▁' },
+        { id: 'pdf-mark-strikeout', label: hasSel ? '给选中文字加删除线' : '删除线工具', icon: '▬' },
+        { id: 'pdf-tool-note', label: '便签工具', icon: '🗒' },
+        { id: 'pdf-tool-ink', label: '墨迹工具', icon: '✒' },
+        { id: 'pdf-tool-eraser', label: '橡皮（框选删除标注）', icon: '🧽' },
+        { id: 'pdf-rotate', label: '旋转此页 90°', icon: '⟳', dividerBefore: true },
         { id: 'pdf-insert-after', label: '在此页后插入空白页', icon: '＋' },
         { id: 'pdf-extract', label: '提取此页另存为…', icon: '⬈' },
         { id: 'pdf-delete-page', label: '删除此页', icon: '🗑', disabled: (t.pageCount ?? 1) <= 1 },

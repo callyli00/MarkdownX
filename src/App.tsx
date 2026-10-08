@@ -13,7 +13,7 @@ import { isPdfPath, loadPdfBytes } from './pdf/openPdf';
 // async) so ~300 kB of pdf-lib never lands in the startup bundle.
 import { fetchNoteFontBytes } from './pdf/cjkFont';
 import { buildMenu, clampMenuPosition, type ContextTarget, type MenuItem } from './ui/contextMenuModel';
-import { createAnnot, type PdfAnnot, type NormRect, type ViewerTool } from './pdf/annotations';
+import { createAnnot, type AnnotKind, type PdfAnnot, type NormRect, type ViewerTool } from './pdf/annotations';
 // Lazy: pdf.js + pdf-lib are ~1 MB of the bundle and are only needed once a PDF
 // tab is opened, so they must not delay first paint of a Markdown session.
 const PdfViewer = React.lazy(() =>
@@ -87,7 +87,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.0';
+const APP_VERSION = 'v2.4.1';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -129,6 +129,16 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.1',
+    date: '2026-10-07',
+    items: [
+      'PDF 右键菜单新增标注功能：高亮 / 下划线 / 删除线 / 便签 / 墨迹 / 橡皮',
+      '先选中文字再右键：直接对选中文字应用高亮、下划线或删除线（一步到位）',
+      '未选中文字时：菜单项改为“启用该标注工具”，菜单只武装、不会误关工具',
+      '移除 PDF 视图里选择工具/文字后的指导性提示条（banner），界面更干净'
+    ]
+  },
   {
     version: 'v2.4.0',
     date: '2026-10-07',
@@ -1558,6 +1568,24 @@ export const App: React.FC = () => {
       case 'pdf-delete-page':
         void applyPdfStructuralOp(async (b) => (await import('./pdf/structuralOps')).deletePages(b, [ctx.pageIndex ?? 0]));
         return;
+      case 'pdf-mark-highlight':
+        armOrApplyPdfTool('highlight');
+        return;
+      case 'pdf-mark-underline':
+        armOrApplyPdfTool('underline');
+        return;
+      case 'pdf-mark-strikeout':
+        armOrApplyPdfTool('strikeout');
+        return;
+      case 'pdf-tool-note':
+        armOrApplyPdfTool('note');
+        return;
+      case 'pdf-tool-ink':
+        armOrApplyPdfTool('ink');
+        return;
+      case 'pdf-tool-eraser':
+        armOrApplyPdfTool('delete');
+        return;
       case 'pdf-print':
         handlePrint();
         return;
@@ -2735,22 +2763,42 @@ export const App: React.FC = () => {
    *  1. select text first, then press the highlighter -> marks that selection;
    *  2. press the highlighter first, then select text -> PdfViewer marks on release.
    */
+  /**
+   * Mark the pending text selection with `kind`. Returns false when there is no
+   * pending selection, so callers can fall back to just arming the tool.
+   */
+  const applyMarkToPendingSelection = (kind: AnnotKind): boolean => {
+    if (!pdfPendingSel) return false;
+    const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
+    if (f) {
+      updateActivePdfAnnots([
+        ...(f.pdfAnnots ?? []),
+        createAnnot({ page: pdfPendingSel.pageIndex, kind, rects: pdfPendingSel.rects }),
+      ]);
+    }
+    setPdfPendingSel(null);
+    window.getSelection()?.removeAllRanges();
+    return true;
+  };
+
+  /** Toolbar icon semantics: apply to a pending selection, else toggle the tool. */
   const onPdfToolButton = (id: ViewerTool | null) => {
     const isMark = id === 'highlight' || id === 'underline' || id === 'strikeout';
-    if (isMark && pdfPendingSel) {
-      const f = openFilesRef.current.find((x) => x.id === activeFileIdRef.current);
-      if (f) {
-        updateActivePdfAnnots([
-          ...(f.pdfAnnots ?? []),
-          createAnnot({ page: pdfPendingSel.pageIndex, kind: id, rects: pdfPendingSel.rects }),
-        ]);
-      }
-      setPdfPendingSel(null);
-      window.getSelection()?.removeAllRanges();
+    if (id && isMark && applyMarkToPendingSelection(id)) {
       setPdfTool(id); // stay armed so the next selection can be marked the same way
       return;
     }
     setPdfTool((cur) => (cur === id ? null : id));
+  };
+
+  /** Context-menu semantics: apply to a pending selection, else ARM (never toggle off). */
+  const armOrApplyPdfTool = (id: ViewerTool) => {
+    const isMark = id === 'highlight' || id === 'underline' || id === 'strikeout';
+    if (isMark && applyMarkToPendingSelection(id)) {
+      setPdfTool(id);
+      return;
+    }
+    setPdfTool(id);
   };
 
   const rotateCurrentPdfPage = async () => {

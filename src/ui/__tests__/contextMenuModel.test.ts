@@ -73,6 +73,28 @@ describe('buildMenu: pdf', () => {
   it('selection on pdf adds copy-selection first', () => {
     expect(ids({ surface: 'pdf-page', selectedText: 'abc', pageCount: 2 })[0]).toBe('copy-selection');
   });
+
+  it('with a selection the mark items apply directly to it', () => {
+    const menu = buildMenu({ surface: 'pdf-page', pageIndex: 0, pageCount: 3, selectedText: '应力松弛' });
+    expect(menu.map((i) => i.id).slice(0, 4)).toEqual([
+      'copy-selection', 'pdf-mark-highlight', 'pdf-mark-underline', 'pdf-mark-strikeout',
+    ]);
+    expect(menu.find((i) => i.id === 'pdf-mark-highlight')!.label).toContain('选中文字');
+  });
+
+  it('without a selection the mark items arm the tools (no leading divider)', () => {
+    const menu = buildMenu({ surface: 'pdf-page', pageIndex: 0, pageCount: 3 });
+    expect(menu[0].id).toBe('pdf-mark-highlight');
+    expect(menu[0].dividerBefore).toBeFalsy();
+    expect(menu.find((i) => i.id === 'pdf-mark-highlight')!.label).toContain('工具');
+  });
+
+  it('pdf menu carries the full annotation tool set', () => {
+    const m = ids({ surface: 'pdf-page', pageIndex: 0, pageCount: 3 });
+    for (const id of ['pdf-mark-highlight', 'pdf-mark-underline', 'pdf-mark-strikeout', 'pdf-tool-note', 'pdf-tool-ink', 'pdf-tool-eraser']) {
+      expect(m).toContain(id);
+    }
+  });
   it('annot menu deletes; note adds copy-text', () => {
     expect(ids({ surface: 'pdf-annot', annotId: 'a1' })).toEqual(['annot-delete']);
     expect(ids({ surface: 'pdf-annot', annotId: 'a1', annotText: '批注' })).toContain('annot-copy-text');

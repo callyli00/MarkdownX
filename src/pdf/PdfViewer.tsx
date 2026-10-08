@@ -473,28 +473,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     setNoteDraft('');
   };
 
-  const activeLabel =
-    tool === 'highlight' ? '高亮'
-    : tool === 'underline' ? '下划线'
-    : tool === 'strikeout' ? '删除线'
-    : null;
-
   return (
     <div className="pdf-viewer">
-      {pendingSel ? (
-        <div className="pdf-hint pending">
-          已选中文字 —— 点击工具栏的<b>相应图标</b>（或单击页面）即可应用标注。
-        </div>
-      ) : activeLabel ? (
-        <div className="pdf-hint">
-          已选择「{activeLabel}」：先用鼠标<b>选中文字</b>，再<b>单击一次</b>即可生成标注。
-        </div>
-      ) : tool === 'delete' ? (
-        <div className="pdf-hint">
-          已选择「橡皮（删除标注）」：在页面上<b>拖出一个框</b>，框内的所有标注都会被删除。
-        </div>
-      ) : null}
-
       {noteEditId && (
         <div className="pdf-note-edit">
           <span>便签文字：</span>

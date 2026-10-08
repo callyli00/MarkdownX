@@ -3,7 +3,7 @@
 面向"接手/续做这个项目的人（或 AI）"的操作文档。README 讲**功能与历史**，本手册讲**怎么改、怎么验证、怎么发版**，
 以及**哪些坑真的踩过、哪些结论真的验证过**。
 
-> 对应版本：v2.4.0（2026-10-07）。每条操作都来自本项目的实际执行记录，不是推测。
+> 对应版本：v2.4.1（2026-10-07）。每条操作都来自本项目的实际执行记录，不是推测。
 
 ---
 
@@ -322,6 +322,14 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 - PDF 标注命中用 `annotAtPoint` **几何命中**（annotations.ts，有单测），不要改成 DOM 命中——
   标注 SVG 在选择工具下是 `pointer-events:none`，事件永远落不到它上面；
 - 菜单渲染由 `buildMenu` 驱动，不要再手写 per-surface 的 JSX 三元分支。
+
+**PDF 标注项的两套语义，别混用**：
+- 工具栏图标（`onPdfToolButton`）：有待应用选区则应用，否则**切换**（再点一次关闭）；
+- 右键菜单项（`armOrApplyPdfTool`）：有选区则应用，否则**只武装**（菜单不是 toggle，不能把
+  用户已激活的工具悄悄关掉）。两者共用 `applyMarkToPendingSelection()`，避免逻辑漂移。
+
+PDF 视图**不显示操作提示条**（v2.4.1 起移除）：可发现性由工具图标的 `title` 与右键菜单承担，
+不要再加回 `.pdf-hint` 之类的常驻引导。
 
 外部动作（打开链接 / 在文件夹中显示）走 `@tauri-apps/plugin-opener` 的**动态导入**；
 capabilities 只给了 `opener:allow-open-url` 与 `opener:allow-reveal-item-in-dir`，不要扩权。
