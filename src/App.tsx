@@ -87,7 +87,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.2';
+const APP_VERSION = 'v2.4.3';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -129,6 +129,17 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.3',
+    date: '2026-10-07',
+    items: [
+      '修复：含 < 的公式会“毒化”它后面的显示公式 —— 后续 $$…$$ 被当成行内公式',
+      '症状：段落行首多出裸 $、中文被误当成公式、本该渲染的行内公式裸露成源码',
+      '根因：isInsideHtmlTag 把数学里的 <m（如 \\sum_{l<m}）当成 HTML 标签开头，而该“标签”永不闭合，导致其后所有匹配都被判为属性区而跳过 token 化',
+      '修法：只承认格式正确的标签开头（<div 、</a>、<!--…），并要求该标签确实在后方闭合',
+      '新增 5 条回归单测；渲染护栏 6/6 保持 golden 一致'
+    ]
+  },
   {
     version: 'v2.4.2',
     date: '2026-10-07',

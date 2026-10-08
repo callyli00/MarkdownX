@@ -5519,14 +5519,15 @@ function configureMarked(documentBasePath = "", resolveAssets = true) {
     pedantic: false
   });
 }
+var HTML_TAG_OPEN = /^<(?:[A-Za-z][A-Za-z0-9-]*(?=[\s/>])|\/[A-Za-z][A-Za-z0-9-]*(?=[\s/>])|!--|!|\?)/;
 function isInsideHtmlTag(text, index) {
   if (index <= 0) return false;
   const lastOpen = text.lastIndexOf("<", index - 1);
   if (lastOpen === -1) return false;
   const lastClose = text.lastIndexOf(">", index - 1);
   if (lastClose > lastOpen) return false;
-  const next = text[lastOpen + 1] || "";
-  return next === "/" || next === "!" || next === "?" || /[A-Za-z]/.test(next);
+  if (!HTML_TAG_OPEN.test(text.slice(lastOpen, lastOpen + 64))) return false;
+  return text.indexOf(">", lastOpen + 1) >= index;
 }
 function maskVerbatimRegions(input) {
   const store = /* @__PURE__ */ new Map();

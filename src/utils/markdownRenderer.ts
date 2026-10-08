@@ -467,6 +467,13 @@ export function configureMarked(documentBasePath: string = '', resolveAssets: bo
  * that lives in an attribute can never be typeset anyway (it is attribute text,
  * not a text node), so it must be left exactly as written.
  */
+/**
+ * A '<' the HTML parser would actually read as the start of a tag: a tag (or
+ * attribute) name immediately followed by whitespace, '/' or '>', a closing tag, a
+ * comment, a DOCTYPE, or a processing instruction.
+ */
+const HTML_TAG_OPEN = /^<(?:[A-Za-z][A-Za-z0-9-]*(?=[\s/>])|\/[A-Za-z][A-Za-z0-9-]*(?=[\s/>])|!--|!|\?)/;
+
 function isInsideHtmlTag(text: string, index: number): boolean {
   // A match at the very start cannot be inside anything. Without this guard,
   // lastIndexOf clamps its negative fromIndex to 0, finds the match's OWN '<'
@@ -477,10 +484,15 @@ function isInsideHtmlTag(text: string, index: number): boolean {
   if (lastOpen === -1) return false;
   const lastClose = text.lastIndexOf('>', index - 1);
   if (lastClose > lastOpen) return false;
-  // Only a plausible tag opener counts, so "a < b and $x$" is not mistaken for
-  // attribute space.
-  const next = text[lastOpen + 1] || '';
-  return next === '/' || next === '!' || next === '?' || /[A-Za-z]/.test(next);
+  // Only a WELL-FORMED opener counts. The previous test ("a letter follows the '<'")
+  // accepted maths such as `\sum_{l<m}` as a tag opener; because that "tag" never
+  // closes, every LATER match was judged to sit in attribute space and skipped
+  // tokenization. A display equation then fell through to the inline pass, its '$'
+  // paired with the next '$', and raw LaTeX (plus Chinese text taken for maths)
+  // reached the reader. "a < b and $x$" is likewise still not attribute space.
+  if (!HTML_TAG_OPEN.test(text.slice(lastOpen, lastOpen + 64))) return false;
+  // ...and it must still be open here: the tag has to close at or after `index`.
+  return text.indexOf('>', lastOpen + 1) >= index;
 }
 
 /**
