@@ -5245,6 +5245,9 @@ function looksLikeMermaid(body) {
   const head = meaningful[0].split(/[\s:]/)[0].toLowerCase();
   return MERMAID_DECLARATIONS.some((d) => d.toLowerCase() === head);
 }
+function escapeMathText(value) {
+  return value.replace(/</g, "&lt;");
+}
 function escapeHtml(value) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -5731,11 +5734,11 @@ function detokenizeMath(html2, tokens, diagramSources, tokenSourceSpans) {
       const cleanId = item.labelId ? ` id="${labelToAnchorId(item.labelId)}"` : "";
       const tagHtml = item.tag ? `<span class="math-equation-tag">(${item.tag})</span>` : "";
       const texAttr = item.math ? ` data-tex-source="${escapeHtml(item.math)}"` : "";
-      const rowHtml = `<div class="math-equation-row"${cleanId}${texAttr}${srcAttr(key)}><div class="math-equation-content">$$${item.math}$$</div>${tagHtml}</div>`;
+      const rowHtml = `<div class="math-equation-row"${cleanId}${texAttr}${srcAttr(key)}><div class="math-equation-content">$$${escapeMathText(item.math)}$$</div>${tagHtml}</div>`;
       restoredHtml = restoredHtml.replace(key, () => rowHtml);
     } else {
       const inlineTexAttr = item.math ? ` data-tex-source="${escapeHtml(item.math)}"` : "";
-      const inlineMathHtml = `<span class="math-inline"${inlineTexAttr}${srcAttr(key)}>$${item.math}$</span>`;
+      const inlineMathHtml = `<span class="math-inline"${inlineTexAttr}${srcAttr(key)}>$${escapeMathText(item.math)}$</span>`;
       restoredHtml = restoredHtml.replace(key, () => inlineMathHtml);
     }
   }

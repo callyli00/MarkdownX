@@ -87,7 +87,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.1';
+const APP_VERSION = 'v2.4.2';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -129,6 +129,15 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.2',
+    date: '2026-10-07',
+    items: [
+      '修复：公式含 < 号（如 \\sum_{l<m}）时整篇渲染错乱 —— 裸 < 被 HTML 解析器当作标签，公式被截断、$$ 失去闭合，MathJax 便把后续正文（常含 # 标题）当成数学，报 "macro parameter character # in math mode"',
+      '修法：公式正文按文本节点转义 < 为 &lt;（浏览器解码后仍是 <，LaTeX 语义不变）',
+      '已复现并验证：修复前 DOM 出现伪造元素、公式截断；修复后公式完整、无 MathJax 报错'
+    ]
+  },
   {
     version: 'v2.4.1',
     date: '2026-10-07',

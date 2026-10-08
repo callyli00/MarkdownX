@@ -59,6 +59,26 @@ function looksLikeMermaid(body: string): boolean {
 }
 
 /** Escape text for safe interpolation into an HTML text node. */
+/**
+ * Escape a LaTeX fragment for a TEXT node.
+ *
+ * Only '<' needs it, but it is essential: a formula such as `\sum_{l<m}` puts a
+ * bare '<' in the markup, the HTML parser reads `<m}...` as a start tag, and the
+ * rest of the formula is swallowed as that bogus element's attributes. The math is
+ * then truncated mid-way, its closing `$$` is gone, and MathJax pairs the dangling `$$`
+ * with the NEXT `$$` — feeding a chunk of the document (typically a '#' heading)
+ * into TeX, which fails with "You can't use 'macro parameter character #' in math
+ * mode". Escaping here keeps the DOM text exactly equal to the source: the parser
+ * decodes `&lt;` back to '<', so MathJax still receives the original LaTeX.
+ *
+ * '>' is deliberately NOT escaped (it is legal in a text node, and the render gate's
+ * goldens legitimately contain `$K_1 > 0$`), and a bare '&' is tolerated by the HTML
+ * parser in text content.
+ */
+function escapeMathText(value: string): string {
+  return value.replace(/</g, '&lt;');
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -797,7 +817,7 @@ function detokenizeMath(
       
       const texAttr = item.math ? ` data-tex-source="${escapeHtml(item.math)}"` : '';
       const rowHtml = `<div class="math-equation-row"${cleanId}${texAttr}${srcAttr(key)}>` +
-        `<div class="math-equation-content">$$${item.math}$$</div>` +
+        `<div class="math-equation-content">$$${escapeMathText(item.math)}$$</div>` +
         `${tagHtml}` +
         `</div>`;
       
@@ -809,7 +829,7 @@ function detokenizeMath(
       // data-tex-source lets the preview->source mapper put the TeX back when it
       // probes a typeset formula (MathJax glyphs no longer match the source).
       const inlineTexAttr = item.math ? ` data-tex-source="${escapeHtml(item.math)}"` : '';
-      const inlineMathHtml = `<span class="math-inline"${inlineTexAttr}${srcAttr(key)}>$${item.math}$</span>`;
+      const inlineMathHtml = `<span class="math-inline"${inlineTexAttr}${srcAttr(key)}>$${escapeMathText(item.math)}$</span>`;
       restoredHtml = restoredHtml.replace(key, () => inlineMathHtml);
     }
   }
