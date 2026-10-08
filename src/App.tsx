@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -1351,6 +1351,7 @@ export const App: React.FC = () => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; target: ContextTarget } | null>(null);
   /** The exact element right-clicked, for "open in source" offset resolution. */
   const ctxAnchorElementRef = useRef<HTMLElement | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
 
   /** Clipboard with a fallback: navigator.clipboard is unavailable in some webviews. */
   const copyTextToClipboard = useCallback(async (text: string) => {
@@ -1615,6 +1616,25 @@ export const App: React.FC = () => {
     const pos = clampMenuPosition(x, y, 230, 300, window.innerWidth, window.innerHeight);
     setContextMenu({ ...pos, target });
   };
+
+  /**
+   * The model-driven menu's real height depends on how many items it got, so the
+   * first clamp (based on an estimate) can still leave it hanging off-screen. After
+   * it is laid out, measure it and pull it back inside the viewport. Converges: once
+   * the position fits, the condition is false and no further state write happens.
+   */
+  useLayoutEffect(() => {
+    const el = ctxMenuRef.current;
+    if (!el || !contextMenu) return;
+    const rect = el.getBoundingClientRect();
+    const maxX = window.innerWidth - rect.width - 8;
+    const maxY = window.innerHeight - rect.height - 8;
+    if (contextMenu.x > maxX || contextMenu.y > maxY) {
+      setContextMenu((c) =>
+        c ? { ...c, x: Math.max(8, Math.min(c.x, maxX)), y: Math.max(8, Math.min(c.y, maxY)) } : c
+      );
+    }
+  }, [contextMenu]);
 
   /** Right-click on a not-yet-open file (workspace tree / recent list). */
   const openSidebarFileMenu = (x: number, y: number, path: string) => {
@@ -2795,7 +2815,10 @@ export const App: React.FC = () => {
   const armOrApplyPdfTool = (id: ViewerTool) => {
     const isMark = id === 'highlight' || id === 'underline' || id === 'strikeout';
     if (isMark && applyMarkToPendingSelection(id)) {
-      setPdfTool(id);
+      // ONE-SHOT from the menu: drop back to plain selection, otherwise the armed
+      // tool would silently auto-mark every later text selection. The repeatable
+      // "tool mode" is still available from the toolbar icon.
+      setPdfTool(null);
       return;
     }
     setPdfTool(id);
@@ -4481,7 +4504,7 @@ ${texBody}
             onClick={() => setContextMenu(null)}
             onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
           />
-          <div className="ctx-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu">
+          <div ref={ctxMenuRef} className="ctx-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu">
             {buildMenu(contextMenu.target).map((item) => (
               <React.Fragment key={item.id}>
                 {item.dividerBefore && <div className="dropdown-divider" />}

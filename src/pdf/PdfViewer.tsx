@@ -219,8 +219,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       if (i >= start && i <= end) void renderPageInto(i, gen);
       else releasePage(i);
     }
+    // pageSizes is a dependency on purpose: the first pass runs before the async
+    // measurement has filled pageSizesRef, so renderPageInto early-returns and the
+    // initial page would stay blank until a scroll re-triggered this effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, visibleRange, renderPageInto]);
+  }, [doc, visibleRange, renderPageInto, pageSizes]);
 
   // Observe every page wrapper: report the most-visible page AND maintain the render
   // window (visible pages +/- RENDER_AHEAD). This single observer drives both the
@@ -269,7 +272,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // Fallback: even before IntersectionObserver fires (or if pageSizes arrive late),
   // render the first screenful so the initial view is never blank.
   useEffect(() => {
-    if (pageCount && visibleRange.start === 0 && visibleRange.end === 0) {
+    const nothingReportedYet = visibleSetRef.current.size === 0;
+    if (pageCount && nothingReportedYet && visibleRange.start === 0 && visibleRange.end === 0) {
       setVisibleRange({ start: 0, end: Math.min(pageCount - 1, RENDER_AHEAD) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
