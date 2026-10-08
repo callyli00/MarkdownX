@@ -1,0 +1,11 @@
+{
+  "version": "2.4.3",
+  "notes": "#### 修复：含 `<` 的公式会破坏它后面的显示公式\n- **症状**：段落行首多出一个裸 `$`；中文被误当成数学（出现内容为「 类推，下标 」的假公式）；\n  本该渲染的行内公式（如 `$\\phi_{xz},…$`）**裸露成源码**。\n- **根因**（已用二分法定位）：`isInsideHtmlTag()` 把数学里的 `<m`（`\\sum_{l<m}`）判为 HTML 标签\n  开头；该\"标签\"永不闭合，于是**其后所有** `$$…$$` 都被当作\"属性区域\"跳过显示公式处理，\n  掉进行内公式通道 —— `$` 与下一个 `$` 错配，中文被当成公式、真公式成了源码。\n- **修法**：只承认**格式正确**的标签开头（`<div `、`</a>`、`<!--`、`<!DOCTYPE`、`<?xml`），\n  并要求该标签确实在后方由 `>` 闭合；`\\sum_{l<m}` 与 `a < b` 都不再被误判。\n- **验证**：8 用例二分矩阵全绿（含\"含 `<` 公式之后\"与\"真实标签\"回归项）；\n  渲染护栏 **6/6 仍 PASS 且 golden 未变**；新增 5 条单测（共 73）。",
+  "pub_date": "2026-10-08T09:13:54.045Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTUW11NElLelc2SHFkK3k4R2Z1cVZVWlZNUUF4M0oxbi9CNXVXYTBqSi8yNTN0bnBkMjQ2S0RzeExCb1YvSk9GSEo3NGVmdjg2UHBQZjExRXZEbUxxRHhTblFOZmJsZWdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNDUwODMzCWZpbGU6TWFya2Rvd25YXzIuNC4zX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjQuMwpjY1pKMnpVamxjR3lQVUN0bFpaalBxYkZ5bnRsZW1KQis5aG5VM3FBemRGbFBKZFFsckVMd1J5c3RTNGZhZE9FbTNlS0ovYzVYbm5iZS9paDFJQ0JBQT09Cg==",
+      "url": "https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/MarkdownX_2.4.3_x64-setup.exe"
+    }
+  }
+}
