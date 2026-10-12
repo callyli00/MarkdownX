@@ -428,11 +428,48 @@ detected conflict: 'lib\rustlib\aarch64-linux-android\lib\libaddr2line-*.rlib'
 - **可重复运行**：工程已存在时不会报错，会再跑一遍并打印 `Project generated successfully!`。
 - **不覆盖已存在的生成文件**：`app/build.gradle.kts` 里的 `ndkVersion` 钉子在重跑 init 后**依然在**。
   但**删掉**某个生成文件再跑 init，它会被按模板重新生成（实测删 `AndroidManifest.xml` 后重建，内容与之前逐字节一致 → init 是确定性的）。
-- **不会从 `fileAssociations` 生成 Android intent-filter**。实测：配置里写了 `mimeType` + `androidIntentActionFilters`，
-  删掉 manifest 重新 init，生成的 `AndroidManifest.xml` **仍然只有 MAIN/LAUNCHER**。
-  schema 的描述只说该值「used as `android:mimeType` in the `<data>` element of an `<intent-filter>` in `AndroidManifest.xml`」，
-  但 CLI 并没有做这件事。
-  → 「用 MarkdownX 打开 .md/pdf」必须**手改入库的 `AndroidManifest.xml`**（这也符合 Tauri 在生成目录里放 `.gitignore`、把工程骨架交给用户维护的设计）。
+- **intent-filter 在「构建时」生成，`init` 时不会**（此条先前的判断是错的，实测纠正）：
+  先在配置里写好 `mimeType` + `androidIntentActionFilters`，然后跑 `tauri android build`，
+  CLI 会往 `app/src/main/AndroidManifest.xml` 注入带标记
+  `<!-- tauri-file-associations. AUTO-GENERATED. DO NOT REMOVE. -->` 的 `<intent-filter>` 块
+  （`VIEW`/`SEND` 动作 + `android:mimeType` + 每条扩展名的 `android:pathPattern`）。
+  **只跑 `tauri android init` 是看不到的** —— 本次就因为只在 init 后检查，误判成"Tauri 不生成、必须手改"。
+  → 结论：靠配置即可，「用 MarkdownX 打开 .md/pdf」不需要手写 manifest；但**该块要跑一次 build 才会落地**。
+  → `mimeType` 是关键：主配置里原有条目只有 `ext`/`name`/`role`，**没有 mimeType 就不会生成 intent-filter**，
+    所以必须在 `tauri.android.conf.json` 里补上（已补）。
+
+### 13.6.1 Windows 上构建 Android 需要符号链接权限（卡住整条构建）
+
+`tauri android build` 在 Rust 编译完成后，会把产物 `.so` **以符号链接**放进
+`gen/android/app/src/main/jniLibs/<abi>/`（CLI 会打印 `Info symlinking lib "…" in jniLibs dir "…"`）。
+Windows 默认不允许非管理员创建符号链接，于是整条构建在这里中止：
+
+```
+failed to build Android app: Failed to create a symbolic link from "…\libmarkdown_x_lib.so" to file
+"…\gen/android/app/src/main/jniLibs/arm64-v8a\libmarkdown_x_lib.so" (file clobbering enabled):
+Creation symbolic link is not allowed for this system.
+For Windows 10 or newer: You should use developer mode.
+```
+
+实测过的**无效**绕法：
+
+- 预先在 jniLibs 里放好同名文件 → 无效（`file clobbering enabled`：它会先删掉再建链，仍失败）。
+- CLI 里没有任何 copy 回退，也没有 `TAURI_*SYMLINK*`/`TAURI_*COPY*` 之类的环境变量开关（二进制里 grep 过）。
+
+有效解法（二选一，都需要用户配合，普通权限的 shell 做不到）：
+
+1. **开启开发者模式**：设置 → 隐私和安全性 → 开发者选项 → 开发者模式 = 开（或管理员执行
+   `reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /v AllowDevelopmentWithoutDevLicense /t REG_DWORD /d 1 /f`）。
+2. **用管理员权限的终端**跑构建。
+
+自查命令（应输出 `SYMLINK OK`）：
+
+```powershell
+New-Item -ItemType SymbolicLink -Path "$env:TEMP\l.txt" -Target "$env:TEMP\t.txt"
+```
+
+补充：debug 的未 strip 产物很大（本机实测 `libmarkdown_x_lib.so` **153 MB**），这也是 CLI 选择建链而非复制的原因。
+另注意 `app/.gitignore` 已包含 `/src/main/jniLibs/**/*.so`，即使误复制也不会入库。
 
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
