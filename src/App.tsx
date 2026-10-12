@@ -1370,6 +1370,18 @@ export const App: React.FC = () => {
     document.body.classList.toggle('host-desktop', isDesktopPlatform(host));
   }, [host]);
 
+  /**
+   * A phone has no room for a permanently docked 260px sidebar, so it starts closed and
+   * is opened on demand as an overlay. Runs once, when the platform first becomes known
+   * (and never again), so a deliberate toggle by the user is not undone.
+   */
+  const sidebarInitDone = useRef(false);
+  useEffect(() => {
+    if (host === null || sidebarInitDone.current) return;
+    sidebarInitDone.current = true;
+    if (isMobilePlatform(host)) setIsSidebarOpen(false);
+  }, [host]);
+
   /** Auto-update: the app checks, the user decides. Nothing installs on its own. */
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult>({ status: 'idle' });
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -3578,9 +3590,14 @@ ${texBody}
     <div className="typora-shell" onDragOver={handleHtml5DragOver} onDragLeave={handleHtml5DragLeave} onDrop={handleHtml5Drop}>
       {/* Workbench row: the sidebar spans the full height, the top bar starts to its right */}
       <div className="app-row">
-          {/* Collapsible Sidebar */}
+          {/* Collapsible Sidebar.
+              The inline width is desktop-only: on a phone the sidebar is an off-canvas
+              overlay (see the `host-mobile` rules in App.css). An inline 260px width would
+              pin it into the flex row and squeeze the entire app column to ~85px on a
+              350px viewport - which collapsed every top-bar button to 0x0 on a real device
+              and made the whole toolbar untappable. */}
           {isSidebarOpen && (
-            <aside className="typora-sidebar" style={{ width: sidebarWidth }}>
+            <aside className="typora-sidebar" style={isDesktop ? { width: sidebarWidth } : undefined}>
               <div className="sb-brand">
                 <MarkdownXLogo size={22} />
                 <span className="sb-brand-name">MarkdownX</span>

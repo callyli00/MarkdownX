@@ -3592,3 +3592,35 @@ body.host-mobile .wb-tb-right { gap: 2px; }
    never be reached at all. Give the list rows a finger-sized row instead. */
 body.host-mobile .sidebar-doc-item,
 body.host-mobile .dropdown-item { min-height: 44px; }
+
+/* A phone cannot afford a docked sidebar. MEASURED on a real device (OnePlus, 350x805
+   CSS px): the docked 260px sidebar left the app column just **85px** wide, which
+   collapsed every top-bar button to 0x0 - the buttons were not small, they did not
+   exist as hit targets at all. So on mobile the sidebar floats above the app instead of
+   sitting beside it, and the app column takes the whole viewport. */
+body.host-mobile .typora-sidebar {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(84vw, 340px);
+  z-index: 120;
+  box-shadow: 0 0 28px rgba(0, 0, 0, 0.38);
+}
+body.host-mobile .app-col { width: 100%; }
+
+/* Let toolbar buttons keep their size instead of being squeezed to nothing.
+   Deliberately NOT `overflow-x: auto` on the toolbar: per spec that forces the other
+   axis to `auto` too, which would clip the absolutely-positioned dropdown menus that
+   hang out of this row (a trap already recorded in MAINTENANCE for the menu code). */
+body.host-mobile .wb-icon-btn { flex: 0 0 auto; }
+
+/* The sidebar resize handle is a desktop affordance. It is rendered unconditionally
+   (only restyled to `collapsed` when the sidebar is shut), so on a phone it still took
+   22px of the flex row - measured - and sat on top of the tool bar's first buttons. */
+body.host-mobile .sb-splitter { display: none; }
+
+/* Tool bar buttons must keep a tappable size instead of shrinking to zero width. What
+   is left overflowing is a DESIGN decision (which actions earn a place on a phone),
+   not something to solve by squeezing every button into nothing. */
+body.host-mobile .wb-view-tab { flex: 0 0 auto; min-width: 44px; }

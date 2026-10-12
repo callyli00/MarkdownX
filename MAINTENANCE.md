@@ -532,6 +532,44 @@ New-Item -ItemType SymbolicLink -Path "$env:TEMP\l.txt" -Target "$env:TEMP\t.txt
   再清掉 `app/build/outputs/apk` 重跑。重建后 165MB，与内容合计相符。
   判据：`ls -la` 的大小与 `unzip -l` 的合计**应当接近**，差 100MB 以上即为异常。
 
+### 13.6.4 真机 UI 调试配方（adb reverse + CDP），以及"按钮点不动"的真因
+
+**手机上的"上面的按钮无法点击"，根因不是按钮小，而是整个应用被挤成了 85px。**
+
+真机实测（OnePlus，视口 350x805 CSS px）：手机端侧栏仍是**桌面式内联**布局，
+`width: 260px` 钉在 flex 行里，于是 `.app-col`（顶栏 + 编辑 + 预览）只剩 **85px** ——
+除前两个按钮外，全部塌成 `0x0`，物理上根本没有可点区域。
+
+修复：手机端侧栏改为 `position: fixed` 覆盖层（内联宽度只在桌面应用）、
+`.sb-splitter` 在手机端 `display:none`（它无条件渲染，关闭态仍占 22px 并盖住按钮）、
+手机端侧栏默认关闭、顶栏 30px→44px。
+
+注意 App.css 里**本来就有按宽度裁减工具栏**的规则，手机（350px）会命中：
+`.wb-tb-center`（<860px）与 `.wb-edit-cluster`（<680px）被 `display:none`。
+所以"某些按钮 0x0"是**按设计隐藏**，不是缺陷 —— 诊断时要按
+`offsetWidth > 0` 区分"可见但不可点"与"本来就隐藏"。
+
+**真机调试配方（改前端后不用重打 APK 就能在手机上看到）**：
+
+```bash
+adb reverse tcp:1420 tcp:1420          # 手机的 localhost:1420 → 本机 dev server
+# 本机 dev server 必须监听 IPv4！vite 默认只绑 ::1，而 adb reverse 连的是 127.0.0.1，
+# 否则手机上表现为 net::ERR_EMPTY_RESPONSE
+npm run dev -- --host 127.0.0.1
+adb shell am force-stop com.markdownx.editor && adb shell am start -n com.markdownx.editor/.MainActivity
+# 转发 WebView 的调试端口到本机，复用桌面那套 CDP 探针
+adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>   # pid 见 ps -A | grep markdownx
+curl http://127.0.0.1:9222/json
+```
+
+两条经验：`adb shell svc power stayon true` 防止息屏后系统回收进程（会让探针误判成"崩溃"）；
+`adb shell cat /proc/net/unix | grep webview_devtools_remote` 拿 socket 名（用 pid 拼）。
+
+**另外：debug 包不是独立可用的。** debug 构建里 Tauri 会去加载 `devUrl`
+（`http://localhost:1420`），所以脱离 dev server 时手机上只显示
+`Failed to request http://localhost:1420/`。要一个能独立安装运行的包必须做 **release 构建**
+（前端嵌入二进制、且会 strip，体积也小得多）。
+
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
 - 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），
