@@ -422,3 +422,26 @@ detected conflict: 'lib\rustlib\aarch64-linux-android\lib\libaddr2line-*.rlib'
 
 处理：删掉 `<toolchain>/lib/rustlib/<target>` **以及**同目录下的 `manifest-rust-std-<target>`，再重装。
 装好的正常形态是「目录 + 对应 manifest」成对，且 `lib/*.rlib` 约 55 个。
+
+### 13.6 `tauri android init` 的行为（实测，反直觉）
+
+- **可重复运行**：工程已存在时不会报错，会再跑一遍并打印 `Project generated successfully!`。
+- **不覆盖已存在的生成文件**：`app/build.gradle.kts` 里的 `ndkVersion` 钉子在重跑 init 后**依然在**。
+  但**删掉**某个生成文件再跑 init，它会被按模板重新生成（实测删 `AndroidManifest.xml` 后重建，内容与之前逐字节一致 → init 是确定性的）。
+- **不会从 `fileAssociations` 生成 Android intent-filter**。实测：配置里写了 `mimeType` + `androidIntentActionFilters`，
+  删掉 manifest 重新 init，生成的 `AndroidManifest.xml` **仍然只有 MAIN/LAUNCHER**。
+  schema 的描述只说该值「used as `android:mimeType` in the `<data>` element of an `<intent-filter>` in `AndroidManifest.xml`」，
+  但 CLI 并没有做这件事。
+  → 「用 MarkdownX 打开 .md/pdf」必须**手改入库的 `AndroidManifest.xml`**（这也符合 Tauri 在生成目录里放 `.gitignore`、把工程骨架交给用户维护的设计）。
+
+### 13.7 Android 平台配置 `tauri.android.conf.json`
+
+- 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），
+  合并遵循 JSON Merge Patch：**对象逐键合并，数组整体替换** —— 所以 `app.windows` 与 `fileAssociations` 必须在 Android 侧重新写一份，
+  否则桌面那套 `minWidth: 800 / minHeight: 600 / decorations: false` 会原样带进手机端。
+- **`bundle.targets` 不能写 `apk`/`aab`**：`BundleType` 枚举只有 `deb/rpm/appimage/msi/nsis/app/dmg`（schema 实测），
+  Android 产物由 `tauri android build` 直接生成 APK 与 AAB，不走 `targets`。
+- `bundle.android` 可配置项只有四个：`minSdkVersion`、`versionCode`、`autoIncrementVersionCode`、`debugApplicationIdSuffix`。
+  `versionCode` 按官方公式算：`major*1000000 + minor*1000 + patch`（v2.4.3 → `2403000`），改版本号时要同步。
+- 桌面 capability 的平台过滤**已实测生效**：探针在 Windows 上调用被 `fs:allow-read-text-file` 门控的插件命令成功返回，
+  而一个不存在的命令返回 `not allowed. Command not found`（阴性控制项）——说明 `platforms` 取值（`windows`/`macOS`/`linux`，注意 macOS 大写 S）拼写正确。

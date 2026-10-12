@@ -1,0 +1,50 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/schema.json",
+  "app": {
+    "windows": [
+      {
+        "title": "MarkdownX",
+        "label": "main"
+      }
+    ]
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "android": {
+      "minSdkVersion": 24,
+      "versionCode": 2403000
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown",
+          "mdown",
+          "mkd",
+          "mdx",
+          "txt"
+        ],
+        "name": "Markdown Document",
+        "description": "Markdown Document",
+        "role": "Editor",
+        "mimeType": "text/markdown",
+        "androidIntentActionFilters": [
+          "view",
+          "send"
+        ]
+      },
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "PDF Document",
+        "description": "Portable Document Format",
+        "role": "Viewer",
+        "mimeType": "application/pdf",
+        "androidIntentActionFilters": [
+          "view"
+        ]
+      }
+    ]
+  }
+}
