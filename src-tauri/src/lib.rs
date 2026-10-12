@@ -1,8 +1,16 @@
-use tauri::{Manager, Emitter, State, AppHandle};
-use std::sync::Mutex;
-use std::collections::HashMap;
-use std::path::PathBuf;
+// Every import here is used only by desktop-only code paths: the on-disk file watcher,
+// the devtools opener and the always-on-top toggle. Mobile compiles none of them, so the
+// whole block is gated to keep the Android build warning-free.
+#[cfg(desktop)]
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+#[cfg(desktop)]
+use std::collections::HashMap;
+#[cfg(desktop)]
+use std::path::PathBuf;
+#[cfg(desktop)]
+use std::sync::Mutex;
+#[cfg(desktop)]
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(serde::Serialize)]
 pub struct FileEntry {
@@ -11,6 +19,9 @@ pub struct FileEntry {
     pub is_dir: bool,
 }
 
+/// Desktop-only: owns the `notify` watcher that reloads a document when it changes on
+/// disk. Mobile has no watcher at all (the commands below are no-ops there).
+#[cfg(desktop)]
 #[derive(Default)]
 pub struct WatcherState {
     watcher: Mutex<Option<RecommendedWatcher>>,
@@ -20,6 +31,30 @@ pub struct WatcherState {
 #[tauri::command]
 fn get_cli_args() -> Vec<String> {
     std::env::args().skip(1).collect()
+}
+
+/// The platform this binary was compiled for. The frontend gates desktop-only
+/// affordances (workspace folder tree, auto-update, always-on-top) on this instead of
+/// guessing from a user agent.
+#[tauri::command]
+fn get_host_platform() -> &'static str {
+    platform_name()
+}
+
+/// Careful: none of these values may be reported by two branches - the frontend treats
+/// "mobile" and "desktop" as disjoint sets.
+fn platform_name() -> &'static str {
+    if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "ios") {
+        "ios"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    }
 }
 
 #[tauri::command]
@@ -78,6 +113,7 @@ fn read_dir_files(dir_path: String) -> Result<Vec<FileEntry>, String> {
     Ok(entries)
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn toggle_fullscreen(window: tauri::Window) -> Result<bool, String> {
     let current = window.is_fullscreen().map_err(|e| e.to_string())?;
@@ -85,12 +121,33 @@ fn toggle_fullscreen(window: tauri::Window) -> Result<bool, String> {
     Ok(!current)
 }
 
+// `Window::set_fullscreen` does not exist on mobile in tauri 2.12.1 (only
+// `is_fullscreen` does), so this cannot share one implementation. Worth noting the
+// giveaway that the capability namespace alone would NOT have revealed:
+// `core:window:allow-set-fullscreen` IS listed among the mobile permissions, but the API
+// it gates is compiled out - so granting it on Android would be meaningless.
+#[cfg(not(desktop))]
+#[tauri::command]
+fn toggle_fullscreen() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(desktop)]
 #[tauri::command]
 fn toggle_always_on_top(window: tauri::Window, enable: bool) -> Result<bool, String> {
     window.set_always_on_top(enable).map_err(|e| e.to_string())?;
     Ok(enable)
 }
 
+// A phone has no always-on-top concept. The command still exists so shared frontend code
+// can call it on every platform without ever hitting "command not found".
+#[cfg(not(desktop))]
+#[tauri::command]
+fn toggle_always_on_top(_enable: bool) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(desktop)]
 #[tauri::command]
 fn open_devtools(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main").or_else(|| app.webview_windows().values().next().cloned()) {
@@ -98,6 +155,13 @@ fn open_devtools(app: tauri::AppHandle) {
     }
 }
 
+// On mobile the WebView is inspected through chrome://inspect (remote debugging), not
+// through an in-app devtools window. Keep the command so the menu entry cannot throw.
+#[cfg(not(desktop))]
+#[tauri::command]
+fn open_devtools() {}
+
+#[cfg(desktop)]
 #[tauri::command]
 fn start_watching_file(
     app: AppHandle,
@@ -147,6 +211,7 @@ fn start_watching_file(
     Ok(())
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn stop_watching_file(
     state: State<'_, WatcherState>,
@@ -164,12 +229,27 @@ fn stop_watching_file(
     Ok(())
 }
 
+// Mobile: no watcher exists, so both commands succeed as no-ops. They stay in the
+// handler list so the frontend's fire-and-forget calls never error.
+#[cfg(not(desktop))]
+#[tauri::command]
+fn start_watching_file(_file_path: String) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn stop_watching_file(_file_path: String) -> Result<(), String> {
+    Ok(())
+}
+
 // List the font families installed on this machine by reading the Windows
 // registry Fonts key. Returns the primary face name of each entry (the label
 // before the parenthetical, e.g. "宋体 & NSimSun" -> "宋体", "Segoe UI Bold"
 // -> "Segoe UI") sorted case-insensitively, with icon/symbol fonts dropped.
 // The frontend uses this to let the user pick from the fonts actually present,
 // instead of a hardcoded list.
+#[cfg(windows)]
 #[tauri::command]
 fn list_system_fonts() -> Result<Vec<String>, String> {
     use winreg::enums::*;
@@ -224,6 +304,7 @@ fn list_system_fonts() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+#[cfg(windows)]
 const ICON_SYMBOL_FONTS: [&str; 8] = [
     "Segoe MDL2 Assets", "Segoe Fluent Icons", "Segoe Material", "Webdings",
     "Wingdings", "Symbol", "Marlett", "Segoe Icons",
@@ -231,10 +312,12 @@ const ICON_SYMBOL_FONTS: [&str; 8] = [
 
 // Last whitespace-separated word of `s` (or "" if none). Rust String has no
 // `rsplit_whitespace`, so reimplement the small piece we need.
+#[cfg(windows)]
 fn last_word(s: &str) -> Option<&str> {
     s.split_whitespace().next_back()
 }
 
+#[cfg(windows)]
 fn strip_style_token(s: &str) -> String {
     let mut result = s.trim().to_string();
     loop {
@@ -263,22 +346,44 @@ fn strip_style_token(s: &str) -> String {
     result
 }
 
+/// Android and iOS expose no enumerable, user-installable font list, so there is nothing
+/// to read. Return the families the shipped WebView is guaranteed to resolve, plus the CJK
+/// families the app bundles, so the typography inspector still offers a usable set
+/// instead of an empty dropdown.
+#[cfg(not(windows))]
+#[tauri::command]
+fn list_system_fonts() -> Result<Vec<String>, String> {
+    Ok(vec![
+        "system-ui".to_string(),
+        "sans-serif".to_string(),
+        "serif".to_string(),
+        "monospace".to_string(),
+        "Noto Sans SC".to_string(),
+        "Noto Serif SC".to_string(),
+    ])
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder = tauri::Builder::default()
-        .manage(WatcherState::default())
+    // Cross-platform plugins only. Rebinding `builder` inside a cfg block is the
+    // idiomatic Tauri pattern for keeping a single run() across every target.
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init());
+
+    // Desktop-only plugins. Updater, process and single-instance are unsupported on
+    // android/ios (verified against the published plugin support matrix, MAINTENANCE
+    // 13.4), and WatcherState only exists where `notify` is compiled in.
+    #[cfg(desktop)]
+    let builder = builder
+        .manage(WatcherState::default())
         // Auto-update: the UI asks the plugin to check a signed manifest; the user
         // decides whether to download and install it. The private signing key never
         // enters this project - only the public key is in tauri.conf.json.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_opener::init());
-
-    #[cfg(desktop)]
-    {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(window) = app.get_webview_window("main").or_else(|| app.webview_windows().values().next().cloned()) {
                 let _ = window.show();
                 let _ = window.unminimize();
@@ -296,11 +401,11 @@ pub fn run() {
                 let _ = window.emit("open-file-from-cli", files);
             }
         }));
-    }
 
     builder
         .invoke_handler(tauri::generate_handler![
             get_cli_args,
+            get_host_platform,
             read_file_from_path,
             read_dir_files,
             toggle_fullscreen,
@@ -312,4 +417,45 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::platform_name;
+
+    #[test]
+    fn reports_a_known_platform_name() {
+        let name = platform_name();
+        assert!(
+            ["android", "ios", "windows", "macos", "linux"].contains(&name),
+            "unexpected platform name: {name}"
+        );
+    }
+
+    /// The mapping must agree with the target this test binary was built for. Guards
+    /// against a branch being duplicated or a target silently falling through to the
+    /// wrong name - the frontend treats mobile and desktop as disjoint sets.
+    #[test]
+    fn agrees_with_the_compile_time_target() {
+        let expected = if cfg!(target_os = "android") {
+            "android"
+        } else if cfg!(target_os = "ios") {
+            "ios"
+        } else if cfg!(target_os = "windows") {
+            "windows"
+        } else if cfg!(target_os = "macos") {
+            "macos"
+        } else {
+            "linux"
+        };
+        assert_eq!(platform_name(), expected);
+    }
+
+    #[test]
+    fn is_never_reported_as_both_mobile_and_desktop() {
+        let name = platform_name();
+        let mobile = name == "android" || name == "ios";
+        let desktop = name == "windows" || name == "macos" || name == "linux";
+        assert!(!(mobile && desktop), "platform {name} claims both");
+    }
 }

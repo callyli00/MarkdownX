@@ -1,10 +1,9 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Default permissions for markdown editing and local asset loading",
-  "windows": [
-    "main"
-  ],
+  "identifier": "desktop",
+  "description": "Desktop permissions: workspace folders, on-disk file watching, auto-update.",
+  "windows": ["main"],
+  "platforms": ["linux", "macOS", "windows"],
   "permissions": [
     "core:default",
     "updater:default",
