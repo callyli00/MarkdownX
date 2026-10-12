@@ -3596,6 +3596,16 @@ ${texBody}
               pin it into the flex row and squeeze the entire app column to ~85px on a
               350px viewport - which collapsed every top-bar button to 0x0 on a real device
               and made the whole toolbar untappable. */}
+          {/* Tap-outside-to-close for the mobile drawer. Without it the drawer can trap the
+              user: it is fixed at x=0 with z-index above the rail, so it covers the very
+              button that opened it, and this app has no in-drawer close button. */}
+          {isMobile && isSidebarOpen && (
+            <div
+              className="mobile-scrim"
+              aria-hidden="true"
+              onClick={() => setIsSidebarOpen(false)}
+            />
+          )}
           {isSidebarOpen && (
             <aside className="typora-sidebar" style={isDesktop ? { width: sidebarWidth } : undefined}>
               <div className="sb-brand">

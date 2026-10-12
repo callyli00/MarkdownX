@@ -3606,14 +3606,44 @@ body.host-mobile .typora-sidebar {
   width: min(84vw, 340px);
   z-index: 120;
   box-shadow: 0 0 28px rgba(0, 0, 0, 0.38);
+  /* The drawer is fixed to the viewport, so it must dodge the system bars itself -
+     otherwise its brand row and close button sit underneath the status bar. */
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  overflow-y: auto;
 }
 body.host-mobile .app-col { width: 100%; }
+
+/* Sits under the drawer (120) and above the app, so a tap anywhere outside the drawer
+   closes it - the standard phone gesture, and the only way out given there is no
+   in-drawer close button. */
+body.host-mobile .mobile-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: rgba(0, 0, 0, 0.35);
+}
 
 /* Let toolbar buttons keep their size instead of being squeezed to nothing.
    Deliberately NOT `overflow-x: auto` on the toolbar: per spec that forces the other
    axis to `auto` too, which would clip the absolutely-positioned dropdown menus that
    hang out of this row (a trap already recorded in MAINTENANCE for the menu code). */
 body.host-mobile .wb-icon-btn { flex: 0 0 auto; }
+
+/* Android 15+ enforces edge-to-edge, so the WebView is full-bleed and the system status
+   bar paints OVER the app. MEASURED on the device: the top inset is 33px, the app shell
+   started at y=0, and the leading rail's first button (y=2..46) therefore sat 33px
+   underneath the system bar - only a ~13px sliver was tappable, which is exactly why the
+   top bar "could not be tapped". Inset the shell so no app chrome ever lives under a
+   system bar. `box-sizing` keeps the 100vh height honest with the padding applied. */
+body.host-mobile .typora-shell {
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
 
 /* The splitter strip carries the only two entry points a phone needs - the sidebar
    toggle and "open file" - and it is rendered unconditionally, so simply hiding it (as
