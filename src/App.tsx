@@ -6,7 +6,11 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
 import { renderDocument } from './utils/renderClient';
-import { checkForUpdate, installUpdate, type UpdateCheckResult, type UpdateProgress } from './utils/updater';
+// Types only: the updater functions are imported dynamically at their call sites, so the
+// updater plugin stays out of the startup chunk (and never loads at all on mobile, where
+// the plugin does not exist). Same pattern as the pdf-lib modules.
+import type { UpdateCheckResult, UpdateProgress } from './utils/updater';
+import { hostPlatform, isMobilePlatform, isDesktopPlatform, type HostPlatform } from './platform/host';
 import { AppIcon, type IconName } from './AppIcon';
 import { isPdfPath, loadPdfBytes } from './pdf/openPdf';
 // pdf-lib-backed modules are imported DYNAMICALLY at each call site (they are all
@@ -1340,6 +1344,28 @@ export const App: React.FC = () => {
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   }, [isSidebarOpen, sidebarWidth]);
+  /**
+   * Which platform the Rust side was compiled for. Everything desktop-only hangs off this:
+   * Android has no workspace folder picker, no updater plugin and no on-disk file watcher
+   * (see MAINTENANCE 13.4). `null` means "not resolved yet" and enables neither set.
+   */
+  const [host, setHost] = useState<HostPlatform | null>(null);
+  const isMobile = host !== null && isMobilePlatform(host);
+
+  useEffect(() => {
+    let cancelled = false;
+    void hostPlatform().then((p) => { if (!cancelled) setHost(p); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Key the CSS off the platform rather than off viewport width: a narrow desktop window
+  // is not a phone, and a large tablet is not a desktop.
+  useEffect(() => {
+    if (host === null) return;
+    document.body.classList.toggle('host-mobile', isMobilePlatform(host));
+    document.body.classList.toggle('host-desktop', isDesktopPlatform(host));
+  }, [host]);
+
   /** Auto-update: the app checks, the user decides. Nothing installs on its own. */
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult>({ status: 'idle' });
   const [showUpdateModal, setShowUpdateModal] = useState(false);
@@ -1348,6 +1374,7 @@ export const App: React.FC = () => {
 
   const runUpdateCheck = useCallback(async (showDialog: boolean) => {
     setUpdateInfo({ status: 'checking' });
+    const { checkForUpdate } = await import('./utils/updater');
     const result = await checkForUpdate();
     setUpdateInfo(result);
     if (showDialog) setShowUpdateModal(true);
@@ -1355,14 +1382,17 @@ export const App: React.FC = () => {
   }, []);
 
   // Silent check a little after startup: never a popup, never in the reader's way.
+  // Skipped entirely on mobile - Android has no updater plugin to ask.
   useEffect(() => {
+    if (host === null || isMobilePlatform(host)) return;
     const timer = window.setTimeout(() => { void runUpdateCheck(false); }, 20000);
     return () => window.clearTimeout(timer);
-  }, [runUpdateCheck]);
+  }, [runUpdateCheck, host]);
 
   const startUpdateInstall = useCallback(async () => {
     if (updateInfo.status !== 'available' || !updateInfo.update) return;
     setUpdateInstallError(null);
+    const { installUpdate } = await import('./utils/updater');
     const result = await installUpdate(updateInfo.update, setUpdateProgress);
     if (!result.ok) setUpdateInstallError(result.error);
   }, [updateInfo]);
@@ -2125,6 +2155,13 @@ export const App: React.FC = () => {
   }, []);
 
   const handleSelectWorkspace = async () => {
+    // Android's file dialog has no folder picker at all ("Does not support folder
+    // picker" in the plugin support matrix), so this can only ever fail there. The
+    // mobile UI replaces it with the app document library.
+    if (isMobile) {
+      console.warn('[MarkdownX] folder picker is unavailable on this platform');
+      return;
+    }
     try {
       const selected = await open({ directory: true, multiple: false });
       if (typeof selected === 'string') {
@@ -3397,9 +3434,10 @@ ${texBody}
   const handleWindowToggleMaximize = () => runWindowCommand('toggle-maximize', () => getCurrentWindow().toggleMaximize());
   const handleWindowClose = () => runWindowCommand('close', () => getCurrentWindow().close());
 
-  // Rust Native File Watcher (Notify Crate) integration
+  // Rust Native File Watcher (Notify Crate) integration. Desktop only: the mobile build
+  // compiles `notify` out and the command is a no-op there, so asking would be pointless.
   useEffect(() => {
-    if (!autoWatchSetting) return;
+    if (!autoWatchSetting || isMobile) return;
 
     // Start watching all open file paths with Rust backend
     openFiles.forEach((file) => {
@@ -3407,7 +3445,7 @@ ${texBody}
         invoke('start_watching_file', { filePath: file.path }).catch(() => {});
       }
     });
-  }, [openFiles, autoWatchSetting]);
+  }, [openFiles, autoWatchSetting, isMobile]);
 
   useEffect(() => {
     if (!autoWatchSetting) return;
