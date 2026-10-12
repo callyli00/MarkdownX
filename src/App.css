@@ -3570,3 +3570,25 @@ body.theme-dark .pdf-hint.pending { color: #fbbf24; }
 @media print {
   .pdf-viewer { display: none !important; }
 }
+
+/* ==========================================================================
+   Mobile (Android).
+
+   Everything below is keyed on `body.host-mobile`, which the platform probe sets
+   from the Rust side (`get_host_platform`), NOT on viewport width - a narrow
+   desktop window must keep the desktop chrome, and a large tablet should not be
+   treated as a desktop just because it is wide.
+   ========================================================================== */
+
+/* Android's minimum reliably hittable target is ~44-48dp. The desktop chrome is
+   built around 30px icon buttons, so taps with a finger miss their mark and the
+   button "cannot be clicked" - which is exactly the symptom reported on a phone. */
+body.host-mobile .wb-topbar { height: 56px; padding: 0 6px; gap: 6px; }
+body.host-mobile .wb-icon-btn { width: 44px; height: 44px; border-radius: 10px; }
+body.host-mobile .wb-tb-left,
+body.host-mobile .wb-tb-right { gap: 2px; }
+
+/* Touch has no hover state, so anything that only becomes reachable on :hover can
+   never be reached at all. Give the list rows a finger-sized row instead. */
+body.host-mobile .sidebar-doc-item,
+body.host-mobile .dropdown-item { min-height: 44px; }

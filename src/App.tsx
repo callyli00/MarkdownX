@@ -1351,6 +1351,10 @@ export const App: React.FC = () => {
    */
   const [host, setHost] = useState<HostPlatform | null>(null);
   const isMobile = host !== null && isMobilePlatform(host);
+  // Desktop-only chrome is gated on `isDesktop`, not `!isMobile`: until the probe
+  // answers we know neither, and defaulting to "desktop" would flash dead window
+  // buttons on a phone for the first frame.
+  const isDesktop = host !== null && isDesktopPlatform(host);
 
   useEffect(() => {
     let cancelled = false;
@@ -3818,8 +3822,11 @@ ${texBody}
 
         <div className="app-col">
             {/* 1. Workbench top bar: identity + document, view tabs, edit cluster, menus */}
-            <header className="wb-topbar" data-tauri-drag-region>
-        <div className="wb-tb-left" data-tauri-drag-region>
+            {/* `data-tauri-drag-region` is desktop-only: a phone has no draggable window,
+                so the attribute (and its `cursor: default` companion rule) is pure risk
+                there. Kept on desktop unchanged. */}
+            <header className="wb-topbar" data-tauri-drag-region={isDesktop ? 'true' : undefined}>
+        <div className="wb-tb-left" data-tauri-drag-region={isDesktop ? 'true' : undefined}>
           {windowCmdNotice && (
             <span className="wb-cmd-notice" title={windowCmdNotice}>
               {windowCmdNotice}
@@ -3885,7 +3892,7 @@ ${texBody}
           )}
         </div>
 
-        <div className="wb-tb-center" data-tauri-drag-region>
+        <div className="wb-tb-center" data-tauri-drag-region={isDesktop ? 'true' : undefined}>
           <div className="wb-view-tabs">
             <button className={`wb-view-tab ${!isSourceMode ? 'active' : ''}`} onClick={() => { if (isSourceMode) toggleSourceMode(); }} title="沉浸排版视图 (Ctrl+/)">
               排版
@@ -4031,7 +4038,11 @@ ${texBody}
           </div>
 
           {/* Caption buttons: the window has no OS title bar, so these three live
-              on the application's own top bar row. */}
+              on the application's own top bar row. Desktop only — a phone has no
+              window to minimize/maximize/close, and their permissions are deliberately
+              absent from the mobile capability, so tapping them could only ever be
+              rejected (which reads as a dead button). */}
+          {isDesktop && (
           <div className="wb-win-controls">
             <button className="wb-win-btn" onClick={handleWindowMinimize} title="最小化" aria-label="最小化">
               <AppIcon name="win-min" size={14} strokeWidth={1.4} />
@@ -4048,6 +4059,7 @@ ${texBody}
               <AppIcon name="close" size={14} strokeWidth={1.4} />
             </button>
           </div>
+          )}
         </div>
       </header>
 
