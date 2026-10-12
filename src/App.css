@@ -1082,7 +1082,11 @@ body.font-theme-technical {
 }
 
 .empty-hint-main kbd {
-  background: #f1f5f9;
+  /* Both colours must come from the theme. This box hardcoded a near-white surface while
+     its text stayed theme-aware (var(--text-main)), so in the dark theme it painted LIGHT
+     text on a WHITE box - unreadable, and the single most visible defect on the phone -
+     and in sepia a cold white patch inside a warm parchment page. */
+  background: var(--wb-sel);
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 2px 7px;
