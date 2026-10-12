@@ -4013,11 +4013,14 @@ ${texBody}
           >
             <AppIcon name="target" size={15} />
           </button>
+          {/* The inspector (「编辑器」) is the ONLY home for 字体/排版 settings since they
+              were moved out of Preferences - so on a phone this entry must stay reachable,
+              not be hidden by the narrow-viewport `[data-optional]` rule. */}
           <button
-            className={`wb-icon-btn ${isInspectorOpen ? 'active' : ''}`}
+            className={`wb-icon-btn wb-mobile-keep ${isInspectorOpen ? 'active' : ''}`}
             onClick={() => setIsInspectorOpen((v) => !v)}
             data-optional="true"
-            title="排版检查器 (Ctrl+Shift+2)"
+            title="排版检查器（字体 / 排版设置）"
           >
             <AppIcon name="type" size={15} />
           </button>
