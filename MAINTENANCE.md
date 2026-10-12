@@ -509,6 +509,29 @@ New-Item -ItemType SymbolicLink -Path "$env:TEMP\l.txt" -Target "$env:TEMP\t.txt
    `arm64` debug APK **154 MB**、`universal` debug APK **570 MB**（四个 ABI 各一份）。
    这是 debug 正常现象，release 会 strip，体量会小一个量级 —— 不要把它当成缺陷。
 
+### 13.6.3 改前端后如何快速重出 APK（含一个体积翻倍的假象）
+
+- **前端是被编进 Rust 库的**：`tauri::generate_context!` 把 `frontendDist` 嵌进二进制，
+  所以**只改前端也必须重编 `.so`**，不能只重跑 gradle。最小步骤：
+  ```bash
+  npm run build                                   # 前端 → dist
+  cd src-tauri && cargo build --target aarch64-linux-android
+  cd gen/android && ./gradlew :app:assembleDebug --console=plain \
+      -x rustBuildArm64Debug -x rustBuildArmDebug -x rustBuildX86Debug -x rustBuildX86_64Debug
+  ```
+  手动编 Rust 时要自己带上 Tauri 平时注入的两个变量，否则在链接期报 `program not found`：
+  ```
+  CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=<NDK>/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android24-clang.cmd
+  CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS=-Clink-arg=-landroid -Clink-arg=-llog -Clink-arg=-lOpenSLES
+  ```
+- **不需要再提权**：`jniLibs/<abi>/libmarkdown_x_lib.so` 已是指向 `target/…` 的符号链接，
+  重编直接生效。
+- **体积翻倍的假象**：实测有一次 APK 从 154MB 变成 **304MB**，而 `unzip -l` 里所有条目
+  合计仍只有 ~166MB —— 说明是**覆盖写入留下的陈旧数据**，不是真的变大。
+  处置：先 `./gradlew --stop`（守护进程常占着文件，`rm` 会报 `Device or resource busy`），
+  再清掉 `app/build/outputs/apk` 重跑。重建后 165MB，与内容合计相符。
+  判据：`ls -la` 的大小与 `unzip -l` 的合计**应当接近**，差 100MB 以上即为异常。
+
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
 - 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），
