@@ -341,3 +341,84 @@ capabilities 只给了 `opener:allow-open-url` 与 `opener:allow-reveal-item-in-
   由工具栏按钮触发；按完保持该工具激活，方便连续标注。
 
 两条路径共用同一份归一化选区数据，避免两套逻辑漂移。
+
+---
+
+## 13. Android 移动端移植（分支 `feat/android-port`）
+
+### 13.1 工具链版本（每一条都有出处，不是"建议值"）
+
+| 组件 | 版本 | 出处 |
+|---|---|---|
+| Android Studio | Rabbit 1 / **2026.2.1** | 官方页面标注 "latest version in the **stable** channel" |
+| JDK | Android Studio 自带 `jbr`（实测 OpenJDK **25.0.3**） | Tauri 前置文档要求 `JAVA_HOME` 指向 jbr |
+| Gradle wrapper | **9.6.1** | Tauri 模板 |
+| AGP | **9.3.1** | Tauri 模板 |
+| SDK Platform | **37** | 模板 `compileSdk = 37` / `targetSdk = 37` |
+| Build-Tools | **36.0.0** | AGP 兼容表默认值 |
+| NDK | **30.0.16248370**（本机） | AGP 默认是 `28.2.13676358`，见 13.2 |
+| Command-line Tools | `latest` | Tauri 前置清单要求；提供 `sdkmanager`，且 Tauri 会用它自动装 NDK |
+
+三个环境变量（Windows 用户级）：`JAVA_HOME` → Android Studio `\jbr`；`ANDROID_HOME` → SDK 根；`NDK_HOME` → `%ANDROID_HOME%\ndk\<版本>`。
+注意：**注册表里新设的变量当前 shell 会话继承不到**，跑 `tauri android …` 前要在会话里 export 一次。
+
+JDK 版本不会撞墙的依据：Tauri CLI 的 `gradle_max_supported_java("9.6.1") = 26`（源码 `check_java_gradle_versions.rs`），
+所以 Java 25 在 Gradle 9.6.1 的支持范围内，不会打印那条 "can only run on Java up to …" 警告。
+
+### 13.2 必须钉 `ndkVersion`（真踩过的坑）
+
+- Tauri 的 android 模板 `app/build.gradle.kts` **不设 `ndkVersion`**（tauri-cli 2.12.1 模板全文确认）；
+- `tauri.conf.json` 的 schema 里**没有任何 ndk 配置项**（grep 确认）——所以只能改生成出来的 gradle。
+- 后果：AGP 回退到**它自己的默认 NDK**（9.3.1 → `28.2.13676358`）。本机装的是 30.x，于是要么再下载一份数 GB 的 NDK，要么报 `NDK not configured`。
+- **Rust 侧没有这个问题**：Tauri CLI 自己发现已装 NDK，日志会打印 `Info Using installed NDK: …`，并读 `NDK_HOME`。
+- 因此把 gradle 侧钉到**同一个** NDK，避免 C/C++ 与 Rust 两半工具链版本错位。
+
+改动位置：`src-tauri/gen/android/app/build.gradle.kts` 的 `android {}` 块内 `ndkVersion = "30.0.16248370"`。
+**升级 NDK 后要同步改这一行**（改完重跑 `tauri android build`）。
+
+### 13.3 生成物 `src-tauri/gen/android` 是要入库的
+
+**不要**把整个 `src-tauri/gen/` 加进 `.gitignore`：
+
+- 依据：Tauri 模板**自带** `gen/android/.gitignore`，而它只忽略构建产物（`build`、`.gradle`、`local.properties`、`key.properties`、`.tauri` 等）。
+  这个内层忽略文件的存在本身就说明**项目骨架应当提交**（否则没必要在其中放 .gitignore）。
+- 体量很小：40 个文件 / **373 KB**。
+- 其中 `app/src/main/AndroidManifest.xml`、`app/src/main/java/.../MainActivity.kt`、`buildSrc/.../RustPlugin.kt`
+  正是后续 intent 关联、权限、返回键要动的地方，必须版本可控。
+- 例外：`src-tauri/gen/schemas` 仍然忽略（tauri-build 每次构建重建 ACL schema）。
+
+### 13.4 Android 平台约束（已核实的支持矩阵，逐项来自官方文档）
+
+| 能力 | Android | 备注 |
+|---|---|---|
+| `updater` / `single-instance` / `process` | ❌ 不支持 | 桌面专用 → 必须 `#[cfg(desktop)]` 或按平台隐藏 |
+| `dialog` | ✅ | **不支持文件夹选择器** → 桌面"工作区目录树"无法移植 |
+| `file-system` | ✅ | **默认只能访问应用目录**；但 `dialog.open()` 返回的 `content://` 它"支持任意路径格式"，可直接读写 |
+| `opener` / `shell` | ✅ | **只能打开 URL**（`reveal-item-in-dir` 不可用） |
+
+两条容易走错路的结论：
+
+1. `RunEvent::Opened { urls }` **存在且 Android 会派发**（`tauri-2.12.1/src/app.rs:263`，门控
+   `#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]`；派发链
+   `tao-0.35.3/src/platform_impl/android/ndk_glue.rs:665` → `mod.rs:285`）。
+   docs.rs 的默认构建文档里**看不到**这个变体（被 cfg 门控），只看文档会误判成"做不了"。
+   → "用 MarkdownX 打开 .md" **纯 Rust 可实现，不必写 Kotlin 插件**，且可复用桌面已有的 `open-file-from-cli` 事件。
+2. `fileAssociations` 原生支持 Android：配置项含 `androidIntentActionFilters`（`view`/`send`/`sendMultiple`）、`mimeType`、`role`。
+
+### 13.5 Rust Android 目标
+
+需要四个（`aarch64` 现代手机 / `armv7` 老 32 位机 / `i686` 与 `x86_64` 模拟器）：
+
+```bash
+rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+```
+
+坑：`rustup target add` **被中断**（例如超时强杀）会留下半截文件，之后重装报
+
+```
+error: failed to install component: 'rust-std-aarch64-linux-android',
+detected conflict: 'lib\rustlib\aarch64-linux-android\lib\libaddr2line-*.rlib'
+```
+
+处理：删掉 `<toolchain>/lib/rustlib/<target>` **以及**同目录下的 `manifest-rust-std-<target>`，再重装。
+装好的正常形态是「目录 + 对应 manifest」成对，且 `lib/*.rlib` 约 55 个。
