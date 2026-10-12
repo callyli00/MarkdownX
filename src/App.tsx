@@ -3758,15 +3758,25 @@ ${texBody}
                     {/* 工作区文件树 */}
                     <div className="sb-region">
                       <div className="sb-region-head static">
-                        <span className="sb-region-title">工作区 · WORKSPACE</span>
-                        <button className="sb-mini-btn" onClick={handleSelectWorkspace} title="打开本地文件夹作为工作区">
+                        <span className="sb-region-title">{isMobile ? '文件 · FILES' : '工作区 · WORKSPACE'}</span>
+                        {/* Android's file dialog has no folder picker at all ("Does not
+                            support folder picker" in the plugin support matrix), so the
+                            desktop workspace action can only fail there. On a phone the
+                            same button opens a single document instead. */}
+                        <button
+                          className="sb-mini-btn"
+                          onClick={isMobile ? () => handleOpenFile() : handleSelectWorkspace}
+                          title={isMobile ? '打开文件' : '打开本地文件夹作为工作区'}
+                        >
                           <AppIcon name="folder-open" size={13} />
                         </button>
                       </div>
                       <div className="sb-region-body">
                         {workspaceFiles.length === 0 ? (
                           <div className="sidebar-empty-hint">
-                            {workspaceDir ? '该文件夹内暂无 Markdown 文件' : '点击上方图标选择本地文件夹'}
+                            {isMobile
+                              ? '点击上方图标打开一个 Markdown 文件'
+                              : (workspaceDir ? '该文件夹内暂无 Markdown 文件' : '点击上方图标选择本地文件夹')}
                           </div>
                         ) : (
                           <>
@@ -4021,9 +4031,11 @@ ${texBody}
               </div>
             )}
           </div>
-          {/* Settings: the only home for 偏好设置 (Ctrl+,). */}
+          {/* Settings: the only home for 偏好设置 (Ctrl+,).
+              `wb-mobile-keep` opts it out of the narrow-viewport `[data-optional]` hiding
+              below - without it the phone had no reachable settings entry at all. */}
           <button
-            className="wb-icon-btn"
+            className="wb-icon-btn wb-mobile-keep"
             data-optional="true"
             onClick={() => { setShowTypographyModal(true); }}
             title="偏好设置 (Ctrl+,)"

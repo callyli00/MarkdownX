@@ -3630,6 +3630,16 @@ body.host-mobile .mobile-scrim {
    axis to `auto` too, which would clip the absolutely-positioned dropdown menus that
    hang out of this row (a trap already recorded in MAINTENANCE for the menu code). */
 body.host-mobile .wb-icon-btn { flex: 0 0 auto; }
+/* The sidebar's region buttons are 24x24 on desktop - measured - which is less than half
+   a finger. Every interactive element inside the drawer gets a touch size. */
+body.host-mobile .sb-mini-btn,
+body.host-mobile .sidebar-tab-btn,
+body.host-mobile .sb-searchbar { min-height: 44px; }
+body.host-mobile .sb-mini-btn { min-width: 44px; }
+/* Marked as an action the phone still needs, so it overrides the <1080px
+   `[data-optional]` hiding (specificity 0-4-1 beats that rule's 0-3-0, and this block
+   is later in the file). */
+body.host-mobile .wb-topbar .wb-icon-btn.wb-mobile-keep { display: inline-flex; }
 
 /* Android 15+ enforces edge-to-edge, so the WebView is full-bleed and the system status
    bar paints OVER the app. MEASURED on the device: the top inset is 33px, the app shell
