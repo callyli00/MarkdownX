@@ -3882,9 +3882,13 @@ ${texBody}
             <button
               className={`wb-icon-btn ${activeMenu === 'export' ? 'active' : ''}`}
               data-ctx-menu="export"
-              onClick={handlePrint}
+              onClick={isMobile
+                ? () => setActiveMenu(activeMenu === 'export' ? null : 'export')
+                : handlePrint}
               onContextMenu={(e) => { e.preventDefault(); setActiveMenu(activeMenu === 'export' ? null : 'export'); }}
-              title="打印 / 导出（左键直接打印 PDF，右键选择格式）"
+              title={isMobile
+                ? '导出（HTML / 图片 / PDF 等格式）'
+                : '打印 / 导出（左键直接打印 PDF，右键选择格式）'}
             >
               <AppIcon name="print" size={16} />
             </button>

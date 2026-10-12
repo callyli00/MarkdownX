@@ -570,6 +570,32 @@ curl http://127.0.0.1:9222/json
 `Failed to request http://localhost:1420/`。要一个能独立安装运行的包必须做 **release 构建**
 （前端嵌入二进制、且会 strip，体积也小得多）。
 
+### 13.6.5 手机端按钮"点了没反应"的三种真因（真机实测）
+
+用真机 + 真实输入事件（`Input.dispatchMouseEvent`，不是合成 `click()`）逐个点出来的：
+
+1. **`window.print()` 在 Android WebView 里是无实现的空操作**。
+   「打印/导出」按钮最终调 `window.print()`（见 `handlePrint`），所以手机上点了
+   既不报错也没反应 —— 控制台干净、前台 Activity 不变。PDF 打印走 iframe
+   `contentWindow.print()`，同样无实现。
+   → 手机端该按钮改为展开**导出菜单**（HTML/Word/LaTeX/PDF 都是写文件 + SAF 保存，
+   在安卓上是通的）。
+2. **系统状态栏压住顶栏**：Android 15+ 强制 edge-to-edge，实测
+   `env(safe-area-inset-top) = 33px`，而应用外壳从 y=0 铺满 →
+   顶栏 0..56、左栏首按钮 2..46 的上半部都在系统栏底下。用
+   `env(safe-area-inset-*)` 给 `.typora-shell` 与移动端抽屉让位。
+3. **窄屏规则把入口整片隐藏**：`@media (max-width:1080px)` 里的
+   `[data-optional="true"]` 隐藏了「偏好设置」；`<860px` 隐藏 `.wb-tb-center`；
+   `<680px` 隐藏 `.wb-edit-cluster`。手机端需要保留的入口要显式加
+   `wb-mobile-keep` 并用更高特异性覆盖。
+
+**探针纪律（这次踩到的假阴性）**：探针点「保存」得到"无反应"，
+真实原因是**侧栏抽屉当时开着**（x 0..295），点击落在抽屉上而不是按钮上。
+坐标点击前必须断言 `document.elementFromPoint(x, y)` 的最上层元素就是目标
+（`topmost === 目标`），否则会把"被遮挡"误判成"按钮坏了"。
+另外：按可变的 `title` 文案找按钮不安全 —— 手机端标题改了（打印→导出）就找不到了，
+应改用稳定的 `data-*` 选择器。
+
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
 - 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），
