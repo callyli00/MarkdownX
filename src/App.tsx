@@ -1751,8 +1751,17 @@ export const App: React.FC = () => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // The resolved theme drives the body class (all body.theme-* rules hang off it).
+  //
+  // Add/remove ONLY the theme class. Assigning `body.className` wholesale also erased every
+  // OTHER class living on <body> - above all the platform marker `host-mobile`, which the
+  // whole mobile layout hangs off. That is why picking a theme (or launching with one already
+  // selected, since this effect also runs on mount) collapsed the phone UI back to the
+  // desktop layout on a 350px screen. Measured on the device right after a theme change:
+  // `body.className` was "theme-dark" with `host-mobile` gone, while the platform probe
+  // itself still answered "android" - i.e. the classes were erased, not the probe broken.
   useEffect(() => {
-    document.body.className = `theme-${appTheme}`;
+    document.body.classList.remove('theme-light', 'theme-dark', 'theme-sepia');
+    document.body.classList.add(`theme-${appTheme}`);
   }, [appTheme]);
 
   useEffect(() => {
