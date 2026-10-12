@@ -1,0 +1,21 @@
+// `buildSrc` is a SEPARATE Gradle build: it resolves its own plugins (here the
+// `kotlin-dsl` plugin) from the default Gradle plugin portal, NOT from the repositories
+// declared in the root `build.gradle.kts`.
+//
+// That matters on this machine: plugins.gradle.org 303-redirects artifact downloads to
+// repo.maven.apache.org over an address whose TLS handshake the Gradle JVM cannot
+// complete ("Remote host terminated the handshake"), which aborts the whole Android build
+// while configuring :buildSrc:
+//
+//   Could not download abi-tools-api-2.3.21.jar (org.jetbrains.kotlin:abi-tools-api:2.3.21)
+//
+// The artifact itself lives on Maven Central (verified reachable here), so listing
+// `mavenCentral()` first resolves it without ever touching the portal. The portal and
+// google() stay listed as fallbacks, so this is portable rather than mirror-specific.
+pluginManagement {
+    repositories {
+        mavenCentral()
+        google()
+        gradlePluginPortal()
+    }
+}

@@ -471,6 +471,44 @@ New-Item -ItemType SymbolicLink -Path "$env:TEMP\l.txt" -Target "$env:TEMP\t.txt
 补充：debug 的未 strip 产物很大（本机实测 `libmarkdown_x_lib.so` **153 MB**），这也是 CLI 选择建链而非复制的原因。
 另注意 `app/.gitignore` 已包含 `/src/main/jniLibs/**/*.so`，即使误复制也不会入库。
 
+### 13.6.2 首次构建踩到的一串环境问题（均为实测，含绕法）
+
+按发生顺序记录，每条都真的卡过：
+
+1. **`buildSrc` 是独立子构建，插件解析不走 root 的仓库**。
+   它在解析自己的 `kotlin-dsl` 插件时默认用 `gradlePluginPortal()`（`plugins.gradle.org`）。
+   本机访问该站会 303 重定向到 `repo.maven.apache.org`，而重定向后的地址 Gradle 的 JVM
+   完成不了 TLS 握手（`Remote host terminated the handshake`），整个构建在
+   `A problem occurred configuring project ':buildSrc'` 处中止。
+   → 修法：新增 `src-tauri/gen/android/buildSrc/settings.gradle`，在 `pluginManagement` 里把
+   `mavenCentral()` 排在 `gradlePluginPortal()` **之前**（该 artifact 本来就在中央仓库）。
+   注意 `gradle.properties` 开了 `org.gradle.configuration-cache=true`，改完要等一次构建让缓存失效，
+   否则会**复用旧配置、看起来像没生效**。
+
+2. **需要 `platforms;android-36`**。`:tauri-android` 模块 `compileSdk` 是 36，而 app 模块是 37，
+   只装 37 会在 `:tauri-android:compileDebugJavaWithJavac` 处报
+   `Failed to install the following SDK components: platforms;android-36`。
+
+3. **gradle 的 RustPlugin 要调用 `npm`**。`buildSrc/.../BuildTask.kt` 实际执行
+   `npm run -- tauri android android-studio-script --target <abi>`，并在 Windows 上依次回退
+   `npm` → `npm.exe` → `npm.cmd` → `npm.bat`，**四个都失败时抛出的是最后一个**，所以报错显示
+   `'command 'npm.bat''` + `CreateProcess error=2` —— 极具误导性（npm.cmd 其实是存在的）。
+   确定性的最后错误是：
+   ```
+   java.io.IOException: Cannot run program "npm.bat" (in directory "…\src-tauri"):
+     CreateProcess error=2, 系统找不到指定的文件。
+   ```
+4. **绕法（.so 已就绪时）**：Tauri CLI 已经编译好并 symlink 好 `.so`，可以跳过那四个任务直接装配：
+   ```bash
+   cd src-tauri/gen/android
+   ./gradlew :app:assembleDebug -x rustBuildArm64Debug -x rustBuildArmDebug \
+     -x rustBuildX86Debug -x rustBuildX86_64Debug
+   ```
+   实测 `BUILD SUCCESSFUL`，产出 `app/build/outputs/apk/<abi>/debug/app-<abi>-debug.apk`。
+5. **产物体量预期**：debug 未 strip 的 `libmarkdown_x_lib.so` 达 **153 MB**，所以
+   `arm64` debug APK **154 MB**、`universal` debug APK **570 MB**（四个 ABI 各一份）。
+   这是 debug 正常现象，release 会 strip，体量会小一个量级 —— 不要把它当成缺陷。
+
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
 - 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），
