@@ -32,6 +32,18 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    signingConfigs {
+        // `assembleRelease` produces an UNSIGNED apk unless a signing config is set, and
+        // Android refuses to install those. Signing with the debug keystore (auto-generated
+        // by Gradle under ~/.android) yields an installable release apk for testing - the
+        // point of this build is a standalone, stripped apk, not store distribution.
+        create("selfSigned") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -46,6 +58,7 @@ android {
             }
         }
         getByName("release") {
+            signingConfig = signingConfigs.getByName("selfSigned")
             optimization {
                enable = true
             }

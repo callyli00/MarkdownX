@@ -707,6 +707,43 @@ read/write-text-file、read/write-file、read-dir、exists、mkdir），调用�
 - 提示：顶栏可见按钮数随宽度变化（12 → 17 → 19），因为应用原有的按宽度媒体查询
   会逐步放出按钮；这是自适应行为，但折叠时工具栏形态会变。
 
+### 13.6.10 【重要】`custom-protocol` —— 没有它，每个包都会去连 devUrl
+
+**症状**：任何安装到手机上的包（debug/release 都一样）启动后只显示
+`Failed to request http://localhost:1420/: error sending request for url`，
+必须让电脑开着 dev server 才能用。
+
+**根因**：`is_dev()`（tauri-build `src/lib.rs:607`）读的是 `DEP_TAURI_DEV`，其文档写明
+*"compiled without the `custom-protocol` Cargo feature"*。即：
+
+```
+dev 标志 = 构建时没有启用 custom-protocol feature
+dev 标志为真 -> 加载 build.devUrl（http://localhost:1420），而不是二进制里内嵌的前端
+```
+
+而本项目的 `Cargo.toml` **从来没有 `[features]` 段** —— `tauri build`（桌面）会自动带上
+这个 feature，所以桌面端一直正常；**手动给 Android 打 cargo 包时没带，于是每个包都是"开发构建"**。
+CLI 二进制里可见 `custom-protocoltauri/custom-protocol`，即 CLI 传的就是它。
+
+**修法**：`Cargo.toml` 加
+```toml
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+```
+手动构建时显式带上：
+```bash
+cargo build --release --target aarch64-linux-android --features custom-protocol
+```
+
+**判定是否生效的可靠信号（体积）**：同一次 release 编译，带 feature 后
+`libmarkdown_x_lib.so` 从 **13.0 MB 变成 21.5 MB** —— 多出来的正是内嵌的前端资源。
+APK 也从 14.7 MB 变为 23.2 MB。若体积没变大，说明前端没被嵌入，一定跑不起来。
+
+**真机验证**：停掉 dev server、撤掉 `adb reverse` 后安装并启动 —— 界面完整渲染
+（工具栏/标签页/编辑区/状态栏），无任何 `localhost:1420` 报错。
+注意 release 包会关闭 WebView 调试（调试只在 debug 构建开启），因此 release 只能靠
+`adb shell screencap` + 视觉确认，不能用 CDP 探针。
+
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
 - 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），

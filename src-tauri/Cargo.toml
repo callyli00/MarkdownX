@@ -12,6 +12,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# Tauri's production marker. Without it the `dev` cfg is on, and the app loads `build.devUrl`
+# (http://localhost:1420) INSTEAD of the frontend embedded in the binary - which is why a
+# standalone APK showed "Failed to request http://localhost:1420/" on a phone that had no
+# dev server. `tauri build` passes this automatically; a manual Android build must pass it
+# explicitly:  cargo build --release --target aarch64-linux-android --features custom-protocol
+custom-protocol = ["tauri/custom-protocol"]
+
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "devtools"] }
 tauri-plugin-fs = "2"
