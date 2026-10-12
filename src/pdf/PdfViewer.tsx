@@ -88,6 +88,24 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   /** Bumped per render pass; in-flight loops bail when they are no longer current. */
   const renderGenRef = useRef(0);
 
+  /**
+   * In-flight pdf.js rasterizations, per page index.
+   *
+   * pdf.js refuses a second render() on a canvas whose previous render has not finished,
+   * and the `gen` check in renderPageInto only runs AFTER a render completes - too late to
+   * prevent the collision. So the task is kept here and cancelled when the generation
+   * advances (scale change, scroll, new document). Without this, any zoom that lands
+   * mid-render threw "Cannot use the same canvas during multiple render() operations" and
+   * left that page's bitmap broken.
+   */
+  const renderTaskRef = useRef<Map<number, { cancel: () => void }>>(new Map());
+  const cancelRenders = useCallback(() => {
+    for (const task of renderTaskRef.current.values()) {
+      try { task.cancel(); } catch { /* already settled */ }
+    }
+    renderTaskRef.current.clear();
+  }, []);
+
   const annotsRef = useRef(annots);
   useEffect(() => {
     annotsRef.current = annots;
@@ -160,6 +178,38 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     return () => { cancelled = true; };
   }, [doc, scale]);
 
+  /**
+   * Fit-to-width on first load, mobile only.
+   *
+   * The desktop default scale (1 => A4 at ~744 CSS px) is more than twice a phone's
+   * viewport, so the reader only ever sees the page's blank top-left MARGIN - which is
+   * reported as "the PDF opened but did not render" even though the canvas is painted.
+   * Fit the first page's width to the scroll container once; any later zoom by the user
+   * wins, because `didFitRef` makes this a one-shot.
+   *
+   * Keyed on the platform class, not on viewport width: a narrow desktop window must keep
+   * the desktop default.
+   */
+  const didFitRef = useRef(false);
+  useEffect(() => {
+    if (!doc || didFitRef.current) return;
+    const container = scrollRef.current;
+    if (!container) return; // not mounted yet - pageSizes below re-runs this
+    if (!document.body.classList.contains('host-mobile')) { didFitRef.current = true; return; }
+    let cancelled = false;
+    (async () => {
+      const page = await doc.getPage(1);
+      if (cancelled) return;
+      const baseWidth = page.getViewport({ scale: 1 }).width;
+      const available = container.clientWidth - 16; // breathing room on both sides
+      didFitRef.current = true;
+      if (baseWidth > 0 && available > 0 && baseWidth > available) {
+        onScaleChange(Math.max(0.25, Math.min(4, +(available / baseWidth).toFixed(2))));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [doc, pageSizes.length, onScaleChange]);
+
   /** Rasterize one page's canvas + text layer; idempotent at a given scale. */
   const renderPageInto = useCallback(async (i: number, gen: number): Promise<void> => {
     if (!doc) return;
@@ -183,7 +233,18 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
         canvas.style.height = `${size.height}px`;
         const transform: [number, number, number, number, number, number] | undefined =
           ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0];
-        await page.render({ canvasContext: ctx, viewport, transform }).promise;
+        const task = page.render({ canvasContext: ctx, viewport, transform });
+        renderTaskRef.current.set(i, task);
+        try {
+          await task.promise;
+        } catch (err) {
+          renderTaskRef.current.delete(i);
+          // A cancelled render rejects with RenderingCancelledException - expected when a
+          // newer generation superseded this one; anything else is a real failure.
+          if (gen !== renderGenRef.current) return;
+          throw err;
+        }
+        renderTaskRef.current.delete(i);
         if (gen !== renderGenRef.current) return;
       }
     }
@@ -213,6 +274,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   // Keep the render window satisfied: rasterize pages inside it, release outside it.
   useEffect(() => {
     if (!doc) return;
+    cancelRenders(); // supersede anything still rasterizing
     const gen = ++renderGenRef.current;
     const { start, end } = visibleRange;
     for (let i = 0; i < doc.numPages; i++) {

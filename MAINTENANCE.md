@@ -596,6 +596,28 @@ curl http://127.0.0.1:9222/json
 另外：按可变的 `title` 文案找按钮不安全 —— 手机端标题改了（打印→导出）就找不到了，
 应改用稳定的 `data-*` 选择器。
 
+### 13.6.6 手机端"打印不可用"与"PDF 打开不渲染"（真机实测）
+
+**打印**：`Webview::print()` 在 tauri 里是 `#[cfg(desktop)]`，且注释自述"Currently only
+supported on macOS on wry"，最后一句 "`window.print()` works on all platforms" 在 Android 上是**错的**
+—— WebView 没有 print 实现，`window.print()` 是静默空操作（不报错、界面无变化）。
+`core:webview:allow-print` 权限在移动端存在，但它守护的 API 被编译掉了（又一处"有权限、无 API"）。
+要真正的**安卓系统打印**只能自己写 Kotlin 插件（`PrintManager` + `WebView.createPrintDocumentAdapter()`）；
+手机端当前用**文件导出**（HTML/Word/LaTeX/PDF）替代。
+
+**PDF"打开不渲染"**：真机实测根因**不是没渲染，而是渲染得太宽**。
+实测：查看器宽 303px，而 canvas 按 `cssW=744`（A4 @96dpi 自然宽度）绘制 →
+用户看到的只是页面**左上角的空白页边距**，所以像"什么都没渲染"。
+（像素证据：首次打开时 canvas 有 337 个非白采样点、34 个文本层 span —— 内容其实画出来了。）
+修法：手机端首次加载时按容器宽度做一次 fit-width（一次性，之后用户自己的缩放优先），
+keyed on `body.host-mobile` 而非视口宽度，以免窄桌面窗口被误改。
+
+**顺带修掉一个既有隐患**：`renderPageInto` 里 `gen` 代次检查写在 `await page.render().promise`
+**之后**，而 pdf.js 禁止在未完成的 canvas 上再次 render，于是任何"渲染途中改动缩放"
+都会抛 `Cannot use the same canvas during multiple render() operations` 并把该页位图毁掉。
+改为保存 RenderTask 并在代次推进时 `cancel()`；取消导致的 `RenderingCancelledException`
+按预期吞掉。修完真机复测：清空错误数组后重开 PDF，新增错误 **0**，三页 canvas 均 285x404。
+
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
 - 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），
