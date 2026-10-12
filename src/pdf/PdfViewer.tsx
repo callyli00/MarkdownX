@@ -99,6 +99,9 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
    * left that page's bitmap broken.
    */
   const renderTaskRef = useRef<Map<number, { cancel: () => void }>>(new Map());
+
+  /** Debounced handle for pdf.js's decode-cache cleanup (see renderPageInto). */
+  const cleanupTimerRef = useRef<number | null>(null);
   const cancelRenders = useCallback(() => {
     for (const task of renderTaskRef.current.values()) {
       try { task.cancel(); } catch { /* already settled */ }
@@ -213,6 +216,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
   /** Rasterize one page's canvas + text layer; idempotent at a given scale. */
   const renderPageInto = useCallback(async (i: number, gen: number): Promise<void> => {
     if (!doc) return;
+    // A pending decode-cache cleanup must never run while a rasterization is in flight.
+    if (cleanupTimerRef.current !== null) { window.clearTimeout(cleanupTimerRef.current); cleanupTimerRef.current = null; }
     const size = pageSizesRef.current[i];
     const canvas = canvasRefs.current[i];
     const textDiv = textLayerRefs.current[i];
@@ -222,7 +227,11 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
     const page = await doc.getPage(i + 1);
     if (gen !== renderGenRef.current) return;
     const viewport = page.getViewport({ scale });
-    const ratio = window.devicePixelRatio || 1;
+    // Cap the rasterization density. Phones report up to 3.25, which costs ~10.6x the CSS
+    // area per page (measured: a single A4 page at fit-width = 926x1309 = 4.6 MB) and is
+    // far beyond what the eye resolves on a ~285 CSS-px-wide page. Capping at 2 keeps it
+    // sharp for a fraction of the memory.
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
 
     if (canvas) {
       const ctx = canvas.getContext('2d');
@@ -260,6 +269,20 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
       await textLayer.render();
     }
     renderedRef.current.set(i, scale);
+
+    // Release pdf.js's decoded-image cache once rendering settles.
+    //
+    // This is what actually killed the app on image-heavy PDFs: pdf.js holds every decoded
+    // page image until told otherwise, and a 300 dpi scan is ~35 MB decoded PER PAGE. The
+    // measured jump for opening one scanned document was +121 MB PSS / +179 MB RSS against
+    // only 9 MB of canvas bitmaps, and the phone then killed the process with signal 9 (no
+    // crash, no exception - just a black or empty viewer). `cleanup()` frees everything not
+    // currently referenced. Debounced so it cannot fire while the user is zooming.
+    if (cleanupTimerRef.current !== null) window.clearTimeout(cleanupTimerRef.current);
+    cleanupTimerRef.current = window.setTimeout(() => {
+      cleanupTimerRef.current = null;
+      void doc.cleanup().catch(() => { /* document already closed */ });
+    }, 700);
   }, [doc, scale]);
 
   /** Release a page's heavy resources so its bitmap/DOM memory is reclaimed. */

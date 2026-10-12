@@ -618,6 +618,40 @@ keyed on `body.host-mobile` 而非视口宽度，以免窄桌面窗口被误改�
 改为保存 RenderTask 并在代次推进时 `cancel()`；取消导致的 `RenderingCancelledException`
 按预期吞掉。修完真机复测：清空错误数组后重开 PDF，新增错误 **0**，三页 canvas 均 285x404。
 
+### 13.6.7 手机端"图多的 PDF 黑屏/打不开"= 被系统 LMK 强杀（真机实测）
+
+用户反馈：本机某 PDF 无法渲染；含图片的 PDF 直接黑屏。
+
+真机取证（`logcat`）：
+```
+I/Zygote: Process 11116 exited due to signal 9 (Killed)
+I/Zygote: Process 11859 exited due to signal 9 (Killed)
+```
+**signal 9 是被低内存杀手强杀**，不是崩溃 —— 没有 FATAL、没有 ANR、没有 JS 异常。
+对照 `dumpsys meminfo`：打开一个扫描件前 PSS 200MB / RSS 393MB，
+打开后 PSS **321MB** / RSS **559MB**（+121MB PSS），而 **canvas 位图总共只有 9MB**。
+→ 内存不是 canvas 吃掉的，是 **pdf.js 解码的页面图片**：一张 300dpi 的 A4 扫描页解码后约 **35MB**，
+而代码里**从不调用 `doc.cleanup()`**，解码图一直留在内存里。
+
+两处修复（`src/pdf/PdfViewer.tsx`）：
+1. **栅格化 DPR 设上限**：`Math.min(devicePixelRatio, 2)`。手机上报 3.25，位图内存是 CSS 面积的
+   10.6 倍；实测单页位图 926x1309(4.6MB) → 570x806(**1.8MB**)，省 61%。
+2. **渲染稳定后调度 `doc.cleanup()`**（700ms 防抖，渲染前取消待执行项，避免在渲染途中释放）。
+   它只释放"当前不再引用"的资源，所以可见页的图仍在内存里 —— 这一步是防止**多页/多标签累积**。
+
+真机复测（修复后）：
+```
+nature.pdf (25MB 论文)  3 页 570x758  非白 818/1321/837  平均亮度 232-237  文本层 950  ✓ content
+multi.pdf  (6.2MB)      3 页 574x752  非白 1737/1056/838 平均亮度 233-243  文本层 1164 ✓ content
+scan2.pdf  (扫描件)      3 页 570x808  非白 454/310/471   平均亮度 250-252  文本层 0    ✓ content
+错误 0，进程存活
+```
+判定口径：`dark/sampled > 0.9` 判为 BLACK SCREEN，`nonWhite/sampled < 0.002` 判为 BLANK，
+其余为 content —— 避免只用"非白像素"一个指标把黑屏误判成"有内容"。
+
+**遗留**：连续打开 4 个 PDF 后 PSS 达 459MB，仍偏高。更重的文档或后台内存紧张时仍可能被强杀；
+进一步措施是把移动端渲染窗口收窄到可见页 ±1，以及限制同时打开的 PDF 标签数。
+
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
 - 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），
