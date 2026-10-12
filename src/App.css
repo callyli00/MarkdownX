@@ -3588,6 +3588,23 @@ body.host-mobile .wb-icon-btn { width: 44px; height: 44px; border-radius: 10px; 
 body.host-mobile .wb-tb-left,
 body.host-mobile .wb-tb-right { gap: 2px; }
 
+/* The 7 PDF annotation tools do not fit a phone's tool bar next to the fixed actions.
+   MEASURED with a PDF open: the row reached x=470 in a 350px viewport - so 墨迹 and 橡皮
+   sat off-screen (untappable) and 删除线/便签 slid UNDER the settings button, which is
+   pinned to the right edge (37x44 px and 6x44 px of overlap). On mobile the tool cluster
+   takes its own wrapped line. `flex-wrap`, not `overflow-x: auto`: an overflow container
+   would force the cross axis to auto too and clip the export dropdown hanging out of this
+   row (a trap already recorded for the menu code). */
+body.host-mobile .wb-topbar { flex-wrap: wrap; height: auto; min-height: 56px; padding-block: 4px; }
+body.host-mobile .wb-tb-left { flex-wrap: wrap; }
+body.host-mobile .pdf-tool-icons {
+  flex: 1 1 100%;
+  order: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
 /* Touch has no hover state, so anything that only becomes reachable on :hover can
    never be reached at all. Give the list rows a finger-sized row instead. */
 body.host-mobile .sidebar-doc-item,

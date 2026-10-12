@@ -679,6 +679,34 @@ read/write-text-file、read/write-file、read-dir、exists、mkdir），调用�
 **遗留**：SAF URI 里没有文件名，标签页名会显示文档 id（如 `1234`）。
 要拿到真实文件名需查询 provider 的 `_display_name`（需要原生侧支持）。
 
+### 13.6.9 折叠屏兼容与"编辑按钮和设置重叠"（真机实测）
+
+**重叠**：打开 PDF 时顶栏出现 7 个标注工具（选择/高亮/下划线/删除线/便签/墨迹/橡皮），
+它们和固定动作挤在同一行、该行不换行。实测（外屏 350px 视口）：
+行宽到 x=470，于是「墨迹」(x=382)、「橡皮」(x=427) **超出视口不可点**；
+而「偏好设置」被钉在右端，**压在工具上面** —— 与「删除线」重叠 37x44px、与「便签」6x44px。
+
+修法：手机端让 `.pdf-tool-icons`（该容器本就存在，无需改 JSX）单独成行
+（`.wb-topbar { flex-wrap: wrap; height: auto }` + 工具簇 `flex: 1 1 100%`）。
+实测重叠数 **0**、14 个按钮全部回到视口内。
+**用 `flex-wrap` 而非 `overflow-x: auto`**：后者会把交叉轴也变成 auto，
+裁掉挂在同一行的导出下拉菜单（本手册已记录过这个坑）。
+遗留（美观问题）：顶栏因此变成约 195px、最多 4 行；正解是把标注工具移到底部工具条，
+属于移动端重设计的一部分。
+
+**折叠屏**：本机是 OnePlus PKH110（书本式折叠）。结论：
+- **布局自适应**：用 CDP `Emulation.setDeviceMetricsOverride` 模拟外屏 350 / 内屏 760 /
+  半开 900x480，三种尺寸下溢出按钮均为 **0**，`body` 平台类恒为 `host-mobile`，
+  各区域随宽度重排。
+- **翻折不丢状态**：`AndroidManifest.xml` 的 `configChanges` 已含
+  `screenSize|smallestScreenSize|screenLayout|orientation`，Activity 不会重建。
+- **修掉一个真问题**：PDF 展开后**不会重新适配宽度**（内屏 712px 可用，页面仍是 285px）。
+  原实现是"一次性 fit"。改为 `ResizeObserver` 监听容器宽度、变化超过 8px 且
+  **用户未手动缩放过**时重新 fit（手动缩放永远优先）。
+  实测：285(外屏) → 696(内屏) → 833(900px) → 285(折回)。
+- 提示：顶栏可见按钮数随宽度变化（12 → 17 → 19），因为应用原有的按宽度媒体查询
+  会逐步放出按钮；这是自适应行为，但折叠时工具栏形态会变。
+
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
 - 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），

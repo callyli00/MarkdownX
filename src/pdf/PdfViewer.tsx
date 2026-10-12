@@ -193,25 +193,60 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({
    * Keyed on the platform class, not on viewport width: a narrow desktop window must keep
    * the desktop default.
    */
+  const fitRef = useRef<{ width: number; scale: number } | null>(null);
+  const userZoomedRef = useRef(false);
+
+  // Any scale the fit did not itself set means the user took over, and from then on the
+  // fit must never override their zoom.
+  useEffect(() => {
+    const f = fitRef.current;
+    if (f && Math.abs(scale - f.scale) > 0.001) userZoomedRef.current = true;
+  }, [scale]);
+
+  const fitToWidth = useCallback(async () => {
+    if (!doc) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    const page = await doc.getPage(1);
+    const baseWidth = page.getViewport({ scale: 1 }).width;
+    const available = container.clientWidth - 16; // breathing room on both sides
+    if (!(baseWidth > 0 && available > 0)) return;
+    const fit = Math.max(0.25, Math.min(4, +(available / baseWidth).toFixed(2)));
+    fitRef.current = { width: container.clientWidth, scale: fit };
+    if (Math.abs(fit - scale) > 0.01) onScaleChange(fit);
+  }, [doc, scale, onScaleChange]);
+
   const didFitRef = useRef(false);
   useEffect(() => {
     if (!doc || didFitRef.current) return;
+    if (!scrollRef.current) return; // not mounted yet - pageSizes below re-runs this
+    didFitRef.current = true;
+    if (!document.body.classList.contains('host-mobile')) return;
+    void fitToWidth();
+  }, [doc, pageSizes.length, fitToWidth]);
+
+  /**
+   * Refit when the viewport width changes.
+   *
+   * A foldable phone is the reason this exists: unfolding takes the WebView from ~350 to
+   * ~760 CSS px (measured, and Android does NOT recreate the activity - configChanges
+   * already covers screenSize/smallestScreenSize). Without this the page stayed sized for
+   * the cover screen and the inner screen just added empty margins. The user's own zoom
+   * always wins, so this only runs while they have not touched it.
+   */
+  useEffect(() => {
     const container = scrollRef.current;
-    if (!container) return; // not mounted yet - pageSizes below re-runs this
-    if (!document.body.classList.contains('host-mobile')) { didFitRef.current = true; return; }
-    let cancelled = false;
-    (async () => {
-      const page = await doc.getPage(1);
-      if (cancelled) return;
-      const baseWidth = page.getViewport({ scale: 1 }).width;
-      const available = container.clientWidth - 16; // breathing room on both sides
-      didFitRef.current = true;
-      if (baseWidth > 0 && available > 0 && baseWidth > available) {
-        onScaleChange(Math.max(0.25, Math.min(4, +(available / baseWidth).toFixed(2))));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [doc, pageSizes.length, onScaleChange]);
+    if (!doc || !container) return;
+    if (!document.body.classList.contains('host-mobile')) return;
+    const observer = new ResizeObserver(() => {
+      const f = fitRef.current;
+      if (!f || userZoomedRef.current) return;
+      if (Math.abs(container.clientWidth - f.width) < 8) return; // sub-pixel jitter
+      void fitToWidth();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [doc, fitToWidth]);
 
   /** Rasterize one page's canvas + text layer; idempotent at a given scale. */
   const renderPageInto = useCallback(async (i: number, gen: number): Promise<void> => {
