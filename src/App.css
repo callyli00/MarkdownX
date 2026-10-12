@@ -3615,12 +3615,52 @@ body.host-mobile .app-col { width: 100%; }
    hang out of this row (a trap already recorded in MAINTENANCE for the menu code). */
 body.host-mobile .wb-icon-btn { flex: 0 0 auto; }
 
-/* The sidebar resize handle is a desktop affordance. It is rendered unconditionally
-   (only restyled to `collapsed` when the sidebar is shut), so on a phone it still took
-   22px of the flex row - measured - and sat on top of the tool bar's first buttons. */
-body.host-mobile .sb-splitter { display: none; }
+/* The splitter strip carries the only two entry points a phone needs - the sidebar
+   toggle and "open file" - and it is rendered unconditionally, so simply hiding it (as
+   an earlier revision did) removes the user's only way to open a document. Instead it
+   becomes a touch rail: a fixed-width column of 44x44 buttons at the leading edge. */
+body.host-mobile .sb-splitter,
+body.host-mobile .sb-splitter.collapsed {
+  width: 48px;
+  min-width: 48px;
+  cursor: default;
+  background: var(--wb-side);
+  border-right: 1px solid var(--wb-line);
+}
+body.host-mobile .sb-splitter:hover,
+body.host-mobile .sb-splitter:active { background: var(--wb-side); }
+/* Stop the desktop absolute positioning so the two buttons simply stack at the top. */
+body.host-mobile .sb-splitter .sb-splitter-arrow,
+body.host-mobile .sb-splitter .sb-splitter-open {
+  position: static;
+  transform: none;
+  width: 44px;
+  height: 44px;
+  margin: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  opacity: 1;
+}
 
 /* Tool bar buttons must keep a tappable size instead of shrinking to zero width. What
    is left overflowing is a DESIGN decision (which actions earn a place on a phone),
    not something to solve by squeezing every button into nothing. */
 body.host-mobile .wb-view-tab { flex: 0 0 auto; min-width: 44px; }
+
+/* Status bar. MEASURED on the phone: both halves wrapped to two lines inside a 28px
+   bar, so it read as a cramped block of text. The right half is encoding + alignment +
+   a keyboard shortcut - desktop-only concerns that a finger cannot act on - so it goes,
+   and the left half is kept on one line. */
+body.host-mobile .typora-statusbar { font-size: 11px; padding-inline: 8px; }
+body.host-mobile .typora-statusbar .status-right { display: none; }
+body.host-mobile .typora-statusbar .status-left {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+/* `1 字 = 2 字符` style duplications waste the little width there is. */
+body.host-mobile .typora-statusbar .sep { margin-inline: 2px; }
