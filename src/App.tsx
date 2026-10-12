@@ -12,7 +12,7 @@ import { renderDocument } from './utils/renderClient';
 import type { UpdateCheckResult, UpdateProgress } from './utils/updater';
 import { hostPlatform, isMobilePlatform, isDesktopPlatform, type HostPlatform } from './platform/host';
 import { AppIcon, type IconName } from './AppIcon';
-import { isPdfPath, loadPdfBytes } from './pdf/openPdf';
+import { isPdfPath, loadPdfBytes, readIfPdf } from './pdf/openPdf';
 // pdf-lib-backed modules are imported DYNAMICALLY at each call site (they are all
 // async) so ~300 kB of pdf-lib never lands in the startup bundle.
 import { fetchNoteFontBytes } from './pdf/cjkFont';
@@ -2574,9 +2574,16 @@ export const App: React.FC = () => {
       }
 
       // --- PDF branch: bytes go through plugin-fs, never the text command ---
-      if (isPdfPath(targetPath)) {
+      // The extension alone is not enough on mobile. The file dialog hands back a SAF
+      // content URI ("content://…/document/1234") that carries NO `.pdf` suffix, so an
+      // extension-only test pushed PDFs into the text branch and they would not open at
+      // all. Fall back to sniffing the header - the same %PDF magic the loader validates.
+      // An unknown type is read ONCE here and the bytes reused below, so a PDF picked
+      // through the dialog is not read twice.
+      const sniffedPdfBytes = isPdfPath(targetPath) ? null : await readIfPdf(targetPath);
+      if (isPdfPath(targetPath) || sniffedPdfBytes) {
         try {
-          const bytes = await loadPdfBytes(targetPath);
+          const bytes = sniffedPdfBytes ?? await loadPdfBytes(targetPath);
           const { readAnnotsFromPdf } = await import('./pdf/annotStore');
           const savedAnnots = await readAnnotsFromPdf(bytes);
           const pdfName = targetPath.split(/[\\/]/).pop() || 'document.pdf';

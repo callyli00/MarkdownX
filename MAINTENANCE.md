@@ -652,6 +652,33 @@ scan2.pdf  (扫描件)      3 页 570x808  非白 454/310/471   平均亮度 250
 **遗留**：连续打开 4 个 PDF 后 PSS 达 459MB，仍偏高。更重的文档或后台内存紧张时仍可能被强杀；
 进一步措施是把移动端渲染窗口收窄到可见页 ±1，以及限制同时打开的 PDF 标签数。
 
+### 13.6.8 「用打开按键打不开 PDF」= SAF URI 没有扩展名（真机实测）
+
+`isPdfPath()` 只看扩展名（`/\.pdf$/i`），而**系统文件选择器返回的是 SAF content URI**，
+形如 `content://com.android.providers.downloads.documents/document/1234` —— **没有 `.pdf` 后缀**。
+于是 PDF 被判成普通文本，走文本分支去读二进制 → 打不开。
+
+**为什么之前没发现**：桌面与真机自测用的都是带 `.pdf` 的真实路径（`/data/.../test-3p.pdf`），
+只有走系统选择器选文件才会暴露。复现方式：把一个 PDF 复制成无扩展名文件再打开 ——
+实测 `noext` 打开后是普通文档标签且 `pdfViewer=false`，而 `test-3p.pdf` 正常。
+
+修法：**扩展名不够时按文件头嗅探**（`%PDF`，与加载器已有的校验同一规则）。
+`src/pdf/openPdf.ts` 新增 `readIfPdf(path)`：用**已授权的 `readFile` 读一次**并返回字节
+（若像 PDF），调用方复用它，避免读两遍。
+
+**踩到的权限坑**：最初用 `plugin-fs` 的 `open()` + `FileHandle.read()` 只读前 1KiB，
+但 **`fs:allow-open` 没有授予移动端 capability**（我写的 mobile.json 只有
+read/write-text-file、read/write-file、read-dir、exists、mkdir），调用被拒 →
+`sniffPdf` 静默返回 false，表现为"改了却仍然打不开"。
+**权限是编译进二进制的，改权限要重新打包**，所以改用已授权的 `readFile`。
+（若日后加了 `fs:allow-open`，可改为只读前 1KiB 以免整读大文件。）
+
+验证：真机 `noext3`（内容是 PDF 的无扩展名文件）→ `pdfViewer=true`、3 个 canvas、无错误；
+`test-3p.pdf` 仍正常。新增 6 条 `looksLikePdf` 单测（含"头部在 1024 字节窗口内/外"的边界）。
+
+**遗留**：SAF URI 里没有文件名，标签页名会显示文档 id（如 `1234`）。
+要拿到真实文件名需查询 provider 的 `_display_name`（需要原生侧支持）。
+
 ### 13.7 Android 平台配置 `tauri.android.conf.json`
 
 - 文件名固定，Tauri CLI 会**自动查找并合并**（`--help` 原文：*"a platform-specific file is looked up and merged with the default file by default (… tauri.android.conf.json …)"*），
