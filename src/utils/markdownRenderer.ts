@@ -781,8 +781,31 @@ function processMathAndCitations(rawMarkdown: string): {
     };
     return key;
   };
-  sanitized = trackedReplace(sanitized, translation, /(?<!\\)\$((?:\\.|[^$])+?)\$/g, tokenizeInlineMath);
-  sanitized = trackedReplace(sanitized, translation, /(?<!\\)\\\(([\s\S]*?)\\\)/g, tokenizeInlineMath);
+  // Inline math must not step over a WELL-FORMED HTML tag opener.
+  //
+  // An orphan '$' - e.g. from an <img alt="..."> that an upstream conversion truncated in the
+  // middle of a formula - would otherwise pair with the next '$' it can reach, paragraphs
+  // later, and everything between them is consumed as maths: the '>' closing the current tag,
+  // the </figcaption>, the </figure> and the prose in between. The figure block disappears and
+  // every later formula is re-paired (measured: 7 such truncations in one merged book, each
+  // flattening the rest of its page).
+  //
+  // Refusing the pairing costs one literal '$', hidden inside an attribute nobody reads, and
+  // repairs the rest of the document. A bare '<' as used in maths - '\sum_{l<m}', 'a<b' - is
+  // not a tag opener, so those keep working; the guard only fires on real tag syntax.
+  const tagOpenerGuard = HTML_TAG_OPEN.source.replace(/^\^/, '');
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    new RegExp(`(?<!\\\\)\\$((?:\\\\.|(?!${tagOpenerGuard})[^$])+?)\\$`, 'g'),
+    tokenizeInlineMath
+  );
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    new RegExp(`(?<!\\\\)\\\\\\(((?:(?!${tagOpenerGuard})[\\s\\S])*?)\\\\\\)`, 'g'),
+    tokenizeInlineMath
+  );
 
   // Restore code samples / comments only after all math rewriting is finished,
   // so marked receives the author's original bytes. Masks were length

@@ -5705,8 +5705,19 @@ function processMathAndCitations(rawMarkdown) {
     };
     return key;
   };
-  sanitized = trackedReplace(sanitized, translation, /(?<!\\)\$((?:\\.|[^$])+?)\$/g, tokenizeInlineMath);
-  sanitized = trackedReplace(sanitized, translation, /(?<!\\)\\\(([\s\S]*?)\\\)/g, tokenizeInlineMath);
+  const tagOpenerGuard = HTML_TAG_OPEN.source.replace(/^\^/, "");
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    new RegExp(`(?<!\\\\)\\$((?:\\\\.|(?!${tagOpenerGuard})[^$])+?)\\$`, "g"),
+    tokenizeInlineMath
+  );
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    new RegExp(`(?<!\\\\)\\\\\\(((?:(?!${tagOpenerGuard})[\\s\\S])*?)\\\\\\)`, "g"),
+    tokenizeInlineMath
+  );
   const sanitizedMarkdown = unmaskVerbatimRegions(sanitized, store);
   const tokenSourceSpans = {};
   const anchor = (key) => {

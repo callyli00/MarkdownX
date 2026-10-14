@@ -52,3 +52,57 @@ describe('math tokenization with a < inside maths', () => {
     expect(rows(html)).toBe(1);
   });
 });
+
+/**
+ * Inline math must never step over a well-formed HTML tag opener.
+ *
+ * Real defect (a merged book, 7 occurrences): an upstream conversion truncated an
+ * `<img alt="...">` value in the middle of `$(\hat{\mathbf{e}}_1, ...)$`, leaving an
+ * orphan `$` in attribute space. The inline pass paired that `$` with the next one it
+ * found - paragraphs later - so the closing `>` of the tag, the `</figcaption>`, the
+ * `</figure>` and the prose between them were all consumed as "math". The figure block
+ * disappeared from the output and every later formula was re-paired.
+ *
+ * Refusing the pairing is the right trade: the orphan `$` stays literal (a local blemish
+ * in an attribute nobody reads) instead of the document being shredded from that point on.
+ */
+describe('inline math does not cross an HTML tag', () => {
+  const doc = [
+    '<figure>',
+    '<img src="images/ch01-001.jpg" alt="Figure 1.2.1 A rectangular Cartesian coordinate '
+      + 'system, $(x_{1}, x_{2}, x_{3}) = (x, y, z)$; $(\\hat{" width="555" height="362" '
+      + 'style="width: 555px; max-width: 100%; height: auto;">',
+    '<figcaption>Figure 1.2.1 A rectangular Cartesian coordinate system, '
+      + '$(x_{1}, x_{2}, x_{3}) = (x, y, z)$; $(\\hat{\\mathbf{e}}_1)$ are the unit basis '
+      + 'vectors.</figcaption>',
+    '</figure>',
+    '',
+    'and an $n$th-order tensor has the form',
+    '',
+    '$$\\boldsymbol{\\Phi} = \\varphi_{ijk} \\tag{1.2.9}$$',
+  ].join('\n');
+
+  it('keeps the figure block in the output', async () => {
+    const html = await renderMarkdown(doc, '');
+    expect(html).toContain('<figure');
+    expect(html).toContain('</figure>');
+    expect(html).toContain('<figcaption>');
+  });
+
+  it('does not swallow the closing > of the truncated tag', async () => {
+    const html = await renderMarkdown(doc, '');
+    // The tag must still end where it should: the next thing after it is the caption.
+    expect(html).not.toMatch(/&lt;\/figcaption&gt;/);
+    expect(html).toContain('are the unit basis vectors.');
+  });
+
+  it('still tokenizes inline math written after the figure', async () => {
+    const html = await renderMarkdown(doc, '');
+    expect(html).toContain('data-tex-source="n"');
+  });
+
+  it('still tokenizes the display equation written after the figure', async () => {
+    const html = await renderMarkdown(doc, '');
+    expect(rows(html)).toBe(1);
+  });
+});
