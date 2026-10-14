@@ -900,6 +900,35 @@ export function measureTextareaCaret(
   return result;
 }
 
+/**
+ * Offset spaces: the file's content keeps whatever line endings the file has (CRLF on
+ * Windows), but a <textarea>'s `value` is normalised to LF by the DOM. Every position
+ * computed against the content (renderer stamps, the outline's line arithmetic) is
+ * therefore too far along once it reaches the textarea - by exactly the number of line
+ * breaks before it, which is why the error grew with depth in the document (tens of
+ * characters near the top, hundreds further down) while still looking self-consistent.
+ *
+ * These convert between the two so a position means the same thing on both sides.
+ */
+export function toTextareaOffset(content: string, offset: number): number {
+  const o = Math.max(0, Math.min(offset, content.length));
+  if (!content.includes('\r')) return o;
+  return content.slice(0, o).replace(/\r\n?/g, '\n').length;
+}
+
+export function toContentOffset(content: string, textareaOffset: number): number {
+  const limit = Math.max(0, textareaOffset);
+  if (!content.includes('\r')) return Math.min(limit, content.length);
+  let seen = 0;
+  for (let i = 0; i < content.length && seen < limit; i++) {
+    if (content[i] === '\r') {
+      if (content[i + 1] === '\n') i++;      // CRLF: the DOM keeps one LF for both
+    }
+    seen++;
+  }
+  return seen;
+}
+
 /** The first anchor inside `el` (used for the reverse direction). */
 function firstAnchorIn(el: HTMLElement): { start: number; end: number } | null {
   const holder = el.matches('[data-src-start]') ? el : (el.querySelector('[data-src-start]') as HTMLElement | null);
@@ -1928,7 +1957,10 @@ export const App: React.FC = () => {
     const ta = textareaRef.current;
     if (!ta) return;
     pendingSourceCaretRef.current = null;
-    const pos = Math.max(0, Math.min(offset, ta.value.length));
+    // `offset` is in CONTENT coordinates (the anchor was stamped against the file text,
+    // which keeps its CRLF); the textarea's value is LF, so convert before applying it.
+    const pos = Math.max(0, Math.min(toTextareaOffset(activeFile?.content || '', offset), ta.value.length));
+    
     // Defer one frame so the textarea has been laid out and can scroll.
     requestAnimationFrame(() => {
       ta.focus();
@@ -1958,7 +1990,7 @@ export const App: React.FC = () => {
         });
       }
     });
-  }, [isSourceMode]);
+  }, [isSourceMode, activeFile?.content]);
 
   // The flash is transient: fade it out on its own, and clear it the moment the
   // writer interacts with the text, so it never lingers as visual noise.
@@ -2072,7 +2104,9 @@ export const App: React.FC = () => {
       for (let i = 0; i < item.line && i < lines.length; i++) {
         charIndex += lines[i].length + 1;
       }
-      const pos = Math.max(0, Math.min(charIndex, ta.value.length));
+      // charIndex was accumulated over the CONTENT (its lines still carry a CR that the
+      // textarea does not), so convert before handing it to setSelectionRange.
+      const pos = Math.max(0, Math.min(toTextareaOffset(activeFile?.content || '', charIndex), ta.value.length));
       // Land the caret at the very START of the heading line and select nothing:
       // the jump must not paint the whole title as selected, and the author must
       // be able to edit the '#' prefix right away (so the marker is NOT skipped).
@@ -2283,7 +2317,9 @@ export const App: React.FC = () => {
     if (isSourceMode) {
       const ta = textareaRef.current;
       pendingPreviewScrollRef.current = ta
-        ? { tabId: activeFileId, content: activeFile?.content || '', offset: ta.selectionStart }
+        ? { tabId: activeFileId, content: activeFile?.content || '',
+            // back to CONTENT coordinates: the preview's blocks are stamped in that space
+            offset: toContentOffset(activeFile?.content || '', ta.selectionStart) }
         : null;
       // Flush the pending debounce: the restore effect measures the preview
       // against activeFile.content, so the two must not be out of step.
