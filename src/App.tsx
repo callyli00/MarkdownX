@@ -87,7 +87,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.4';
+const APP_VERSION = 'v2.4.5';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -129,6 +129,16 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.5',
+    date: '2026-10-14',
+    items: [
+      '修复（渲染保险）：行内公式不再跨过 HTML 标签 —— 坏文档最多局部不渲染，不再毁掉其后全文',
+      '背景：上游转换把 <img alt="…"> 在公式中间截断、属性里留下落单的 $；这个 $ 会与很后面（跨段）的 $ 配对，把中间的 ">、</figcaption>、</figure> 连同夹着的正文当作公式吞掉，figure 块消失、其后公式全部错配（实测一本合并书里同类截断 7 处）',
+      '修法：公式内容不能跨过「格式正确的标签开头」；裸 < 如 \sum_{l<m}、a<b 不是标签开头，不受影响',
+      '验收：新增 4 项回归测试（修前 3/4 失败）；拿那份有缺陷的旧书验证 </figure> 从「被吞」→保留、$n$ 恢复为正确公式；单测 77/77；渲染护栏 6/6'
+    ]
+  },
   {
     version: 'v2.4.4',
     date: '2026-10-14',
