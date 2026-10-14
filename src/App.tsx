@@ -87,7 +87,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.3';
+const APP_VERSION = 'v2.4.4';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -129,6 +129,16 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.4',
+    date: '2026-10-14',
+    items: [
+      '修复：预览里双击跳源码时，光标常落在被点段落之前 —— 越靠文档后部偏得越多（前部几十字符、后部上千字符），表现为“定位不稳”',
+      '根因：每块源码锚点靠累加 token.raw.length 求偏移，而 marked 返回的 raw 已把 CRLF 规范化成 LF、源文件却是 CRLF —— 每行少算 1 个字符（实测覆盖差值 1109 恰等于 sanitized 文本里的 CRLF 对数 1109）',
+      '修法：渲染入口统一换行到 LF，使偏移翻译、sanitized 文本、锚点与源码框处于同一空间；磁盘文件行尾不受影响',
+      '验收：词级定位检查 3/16 → 16/16；光标覆盖文档第 78 ~ 102579 字符通篇一致；渲染护栏 6/6（含换行等价）保持'
+    ]
+  },
   {
     version: 'v2.4.3',
     date: '2026-10-07',
