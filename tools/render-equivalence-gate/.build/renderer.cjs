@@ -5604,6 +5604,7 @@ function labelToAnchorId(label) {
   return `eq-${normalizeLabelKey(label).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 function processMathAndCitations(rawMarkdown) {
+  rawMarkdown = rawMarkdown.replace(/\r\n?/g, "\n");
   const translation = new SourceTranslation(rawMarkdown.length);
   const cleanMarkdown = trackedReplace(rawMarkdown, translation, /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, () => "");
   const { text: withoutDiagrams, sources: diagramSources, edits: mermaidEdits } = extractMermaidBlocks(cleanMarkdown);

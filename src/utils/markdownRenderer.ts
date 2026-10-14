@@ -611,6 +611,17 @@ function processMathAndCitations(rawMarkdown: string): {
   translation: SourceTranslation;
   tokenSourceSpans: Record<string, { start: number; end: number }>;
 } {
+  // Normalise line endings FIRST, before any accounting happens.
+  //
+  // marked returns every token's `raw` with LF, while a Windows source keeps CRLF. Summing
+  // raw lengths for the per-block stamps therefore UNDER-COUNTS by one character per line
+  // break inside a token - measured exactly: coverage gap 1109 == the CRLF count 1109. Every
+  // stamp past the first line break was thus shifted earlier, by an amount that grows with
+  // document depth, which is precisely the "double-click lands on the previous block"
+  // symptom. One canonical (LF) space for the translation, the sanitized text and the stamps
+  // makes the accounting exact; the file on disk keeps its own endings.
+  rawMarkdown = rawMarkdown.replace(/\r\n?/g, '\n');
+
   // Every rewriting pass reports its replacements here; the rendered HTML then
   // carries true source spans, and a click can be answered deterministically.
   const translation = new SourceTranslation(rawMarkdown.length);

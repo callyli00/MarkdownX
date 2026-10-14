@@ -341,3 +341,39 @@ capabilities 只给了 `opener:allow-open-url` 与 `opener:allow-reveal-item-in-
   由工具栏按钮触发；按完保持该工具激活，方便连续标注。
 
 两条路径共用同一份归一化选区数据，避免两套逻辑漂移。
+
+---
+
+### 12.8 【已修】双击跳源码"落在前一块" —— marked 的 raw 会把换行规范化成 LF
+
+**症状**：在预览里双击跳源码，光标常落在**被点段落之前**，且越靠文档后部偏得越多
+（前部几十字符、后部上千字符），表现为"定位不稳"。
+
+**根因（应用内打点取证，两个数字完全相等）**：每块打点靠**累加 `token.raw.length`** 求在 sanitized
+文本里的偏移，再经 `translation.map()` 换到源码坐标。而 **marked 返回的 `raw` 已把 CRLF 规范化成 LF**，
+源文件却是 CRLF —— 每行少算 1 个字符：
+
+```
+coverage 差值 = 1109 ，   sanitized 文本里的 CRLF 对数 = 1109    ← 完全相等
+rawHead "# Vectors, Tensors, and …"   rawCRLF=0   rawLF=2
+smHead  "# Vectors, Tensors, and …"   smCRLF=1109
+```
+
+累加值从第一个换行起就偏小，之后**每块都往前偏**，并随文档深度累积。
+
+**修法**：在 `processMathAndCitations` 入口统一换行（`rawMarkdown.replace(/\r\n?/g, '\n')`），
+让 translation、sanitized 文本、锚点与 `<textarea>.value`（DOM 本就把 CRLF 规范化成 LF）
+处于**同一空间**。磁盘文件的行尾不变。
+**顺带撤掉**先前一轮基于错误假设加上的 `toTextareaOffset`/`toContentOffset` 换算（方向搞反了：
+锚点当时并不是 CRLF 空间，而是被这个 bug 提前了）。
+
+**验收**：coverage 差值 1109 → **0**；词级定位检查 **3/16 → 16/16**（光标覆盖第 78 ~ 102579 字符
+通篇一致）；渲染护栏 6/6（含换行等价）保持 PASS。
+
+**排查中踩到并纠正的三个测量陷阱**（每个都先给出过错误结论，值得复用）：
+1. **后台/隐藏窗口里 `requestAnimationFrame` 不触发** —— 落点写在 rAF 里，探针会误报大面积失败。
+   必须先 `Page.bringToFront`（并断言 `document.hidden === false`）。
+2. **"实际偏移 vs 元素锚点"是假通过指标** —— 两边处于同一错误空间时误差互相抵消，看起来全对。
+   必须比对**落点处的文字**。
+3. **用"去掉公式后拼接的短语"在源码里搜是假阴性** —— 源码里公式是真实字符，任何跨越公式的短语
+   只存在于一侧。必须按**词**比对。
