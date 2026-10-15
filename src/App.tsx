@@ -130,7 +130,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.6';
+const APP_VERSION = 'v2.4.7';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -172,6 +172,17 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.7',
+    date: '2026-10-14',
+    items: [
+      '修复：目录点了不跳（部分章节整段失效）—— 表格里两个行内公式贴在一起产生的 "$$" 被当成行间公式分隔符，与很远处的一个 $$ 配对后把中间的表格、标签、标题全部吞掉',
+      '症状：一本 12 章的书，第 1~3 章目录能跳、第 5~10 章点了没反应（配对取决于粘连 $$ 的奇偶性）',
+      '实测：渲染出的 h1 6 → 12、h2 44 → 81，标题 id 命中 217/396 → 391/396',
+      '修复：含公式的标题匹配不上 —— 渲染器 id 用净化后的文本（公式已变成哨兵），且 MathJax 把 \\theta 排版成 θ 而大纲标题是源码文本；改为把数学 span 还原成 data-tex-source 后比对，并按出现次序取第 n 个',
+      '验收：应用内逐项点击 5 个含公式标题 5/5 落在自身标题上；新增 5 项单测；单测 96 项；渲染护栏 6/6'
+    ]
+  },
   {
     version: 'v2.4.6',
     date: '2026-10-14',
