@@ -1,0 +1,11 @@
+{
+  "version": "2.4.7",
+  "notes": "#### 修复：目录点了不跳（部分章节整段失效）\n- **症状**：一本 12 章的书，第 1~3 章的目录能跳，第 5~10 章点了没反应。\n- **主因（渲染）**：表格单元格里两个行内公式贴在一起（转换产物）——\n  `| $c_1 \\neq 0$$c_2 = c_3 = c_4 = 0$ |` 里出现了 `$$`。行间公式那一趟用\n  `/\\$\\$([\\s\\S]*?)\\$\\$/`（无边界要求），于是它与很远处的一个真实 `$$` 配对，\n  把中间的表格、标签、**标题**全部吞掉 —— 那些标题从未成为 DOM 元素，目录无处可跳。\n  配对还取决于粘连 `$$` 的**奇偶性**，这正是\"第 5~10 章死、11~12 章恢复\"的来源。\n  **实测：渲染出的 `h1` 6 → 12、`h2` 44 → 81，标题 id 命中 217/396 → 391/396。**\n- **次因（跳转）**：含公式的标题永远匹配不上 —— 渲染器 id 用 marked 的净化文本（公式已变成\n  `@@MATH_INLINE_42@@` 哨兵），且 MathJax 把 `\\theta` 排版成字符 **θ**，而大纲标题是源码文本。\n- **修法**：① 行间公式开头必须位于词法边界（`(?<!\\S)`），粘连的 `$$` 交给行内公式那一趟；\n  ② 比对时把数学 span **还原成 `data-tex-source`**（源码比源码），并按出现次序取第 n 个。\n- **验收**：应用内逐项点击 5 个含公式标题 **5/5** 落在自身标题上；新增 5 项单测；单测 **96** 项；渲染护栏 **6/6**。",
+  "pub_date": "2026-10-15T02:35:28.533Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTUW11NElLelc2SHM2UEFyRWVmZEliU29JUzJTU3Z4NTkxZEw5aVpLVmFBUng3SkZvNzFaZWJ4M1dPZmtpcDdSR1V0TmozZWs2RzZ5QTVYcjR1eXVFQVlsZGw4YVlxbkFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDMxNzI4CWZpbGU6TWFya2Rvd25YXzIuNC43X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjQuNwoyLzhGbTFEYlA0NTdUSjAzNUkrazlxSjZSUFgzbjlIK213aXl3bVJZNWovb1NPOEE1U29QSjl1dEo4QWUxN3dUamV0VjV4bk9MSk1pQlZsVVU4UjNDdz09Cg==",
+      "url": "https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/MarkdownX_2.4.7_x64-setup.exe"
+    }
+  }
+}
