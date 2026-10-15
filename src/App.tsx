@@ -38,6 +38,52 @@ interface FileTab {
   pdfAnnots?: PdfAnnot[];
 }
 
+/**
+ * Heading text with maths delimiters, inline markup and ALL whitespace removed.
+ *
+ * Used to match an outline entry to its rendered heading when the id cannot: the renderer
+ * builds the id from marked's token raw, which is the sanitised text where formulas have
+ * become sentinels, so maths-bearing headings never match by id.
+ */
+function normalizeHeadingText(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, '')
+    .replace(/\$+/g, '')
+    .replace(/[*_`#]/g, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+/**
+ * A heading's text with every rendered formula put BACK to the TeX the author wrote.
+ *
+ * MathJax replaces `\theta` with the typeset character θ in the DOM, so a heading rendered as
+ * "Cylindrical Coordinates (r,θ,z)" can never be matched against the source title
+ * "Cylindrical Coordinates $(r,\theta ,z)$". Each math span carries the original TeX in
+ * `data-tex-source`, so restore it and compare source text with source text.
+ */
+function headingTextWithSourceMath(h: HTMLElement): string {
+  const clone = h.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('.math-inline').forEach((span) => {
+    const tex = span.getAttribute('data-tex-source');
+    span.replaceWith(document.createTextNode(tex === null ? '' : `$${tex}$`));
+  });
+  return clone.textContent || '';
+}
+
+/**
+ * Nth rendered heading whose text matches the outline entry (0-based). `key` ends in `#n`,
+ * which counts repeats of the same (level, title) in the document.
+ */
+function findHeadingForOutlineItem(item: OutlineItem): HTMLElement | null {
+  const occurrence = Number(item.key.split('#').pop() || '0') || 0;
+  const wanted = normalizeHeadingText(item.title);
+  const matches = Array.from(document.querySelectorAll(`h${item.level}`)).filter(
+    (h) => normalizeHeadingText(headingTextWithSourceMath(h as HTMLElement)) === wanted
+  );
+  return (matches[occurrence] as HTMLElement | undefined) ?? null;
+}
+
 /** Shared empty set: a stable identity keeps the outline memos from recomputing every render. */
 const EMPTY_COLLAPSED: Set<string> = new Set();
 
@@ -2126,8 +2172,15 @@ export const App: React.FC = () => {
         }
       });
     } else {
-      const el = document.getElementById(`heading-${item.slug}`) ||
-                 Array.from(document.querySelectorAll(`h${item.level}`)).find(h => (h.textContent || '').includes(item.title));
+      // 1. Exact id. The renderer derives it from marked's token raw - the SANITISED heading
+      //    text, in which every formula has already been replaced by a sentinel
+      //    (`@@MATH_INLINE_7@@`). So the id only matches for headings without maths; that
+      //    covers 391 of 396 headings in a real book, and the rest need the fallback below.
+      // 2. Fallback: compare heading text with maths delimiters, inline markup and whitespace
+      //    removed, because the rendered span keeps the TeX verbatim (`$r,\theta ,z$`), which
+      //    the source title also carries. Occurrence index (`key` ends in `#n`) keeps repeated
+      //    titles on their own entry instead of always jumping to the first.
+      const el = document.getElementById(`heading-${item.slug}`) || findHeadingForOutlineItem(item);
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }

@@ -659,7 +659,16 @@ function processMathAndCitations(rawMarkdown: string): {
   //    '$$...$$' and the LaTeX-native '\\[...\\]' (emitted by publisher HTML and
   //    LaTeX exports) are both accepted; both are normalised to the same token.
   const displayDelimiters: [RegExp, RegExp] = [
-    /\$\$([\s\S]*?)\$\$/g,
+    // The opener must sit at a token boundary - not glued to a preceding character.
+    //
+    // Merged/OCR text writes two inline formulas back to back (`$c_1 \neq 0$$c_2 = c_3 = c_4 = 0$`
+    // in a table cell), which puts a '$$' in the text. Accepting that as a display delimiter made
+    // this pass pair it with a much later '$$' (in that book, a real display block chapters away)
+    // and swallow every tag, table row and HEADING in between: the headings never became
+    // elements, so their outline entries had nothing to scroll to - chapters 5-10 of a 12-chapter
+    // book were dead in the TOC while 11-12 recovered, purely by the parity of these pairs.
+    // Left alone, the inline pass reads the glued text correctly as two adjacent inline formulas.
+    /(?<!\S)\$\$([\s\S]*?)\$\$/g,
     /\\\[([\s\S]*?)\\\]/g
   ];
 
