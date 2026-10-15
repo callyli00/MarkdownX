@@ -84,7 +84,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.5';
+const APP_VERSION = 'v2.4.6';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -126,6 +126,16 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.6',
+    date: '2026-10-14',
+    items: [
+      '修复：CRLF 文档的大纲为空白 —— 提取用的 (.+)$ 在 JS 里无法匹配行尾的 \\r，导致每个标题行都失败（同一算法：CRLF 原文 0 个标题、LF 规范化后 395 个）',
+      '症状：395 个标题的合并书大纲全空、显示「当前文档暂无标题」；「有的时候」取决于文件是 CRLF 还是 LF',
+      '顺带修复：源码模式点大纲落点偏前（末章偏 20602 字符）；折叠状态跨文档串味导致大纲只剩一行',
+      '验收：新增 14 项单测；应用内实测大纲 395 行、点末项准确落在 "## Problems" 行首；单测 91 项；渲染护栏 6/6'
+    ]
+  },
   {
     version: 'v2.4.5',
     date: '2026-10-14',
