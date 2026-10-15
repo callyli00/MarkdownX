@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
+import { extractOutline, visibleOutlineRows, countLines, type OutlineItem } from './utils/outline';
 import { renderDocument } from './utils/renderClient';
 import { checkForUpdate, installUpdate, type UpdateCheckResult, type UpdateProgress } from './utils/updater';
 import { AppIcon, type IconName } from './AppIcon';
@@ -37,18 +38,14 @@ interface FileTab {
   pdfAnnots?: PdfAnnot[];
 }
 
+/** Shared empty set: a stable identity keeps the outline memos from recomputing every render. */
+const EMPTY_COLLAPSED: Set<string> = new Set();
+
 interface FileConflict {
   tabId: string;
   fileName: string;
   filePath: string;
   diskContent: string;
-}
-
-interface OutlineItem {
-  level: number;
-  title: string;
-  line: number;
-  slug: string;
 }
 
 interface FileEntry {
@@ -1278,7 +1275,11 @@ export const App: React.FC = () => {
   // Surfaced in the top bar if a window command is refused (e.g. a missing
   // capability) so a dead control is never silent again.
   const [windowCmdNotice, setWindowCmdNotice] = useState<string | null>(null);
-  const [collapsedOutline, setCollapsedOutline] = useState<Set<number>>(new Set());
+  // Collapse state is namespaced per DOCUMENT and keyed by the heading's stable key, not by
+  // its line number. Keying by line number meant a stale entry from another document could
+  // land on a top-level heading and hide its whole subtree - in a book whose first heading is
+  // at line 2 with the rest one level deeper, that collapsed the outline to a single row.
+  const [collapsedOutline, setCollapsedOutline] = useState<Map<string, Set<string>>>(new Map());
   // External-modification conflicts are tracked PER TAB so that background
   // documents keep their conflict state until the user resolves it explicitly.
   const [fileConflicts, setFileConflicts] = useState<Record<string, FileConflict>>({});
@@ -2063,35 +2064,24 @@ export const App: React.FC = () => {
   }, [isSourceMode]);
 
 // --- Outline Extraction (TOC) ---
-  const outlineList = useMemo<OutlineItem[]>(() => {
-    if (!activeFile?.content) return [];
-    const items: OutlineItem[] = [];
-    const lines = activeFile.content.split('\n');
-    let inCode = false;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.trim().startsWith('```')) {
-        inCode = !inCode;
-        continue;
-      }
-      if (inCode) continue;
-      const m = line.match(/^(#{1,6})\s+(.+)$/);
-      if (m) {
-        const level = m[1].length;
-        const title = m[2].trim().replace(/[*_`#]/g, '');
-        const slug = encodeURIComponent(title.toLowerCase().replace(/\s+/g, '-'));
-        items.push({ level, title, line: i, slug });
-      }
-    }
-    return items;
-  }, [activeFile?.content]);
+  // Extraction lives in utils/outline.ts so the line-ending behaviour is unit-tested: on a
+  // CRLF document the previous inline version matched NO heading at all ('.' does not match
+  // '\r', and '$' without /m only matches at the very end), so the outline panel showed
+  // "当前文档暂无标题" for every Windows-authored file.
+  const outlineList = useMemo<OutlineItem[]>(
+    () => extractOutline(activeFile?.content || ''),
+    [activeFile?.content]
+  );
 
   // Handle clicking outline item
   const handleOutlineClick = (item: OutlineItem) => {
     if (isSourceMode) {
       const ta = textareaRef.current;
       if (!ta) return;
-      const lines = (activeFile?.content || '').split('\n');
+      // Split CRLF-aware: `lines[i].length` feeds a character offset applied to the LF
+      // textarea, so a trailing '\r' counted here would land the caret early - by the number
+      // of line breaks above the heading (thousands of characters by the last chapter).
+      const lines = (activeFile?.content || '').split(/\r?\n/);
       let charIndex = 0;
       for (let i = 0; i < item.line && i < lines.length; i++) {
         charIndex += lines[i].length + 1;
@@ -2207,29 +2197,27 @@ export const App: React.FC = () => {
   // Outline rows: a node's caret must not depend on its own collapsed state, so
   // hasChild is computed from the FULL outline list. Descendants of a collapsed
   // node are skipped while walking the pre-order list.
-  const outlineRows = useMemo(() => {
-    const rows: (OutlineItem & { hasChild: boolean; collapsed: boolean })[] = [];
-    let hideDeeperThan: number | null = null;
-    for (let i = 0; i < outlineList.length; i++) {
-      const it = outlineList[i];
-      if (hideDeeperThan !== null && it.level > hideDeeperThan) continue;
-      hideDeeperThan = null;
-      const hasChild = i + 1 < outlineList.length && outlineList[i + 1].level > it.level;
-      const collapsed = collapsedOutline.has(it.line);
-      rows.push({ ...it, hasChild, collapsed });
-      if (hasChild && collapsed) hideDeeperThan = it.level;
-    }
-    return rows;
-  }, [outlineList, collapsedOutline]);
+  /** Collapsed keys belonging to the ACTIVE document only. */
+  const collapsedForFile = useMemo(
+    () => collapsedOutline.get(activeFileId) ?? EMPTY_COLLAPSED,
+    [collapsedOutline, activeFileId]
+  );
 
-  const toggleOutlineNode = useCallback((line: number) => {
+  const outlineRows = useMemo(
+    () => visibleOutlineRows(outlineList, collapsedForFile),
+    [outlineList, collapsedForFile]
+  );
+
+  const toggleOutlineNode = useCallback((key: string) => {
     setCollapsedOutline((prev) => {
-      const next = new Set(prev);
-      if (next.has(line)) next.delete(line);
-      else next.add(line);
+      const next = new Map(prev);
+      const set = new Set(next.get(activeFileId) ?? []);
+      if (set.has(key)) set.delete(key);
+      else set.add(key);
+      next.set(activeFileId, set);
       return next;
     });
-  }, []); 
+  }, [activeFileId]); 
   // Window controls
   const handleToggleFullscreen = async () => {
     try {
@@ -2342,7 +2330,7 @@ export const App: React.FC = () => {
     const wordsCount = wordMatches.length;
     const charWithSpaces = content.length;
     const charNoSpaces = content.replace(/\s/g, '').length;
-    const lines = content === '' ? 0 : content.split('\n').length;
+    const lines = countLines(content);
     const paragraphs = content.split(/\n\s*\n/).filter(p => p.trim().length > 0).length;
     const readingMinutes = Math.max(1, Math.ceil((cjkCount / 350) + (wordsCount / 200)));
     return {
@@ -3638,9 +3626,9 @@ ${texBody}
                           {outlineList.length === 0 ? (
                             <div className="sidebar-empty-hint">当前文档暂无标题</div>
                           ) : (
-                            outlineRows.map((item, idx) => (
+                            outlineRows.map((item) => (
                               <div
-                                key={`${item.line}-${idx}`}
+                                key={item.key}
                                 className={`outline-item level-${item.level}${item.hasChild && item.collapsed ? ' has-collapsed' : ''}`}
                                 style={{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }}
                                 title={`跳转到: ${item.title}`}
@@ -3648,7 +3636,7 @@ ${texBody}
                                 {item.hasChild ? (
                                   <span
                                     className="outline-caret"
-                                    onClick={(e) => { e.stopPropagation(); toggleOutlineNode(item.line); }}
+                                    onClick={(e) => { e.stopPropagation(); toggleOutlineNode(item.key); }}
                                     title={item.collapsed ? '展开子标题' : '折叠子标题'}
                                   >
                                     {item.collapsed ? '▸' : '▾'}
