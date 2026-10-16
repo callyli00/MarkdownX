@@ -3677,16 +3677,17 @@ body.host-mobile .typora-shell {
 }
 
 /* The splitter strip carries the only two entry points a phone needs - the sidebar
-   toggle and "open file" - and it is rendered unconditionally, so simply hiding it (as
-   an earlier revision did) removes the user's only way to open a document. Instead it
-   becomes a touch rail: a fixed-width column of 44x44 buttons at the leading edge. */
+   toggle and "open file" - and it is rendered unconditionally. That was true when the mobile
+   top bar had neither entry, so it became a touch rail instead of being hidden.
+
+   The premise no longer holds: the mobile top bar now carries BOTH the sidebar toggle and
+   "open", so the rail is a duplicate entry - and it also offsets the whole content column.
+   Measured with the rail present on a 406px viewport: `.sb-splitter` occupied x=0..48 and
+   `.app-col` started at x=48, which is the off-centre, left-heavy margin the user sees in a
+   screenshot. Nothing is lost by hiding it on mobile now. */
 body.host-mobile .sb-splitter,
 body.host-mobile .sb-splitter.collapsed {
-  width: 48px;
-  min-width: 48px;
-  cursor: default;
-  background: var(--wb-side);
-  border-right: 1px solid var(--wb-line);
+  display: none;
 }
 body.host-mobile .sb-splitter:hover,
 body.host-mobile .sb-splitter:active { background: var(--wb-side); }
@@ -3725,3 +3726,90 @@ body.host-mobile .typora-statusbar .status-left {
 }
 /* `1 字 = 2 字符` style duplications waste the little width there is. */
 body.host-mobile .typora-statusbar .sep { margin-inline: 2px; }
+
+/* ============================================================================
+   Mobile shell — one entry point for every command.
+   The desktop top bar carries ~15 controls; on a phone they are crammed or removed by the
+   narrow-viewport media queries, which the user reports as "功能找不到". On mobile the bar
+   keeps the title / sidebar toggle / open / 全部功能, and every other command lives in one
+   bottom sheet with a text label per row.
+
+   Hiding is done with EXPLICIT direct-child selectors rather than a width query, so the
+   author can see exactly which controls leave the bar — and `.pdf-tool-icons` (a sibling
+   inside the same cluster) stays visible, because the PDF annotation tools are already
+   tuned for touch.
+   ============================================================================ */
+
+body.host-mobile .wb-topbar { height: 54px; padding: 0 8px; gap: 6px; }
+
+/* The collapsed-sidebar opener is a desktop affordance: with the drawer pattern the top bar
+   already toggles the sidebar, so this strip is a duplicate entry AND it offsets the whole
+   content column to the right (measured on the phone: the editor card started ~44px in). */
+body.host-mobile .sb-splitter-open { display: none; }
+
+body.host-mobile .wb-tb-left > .wb-icon-btn,
+body.host-mobile .wb-tb-left > .wb-menu-host,
+body.host-mobile .wb-tb-left > .wb-cmd-notice,
+body.host-mobile .wb-tb-center,
+body.host-mobile .wb-edit-cluster,
+body.host-mobile .wb-tb-right { display: none; }
+
+.wb-tb-mobile { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; }
+.wb-tb-mobile-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; padding: 0 4px; }
+.wb-tb-mobile-name {
+  font-size: 14px; font-weight: 600; color: var(--wb-fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wb-tb-mobile-meta { font-size: 10.5px; color: var(--wb-fg3); }
+
+/* --- status bar: one compact line, with the mode as a tappable chip ---------- */
+body.host-mobile .typora-statusbar {
+  height: 34px; padding: 0 8px; gap: 8px; font-size: 11px; overflow: hidden;
+}
+body.host-mobile .status-mobile-hide { display: none; }
+
+.status-mode-chip {
+  flex: 0 0 auto; height: 22px; padding: 0 10px; border: 0; border-radius: 11px;
+  background: var(--wb-sel); color: var(--wb-fg); font: inherit; font-size: 10.5px;
+  cursor: pointer; white-space: nowrap;
+}
+.status-mode-chip:active { background: #d6dae2; }
+
+/* --- the command sheet ------------------------------------------------------- */
+.wb-sheet-scrim { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.34); z-index: 60; }
+.wb-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 61;
+  background: var(--wb-card); border-radius: 18px 18px 0 0; box-shadow: var(--shadow-menu);
+  max-height: 84vh; display: flex; flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.wb-sheet-grab {
+  height: 22px; flex: 0 0 auto; border: 0; background: transparent;
+  display: grid; place-items: center; cursor: pointer;
+}
+.wb-sheet-grab span { width: 36px; height: 4px; border-radius: 2px; background: #cfd4dc; }
+.wb-sheet-scroll { overflow-y: auto; padding: 0 8px 14px; -webkit-overflow-scrolling: touch; }
+.wb-sheet-sec { font-size: 10.5px; color: var(--wb-fg3); padding: 10px 10px 4px; letter-spacing: 0.3px; }
+.wb-sheet-item {
+  min-height: 46px; border-radius: 11px; display: flex; align-items: center; gap: 11px;
+  padding: 0 10px; font-size: 13.5px; color: var(--wb-fg); cursor: pointer;
+}
+.wb-sheet-item:active { background: var(--wb-sel); }
+.wb-sheet-item svg { width: 17px; height: 17px; color: var(--wb-fg2); flex: 0 0 auto; }
+.wb-sheet-item .tl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-sheet-item .hint { flex: 0 0 auto; font-size: 11px; color: var(--wb-fg3); }
+
+/* --- empty state: touch-sized actions, no desktop wording -------------------- */
+body.host-mobile .typora-empty-guide { padding: 0 20px; }
+.empty-mobile-actions {
+  display: flex; flex-direction: column; gap: 9px; width: 100%; max-width: 250px;
+  margin: 16px auto 0;
+}
+.empty-mobile-btn {
+  min-height: 44px; border-radius: 12px; border: 1px solid var(--wb-line);
+  background: var(--wb-card); color: var(--wb-fg); font: inherit; font-size: 13.5px;
+  font-weight: 500; display: flex; align-items: center; justify-content: center;
+  gap: 7px; cursor: pointer;
+}
+.empty-mobile-btn.solid { background: var(--wb-accent); border-color: var(--wb-accent); color: #fff; }
+.empty-mobile-btn svg { width: 16px; height: 16px; }

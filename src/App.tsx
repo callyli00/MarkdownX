@@ -1439,6 +1439,18 @@ export const App: React.FC = () => {
    */
   const [host, setHost] = useState<HostPlatform | null>(null);
   const isMobile = host !== null && isMobilePlatform(host);
+
+  /**
+   * Mobile shell: ONE entry point for every command.
+   *
+   * The desktop top bar carries ~15 controls. On a 350px screen they are either crammed or
+   * removed by the narrow-viewport media queries, and the user reports the result as
+   * "功能找不到" - the commands exist but there is no way to reach them. On mobile the bar keeps
+   * the title, the sidebar toggle, open, and this sheet; everything else lives in the sheet,
+   * with a text label per row instead of an icon alone.
+   */
+  const [isCmdSheetOpen, setIsCmdSheetOpen] = useState(false);
+  useEffect(() => { if (!isMobile) setIsCmdSheetOpen(false); }, [isMobile]);
   // Desktop-only chrome is gated on `isDesktop`, not `!isMobile`: until the probe
   // answers we know neither, and defaulting to "desktop" would flash dead window
   // buttons on a phone for the first frame.
@@ -3965,6 +3977,40 @@ ${texBody}
                 so the attribute (and its `cursor: default` companion rule) is pure risk
                 there. Kept on desktop unchanged. */}
             <header className="wb-topbar" data-tauri-drag-region={isDesktop ? 'true' : undefined}>
+        {isMobile && (
+          <div className="wb-tb-mobile">
+            <button
+              className="wb-icon-btn"
+              onClick={() => setIsSidebarOpen((v) => !v)}
+              title="侧栏：大纲 / 文档"
+            >
+              <AppIcon name="sidebar-left" size={17} />
+            </button>
+            <div className="wb-tb-mobile-title">
+              <span className="wb-tb-mobile-name">{activeFile ? activeFile.name : 'MarkdownX'}</span>
+              <span className="wb-tb-mobile-meta">
+                {activeFile ? (activeFile.isModified ? '未保存' : '已保存') : '未打开文档'}
+                {activeFile?.kind === 'pdf' ? ' · PDF' : ''}
+              </span>
+            </div>
+            <button
+              className="wb-icon-btn"
+              onClick={() => void handleOpenFile()}
+              title="打开文件"
+            >
+              {/* A page outline reads as "new document" (the file picker was found only by
+                  trial). A folder is unambiguous for "open". */}
+              <AppIcon name="folder-open" size={18} />
+            </button>
+            <button
+              className={`wb-icon-btn ${isCmdSheetOpen ? 'active' : ''}`}
+              onClick={() => setIsCmdSheetOpen((v) => !v)}
+              title="全部功能"
+            >
+              <AppIcon name="more" size={19} />
+            </button>
+          </div>
+        )}
         <div className="wb-tb-left" data-tauri-drag-region={isDesktop ? 'true' : undefined}>
           {windowCmdNotice && (
             <span className="wb-cmd-notice" title={windowCmdNotice}>
@@ -4642,8 +4688,33 @@ ${texBody}
                     className="typora-empty-guide"
                     onClick={() => enterSourceMode(null)}
                   >
-                    <p className="empty-hint-main">点击此处或按 <kbd>Ctrl + /</kbd> 开始书写...</p>
-                    <p className="empty-hint-sub">也可将 .md 文件拖入窗口，或用顶部 <strong>⋯ 菜单 ➔ 打开文件...</strong> 打开本地 Markdown 文档</p>
+                    {isMobile ? (
+                      <>
+                        {/* Touch copy: a phone has no Ctrl key and no drag-and-drop, so the
+                            desktop wording reads as instructions the user cannot follow. */}
+                        <p className="empty-hint-main">打开一个文档开始</p>
+                        <p className="empty-hint-sub">支持 Markdown 与 PDF；公式、图表、图片都能直接看</p>
+                        <div className="empty-mobile-actions">
+                          <button
+                            className="empty-mobile-btn solid"
+                            onClick={(e) => { e.stopPropagation(); void handleOpenFile(); }}
+                          >
+                            <AppIcon name="folder-open" size={16} />打开文件
+                          </button>
+                          <button
+                            className="empty-mobile-btn"
+                            onClick={(e) => { e.stopPropagation(); setIsCmdSheetOpen(true); }}
+                          >
+                            <AppIcon name="more" size={16} />全部功能
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className="empty-hint-main">点击此处或按 <kbd>Ctrl + /</kbd> 开始书写...</p>
+                        <p className="empty-hint-sub">也可将 .md 文件拖入窗口，或用顶部 <strong>⋯ 菜单 ➔ 打开文件...</strong> 打开本地 Markdown 文档</p>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -4653,6 +4724,114 @@ ${texBody}
       </div>
       </div>
       </div>
+
+      {/* Mobile command sheet. Every row calls the SAME handler the desktop control calls -
+          no duplicated logic - and desktop-only commands (window controls, always-on-top,
+          fullscreen, devtools) are deliberately absent: a phone cannot use them. */}
+      {isMobile && isCmdSheetOpen && (
+        <>
+          <div className="wb-sheet-scrim" onClick={() => setIsCmdSheetOpen(false)} />
+          <div className="wb-sheet" role="dialog" aria-label="全部功能">
+            <button className="wb-sheet-grab" onClick={() => setIsCmdSheetOpen(false)} aria-label="收起">
+              <span />
+            </button>
+            <div className="wb-sheet-scroll">
+              <div className="wb-sheet-sec">文档</div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handleOpenFile(); }}>
+                <AppIcon name="folder-open" size={17} /><span className="tl">打开文件</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handleSaveFile(); }}>
+                <AppIcon name="save" size={17} /><span className="tl">保存</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handleSaveFileAs(); }}>
+                <AppIcon name="file-text" size={17} /><span className="tl">另存为…</span>
+              </div>
+
+              <div className="wb-sheet-sec">导出</div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handlePrint(); }}>
+                <AppIcon name="print" size={17} /><span className="tl">PDF / 打印…</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handleExportHtmlWithStyles(); }}>
+                <AppIcon name="export" size={17} /><span className="tl">HTML（带完整样式）…</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handleExportHtmlPlain(); }}>
+                <AppIcon name="code" size={17} /><span className="tl">HTML（纯净片段）…</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handleExportWord(); }}>
+                <AppIcon name="file-text" size={17} /><span className="tl">Word (.docx)…</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handleExportLatex(); }}>
+                <AppIcon name="sigma" size={17} /><span className="tl">LaTeX (.tex)…</span>
+              </div>
+
+              <div className="wb-sheet-sec">编辑</div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); runEditorCommand('undo'); }}>
+                <AppIcon name="undo" size={17} /><span className="tl">撤销</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); runEditorCommand('redo'); }}>
+                <AppIcon name="redo" size={17} /><span className="tl">重做</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); runEditorCommand('cut'); }}>
+                <AppIcon name="scissors" size={17} /><span className="tl">剪切</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); runEditorCommand('copy'); }}>
+                <AppIcon name="copy" size={17} /><span className="tl">复制</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); runEditorCommand('paste'); }}>
+                <AppIcon name="clipboard" size={17} /><span className="tl">粘贴</span>
+              </div>
+
+              <div className="wb-sheet-sec">视图</div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); setIsSidebarOpen(true); }}>
+                <AppIcon name="list-tree" size={17} /><span className="tl">侧栏：大纲 / 文档</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); toggleSourceMode(); }}>
+                <AppIcon name={isSourceMode ? 'eye' : 'code'} size={17} />
+                <span className="tl">{isSourceMode ? '切到沉浸排版' : '切到源码模式'}</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setShowStatusBar((v) => !v); setIsCmdSheetOpen(false); }}>
+                <AppIcon name="columns" size={17} />
+                <span className="tl">{showStatusBar ? '隐藏状态栏' : '显示状态栏'}</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsTypewriterMode((v) => !v); setIsCmdSheetOpen(false); }}>
+                <AppIcon name="type" size={17} />
+                <span className="tl">{isTypewriterMode ? '关闭打字机模式' : '开启打字机模式'}</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setZoomLevel((z) => Math.min(2.0, Number((z + 0.1).toFixed(1)))); }}>
+                <AppIcon name="zoom-in" size={17} /><span className="tl">放大界面</span>
+                <span className="hint">{Math.round(zoomLevel * 100)}%</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setZoomLevel((z) => Math.max(0.6, Number((z - 0.1).toFixed(1)))); }}>
+                <AppIcon name="zoom-out" size={17} /><span className="tl">缩小界面</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setZoomLevel(1.0); }}>
+                <AppIcon name="target" size={17} /><span className="tl">实际大小</span>
+              </div>
+
+              <div className="wb-sheet-sec">排版与应用</div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); setIsInspectorOpen(true); }}>
+                <AppIcon name="wrench" size={17} /><span className="tl">排版检查器（字体 / 对齐）</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); setShowTypographyModal(true); }}>
+                <AppIcon name="settings" size={17} /><span className="tl">偏好设置</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); setShowHelpModal(true); }}>
+                <AppIcon name="keyboard" size={17} /><span className="tl">快捷键速查表</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); setShowMathHelpModal(true); }}>
+                <AppIcon name="sigma" size={17} /><span className="tl">LaTeX 公式与排版指南</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void runUpdateCheck(true); }}>
+                <AppIcon name="info" size={17} />
+                <span className="tl">{updateInfo.status === 'available' ? `检查更新（有新版本 ${updateInfo.version}）` : '检查更新…'}</span>
+              </div>
+              <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); setShowAboutModal(true); }}>
+                <AppIcon name="book" size={17} /><span className="tl">关于 MarkdownX</span>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* 4. Typora Bottom Status Bar (Toggleable) */}
       {showStatusBar && (
@@ -4682,10 +4861,18 @@ ${texBody}
                 >
                   {metrics.cjkCount + metrics.wordsCount} 字 • {metrics.charWithSpaces} 字符 • {metrics.lines} 行
                 </span>
-                <span className="sep">•</span>
-                <span>预估阅读 ~{metrics.readingMinutes} 分钟</span>
-                <span className="sep">•</span>
-                <span>{isSourceMode ? '源码模式' : '沉浸排版'}</span>
+                <span className="sep status-mobile-hide">•</span>
+                <span className="status-mobile-hide">预估阅读 ~{metrics.readingMinutes} 分钟</span>
+                {/* The mode label was plain text at the end of a long chain, so on a phone the
+                    line overflowed and it rendered as a truncated "沉浸排". Make it the one
+                    compact control instead: a tappable chip that switches the view. */}
+                <button
+                  className="status-mode-chip"
+                  onClick={() => toggleSourceMode()}
+                  title="切换 沉浸排版 / 源码模式"
+                >
+                  {isSourceMode ? '源码模式' : '沉浸排版'}
+                </button>
                 {isFocusMode && <><span className="sep">•</span><span className="status-pill-badge">专注模式</span></>}
                 {isTypewriterMode && <><span className="sep">•</span><span className="status-pill-badge">打字机模式</span></>}
                 {zoomLevel !== 1 && <><span className="sep">•</span><span>缩放: {Math.round(zoomLevel * 100)}%</span></>}
