@@ -5604,6 +5604,7 @@ function labelToAnchorId(label) {
   return `eq-${normalizeLabelKey(label).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 function processMathAndCitations(rawMarkdown) {
+  rawMarkdown = rawMarkdown.replace(/\r\n?/g, "\n");
   const translation = new SourceTranslation(rawMarkdown.length);
   const cleanMarkdown = trackedReplace(rawMarkdown, translation, /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, () => "");
   const { text: withoutDiagrams, sources: diagramSources, edits: mermaidEdits } = extractMermaidBlocks(cleanMarkdown);
@@ -5623,7 +5624,16 @@ function processMathAndCitations(rawMarkdown) {
   let autoEqNumber = 1;
   const claimedNumbers = /* @__PURE__ */ new Set();
   const displayDelimiters = [
-    /\$\$([\s\S]*?)\$\$/g,
+    // The opener must sit at a token boundary - not glued to a preceding character.
+    //
+    // Merged/OCR text writes two inline formulas back to back (`$c_1 \neq 0$$c_2 = c_3 = c_4 = 0$`
+    // in a table cell), which puts a '$$' in the text. Accepting that as a display delimiter made
+    // this pass pair it with a much later '$$' (in that book, a real display block chapters away)
+    // and swallow every tag, table row and HEADING in between: the headings never became
+    // elements, so their outline entries had nothing to scroll to - chapters 5-10 of a 12-chapter
+    // book were dead in the TOC while 11-12 recovered, purely by the parity of these pairs.
+    // Left alone, the inline pass reads the glued text correctly as two adjacent inline formulas.
+    /(?<!\S)\$\$([\s\S]*?)\$\$/g,
     /\\\[([\s\S]*?)\\\]/g
   ];
   const tokenizeDisplayMath = (match, rawMathContent, offset, whole) => {
@@ -5704,8 +5714,19 @@ function processMathAndCitations(rawMarkdown) {
     };
     return key;
   };
-  sanitized = trackedReplace(sanitized, translation, /(?<!\\)\$((?:\\.|[^$])+?)\$/g, tokenizeInlineMath);
-  sanitized = trackedReplace(sanitized, translation, /(?<!\\)\\\(([\s\S]*?)\\\)/g, tokenizeInlineMath);
+  const tagOpenerGuard = HTML_TAG_OPEN.source.replace(/^\^/, "");
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    new RegExp(`(?<!\\\\)\\$((?:\\\\.|(?!${tagOpenerGuard})[^$])+?)\\$`, "g"),
+    tokenizeInlineMath
+  );
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    new RegExp(`(?<!\\\\)\\\\\\(((?:(?!${tagOpenerGuard})[\\s\\S])*?)\\\\\\)`, "g"),
+    tokenizeInlineMath
+  );
   const sanitizedMarkdown = unmaskVerbatimRegions(sanitized, store);
   const tokenSourceSpans = {};
   const anchor = (key) => {

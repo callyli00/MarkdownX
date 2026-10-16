@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
+import { extractOutline, visibleOutlineRows, countLines, type OutlineItem } from './utils/outline';
 import { renderDocument } from './utils/renderClient';
 // Types only: the updater functions are imported dynamically at their call sites, so the
 // updater plugin stays out of the startup chunk (and never loads at all on mobile, where
@@ -41,18 +42,60 @@ interface FileTab {
   pdfAnnots?: PdfAnnot[];
 }
 
+/**
+ * Heading text with maths delimiters, inline markup and ALL whitespace removed.
+ *
+ * Used to match an outline entry to its rendered heading when the id cannot: the renderer
+ * builds the id from marked's token raw, which is the sanitised text where formulas have
+ * become sentinels, so maths-bearing headings never match by id.
+ */
+function normalizeHeadingText(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, '')
+    .replace(/\$+/g, '')
+    .replace(/[*_`#]/g, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+/**
+ * A heading's text with every rendered formula put BACK to the TeX the author wrote.
+ *
+ * MathJax replaces `\theta` with the typeset character θ in the DOM, so a heading rendered as
+ * "Cylindrical Coordinates (r,θ,z)" can never be matched against the source title
+ * "Cylindrical Coordinates $(r,\theta ,z)$". Each math span carries the original TeX in
+ * `data-tex-source`, so restore it and compare source text with source text.
+ */
+function headingTextWithSourceMath(h: HTMLElement): string {
+  const clone = h.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('.math-inline').forEach((span) => {
+    const tex = span.getAttribute('data-tex-source');
+    span.replaceWith(document.createTextNode(tex === null ? '' : `$${tex}$`));
+  });
+  return clone.textContent || '';
+}
+
+/**
+ * Nth rendered heading whose text matches the outline entry (0-based). `key` ends in `#n`,
+ * which counts repeats of the same (level, title) in the document.
+ */
+function findHeadingForOutlineItem(item: OutlineItem): HTMLElement | null {
+  const occurrence = Number(item.key.split('#').pop() || '0') || 0;
+  const wanted = normalizeHeadingText(item.title);
+  const matches = Array.from(document.querySelectorAll(`h${item.level}`)).filter(
+    (h) => normalizeHeadingText(headingTextWithSourceMath(h as HTMLElement)) === wanted
+  );
+  return (matches[occurrence] as HTMLElement | undefined) ?? null;
+}
+
+/** Shared empty set: a stable identity keeps the outline memos from recomputing every render. */
+const EMPTY_COLLAPSED: Set<string> = new Set();
+
 interface FileConflict {
   tabId: string;
   fileName: string;
   filePath: string;
   diskContent: string;
-}
-
-interface OutlineItem {
-  level: number;
-  title: string;
-  line: number;
-  slug: string;
 }
 
 interface FileEntry {
@@ -91,7 +134,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.3';
+const APP_VERSION = 'v2.4.7';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -133,6 +176,47 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.7',
+    date: '2026-10-14',
+    items: [
+      '修复：目录点了不跳（部分章节整段失效）—— 表格里两个行内公式贴在一起产生的 "$$" 被当成行间公式分隔符，与很远处的一个 $$ 配对后把中间的表格、标签、标题全部吞掉',
+      '症状：一本 12 章的书，第 1~3 章目录能跳、第 5~10 章点了没反应（配对取决于粘连 $$ 的奇偶性）',
+      '实测：渲染出的 h1 6 → 12、h2 44 → 81，标题 id 命中 217/396 → 391/396',
+      '修复：含公式的标题匹配不上 —— 渲染器 id 用净化后的文本（公式已变成哨兵），且 MathJax 把 \\theta 排版成 θ 而大纲标题是源码文本；改为把数学 span 还原成 data-tex-source 后比对，并按出现次序取第 n 个',
+      '验收：应用内逐项点击 5 个含公式标题 5/5 落在自身标题上；新增 5 项单测；单测 96 项；渲染护栏 6/6'
+    ]
+  },
+  {
+    version: 'v2.4.6',
+    date: '2026-10-14',
+    items: [
+      '修复：CRLF 文档的大纲为空白 —— 提取用的 (.+)$ 在 JS 里无法匹配行尾的 \\r，导致每个标题行都失败（同一算法：CRLF 原文 0 个标题、LF 规范化后 395 个）',
+      '症状：395 个标题的合并书大纲全空、显示「当前文档暂无标题」；「有的时候」取决于文件是 CRLF 还是 LF',
+      '顺带修复：源码模式点大纲落点偏前（末章偏 20602 字符）；折叠状态跨文档串味导致大纲只剩一行',
+      '验收：新增 14 项单测；应用内实测大纲 395 行、点末项准确落在 "## Problems" 行首；单测 91 项；渲染护栏 6/6'
+    ]
+  },
+  {
+    version: 'v2.4.5',
+    date: '2026-10-14',
+    items: [
+      '修复（渲染保险）：行内公式不再跨过 HTML 标签 —— 坏文档最多局部不渲染，不再毁掉其后全文',
+      '背景：上游转换把 <img alt="…"> 在公式中间截断、属性里留下落单的 $；这个 $ 会与很后面（跨段）的 $ 配对，把中间的 ">、</figcaption>、</figure> 连同夹着的正文当作公式吞掉，figure 块消失、其后公式全部错配（实测一本合并书里同类截断 7 处）',
+      '修法：公式内容不能跨过「格式正确的标签开头」；裸 < 如 \sum_{l<m}、a<b 不是标签开头，不受影响',
+      '验收：新增 4 项回归测试（修前 3/4 失败）；拿那份有缺陷的旧书验证 </figure> 从「被吞」→保留、$n$ 恢复为正确公式；单测 77/77；渲染护栏 6/6'
+    ]
+  },
+  {
+    version: 'v2.4.4',
+    date: '2026-10-14',
+    items: [
+      '修复：预览里双击跳源码时，光标常落在被点段落之前 —— 越靠文档后部偏得越多（前部几十字符、后部上千字符），表现为“定位不稳”',
+      '根因：每块源码锚点靠累加 token.raw.length 求偏移，而 marked 返回的 raw 已把 CRLF 规范化成 LF、源文件却是 CRLF —— 每行少算 1 个字符（实测覆盖差值 1109 恰等于 sanitized 文本里的 CRLF 对数 1109）',
+      '修法：渲染入口统一换行到 LF，使偏移翻译、sanitized 文本、锚点与源码框处于同一空间；磁盘文件行尾不受影响',
+      '验收：词级定位检查 3/16 → 16/16；光标覆盖文档第 78 ~ 102579 字符通篇一致；渲染护栏 6/6（含换行等价）保持'
+    ]
+  },
   {
     version: 'v2.4.3',
     date: '2026-10-07',
@@ -1262,7 +1346,11 @@ export const App: React.FC = () => {
   // Surfaced in the top bar if a window command is refused (e.g. a missing
   // capability) so a dead control is never silent again.
   const [windowCmdNotice, setWindowCmdNotice] = useState<string | null>(null);
-  const [collapsedOutline, setCollapsedOutline] = useState<Set<number>>(new Set());
+  // Collapse state is namespaced per DOCUMENT and keyed by the heading's stable key, not by
+  // its line number. Keying by line number meant a stale entry from another document could
+  // land on a top-level heading and hide its whole subtree - in a book whose first heading is
+  // at line 2 with the rest one level deeper, that collapsed the outline to a single row.
+  const [collapsedOutline, setCollapsedOutline] = useState<Map<string, Set<string>>>(new Map());
   // External-modification conflicts are tracked PER TAB so that background
   // documents keep their conflict state until the user resolves it explicitly.
   const [fileConflicts, setFileConflicts] = useState<Record<string, FileConflict>>({});
@@ -1983,7 +2071,11 @@ export const App: React.FC = () => {
     const ta = textareaRef.current;
     if (!ta) return;
     pendingSourceCaretRef.current = null;
+    // Stamps are LF-space (the renderer normalises line endings) and a textarea's value is LF
+    // too, so the offset applies directly. No conversion: an earlier revision converted
+    // CRLF->LF here on the wrong assumption that the stamps kept the file's endings.
     const pos = Math.max(0, Math.min(offset, ta.value.length));
+    
     // Defer one frame so the textarea has been laid out and can scroll.
     requestAnimationFrame(() => {
       ta.focus();
@@ -2013,7 +2105,7 @@ export const App: React.FC = () => {
         });
       }
     });
-  }, [isSourceMode]);
+  }, [isSourceMode, activeFile?.content]);
 
   // The flash is transient: fade it out on its own, and clear it the moment the
   // writer interacts with the text, so it never lingers as visual noise.
@@ -2094,35 +2186,24 @@ export const App: React.FC = () => {
   }, [isSourceMode]);
 
 // --- Outline Extraction (TOC) ---
-  const outlineList = useMemo<OutlineItem[]>(() => {
-    if (!activeFile?.content) return [];
-    const items: OutlineItem[] = [];
-    const lines = activeFile.content.split('\n');
-    let inCode = false;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (line.trim().startsWith('```')) {
-        inCode = !inCode;
-        continue;
-      }
-      if (inCode) continue;
-      const m = line.match(/^(#{1,6})\s+(.+)$/);
-      if (m) {
-        const level = m[1].length;
-        const title = m[2].trim().replace(/[*_`#]/g, '');
-        const slug = encodeURIComponent(title.toLowerCase().replace(/\s+/g, '-'));
-        items.push({ level, title, line: i, slug });
-      }
-    }
-    return items;
-  }, [activeFile?.content]);
+  // Extraction lives in utils/outline.ts so the line-ending behaviour is unit-tested: on a
+  // CRLF document the previous inline version matched NO heading at all ('.' does not match
+  // '\r', and '$' without /m only matches at the very end), so the outline panel showed
+  // "当前文档暂无标题" for every Windows-authored file.
+  const outlineList = useMemo<OutlineItem[]>(
+    () => extractOutline(activeFile?.content || ''),
+    [activeFile?.content]
+  );
 
   // Handle clicking outline item
   const handleOutlineClick = (item: OutlineItem) => {
     if (isSourceMode) {
       const ta = textareaRef.current;
       if (!ta) return;
-      const lines = (activeFile?.content || '').split('\n');
+      // Split CRLF-aware: `lines[i].length` feeds a character offset applied to the LF
+      // textarea, so a trailing '\r' counted here would land the caret early - by the number
+      // of line breaks above the heading (thousands of characters by the last chapter).
+      const lines = (activeFile?.content || '').split(/\r?\n/);
       let charIndex = 0;
       for (let i = 0; i < item.line && i < lines.length; i++) {
         charIndex += lines[i].length + 1;
@@ -2157,8 +2238,15 @@ export const App: React.FC = () => {
         }
       });
     } else {
-      const el = document.getElementById(`heading-${item.slug}`) ||
-                 Array.from(document.querySelectorAll(`h${item.level}`)).find(h => (h.textContent || '').includes(item.title));
+      // 1. Exact id. The renderer derives it from marked's token raw - the SANITISED heading
+      //    text, in which every formula has already been replaced by a sentinel
+      //    (`@@MATH_INLINE_7@@`). So the id only matches for headings without maths; that
+      //    covers 391 of 396 headings in a real book, and the rest need the fallback below.
+      // 2. Fallback: compare heading text with maths delimiters, inline markup and whitespace
+      //    removed, because the rendered span keeps the TeX verbatim (`$r,\theta ,z$`), which
+      //    the source title also carries. Occurrence index (`key` ends in `#n`) keeps repeated
+      //    titles on their own entry instead of always jumping to the first.
+      const el = document.getElementById(`heading-${item.slug}`) || findHeadingForOutlineItem(item);
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
@@ -2245,29 +2333,27 @@ export const App: React.FC = () => {
   // Outline rows: a node's caret must not depend on its own collapsed state, so
   // hasChild is computed from the FULL outline list. Descendants of a collapsed
   // node are skipped while walking the pre-order list.
-  const outlineRows = useMemo(() => {
-    const rows: (OutlineItem & { hasChild: boolean; collapsed: boolean })[] = [];
-    let hideDeeperThan: number | null = null;
-    for (let i = 0; i < outlineList.length; i++) {
-      const it = outlineList[i];
-      if (hideDeeperThan !== null && it.level > hideDeeperThan) continue;
-      hideDeeperThan = null;
-      const hasChild = i + 1 < outlineList.length && outlineList[i + 1].level > it.level;
-      const collapsed = collapsedOutline.has(it.line);
-      rows.push({ ...it, hasChild, collapsed });
-      if (hasChild && collapsed) hideDeeperThan = it.level;
-    }
-    return rows;
-  }, [outlineList, collapsedOutline]);
+  /** Collapsed keys belonging to the ACTIVE document only. */
+  const collapsedForFile = useMemo(
+    () => collapsedOutline.get(activeFileId) ?? EMPTY_COLLAPSED,
+    [collapsedOutline, activeFileId]
+  );
 
-  const toggleOutlineNode = useCallback((line: number) => {
+  const outlineRows = useMemo(
+    () => visibleOutlineRows(outlineList, collapsedForFile),
+    [outlineList, collapsedForFile]
+  );
+
+  const toggleOutlineNode = useCallback((key: string) => {
     setCollapsedOutline((prev) => {
-      const next = new Set(prev);
-      if (next.has(line)) next.delete(line);
-      else next.add(line);
+      const next = new Map(prev);
+      const set = new Set(next.get(activeFileId) ?? []);
+      if (set.has(key)) set.delete(key);
+      else set.add(key);
+      next.set(activeFileId, set);
       return next;
     });
-  }, []); 
+  }, [activeFileId]); 
   // Window controls
   const handleToggleFullscreen = async () => {
     try {
@@ -2380,7 +2466,7 @@ export const App: React.FC = () => {
     const wordsCount = wordMatches.length;
     const charWithSpaces = content.length;
     const charNoSpaces = content.replace(/\s/g, '').length;
-    const lines = content === '' ? 0 : content.split('\n').length;
+    const lines = countLines(content);
     const paragraphs = content.split(/\n\s*\n/).filter(p => p.trim().length > 0).length;
     const readingMinutes = Math.max(1, Math.ceil((cjkCount / 350) + (wordsCount / 200)));
     return {
@@ -3699,9 +3785,9 @@ ${texBody}
                           {outlineList.length === 0 ? (
                             <div className="sidebar-empty-hint">当前文档暂无标题</div>
                           ) : (
-                            outlineRows.map((item, idx) => (
+                            outlineRows.map((item) => (
                               <div
-                                key={`${item.line}-${idx}`}
+                                key={item.key}
                                 className={`outline-item level-${item.level}${item.hasChild && item.collapsed ? ' has-collapsed' : ''}`}
                                 style={{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }}
                                 title={`跳转到: ${item.title}`}
@@ -3709,7 +3795,7 @@ ${texBody}
                                 {item.hasChild ? (
                                   <span
                                     className="outline-caret"
-                                    onClick={(e) => { e.stopPropagation(); toggleOutlineNode(item.line); }}
+                                    onClick={(e) => { e.stopPropagation(); toggleOutlineNode(item.key); }}
                                     title={item.collapsed ? '展开子标题' : '折叠子标题'}
                                   >
                                     {item.collapsed ? '▸' : '▾'}
