@@ -134,7 +134,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.7';
+const APP_VERSION = 'v2.4.8';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -176,6 +176,18 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.8',
+    date: '2026-10-17',
+    items: [
+      '移动端外壳重做（Android）：顶栏只留 侧栏 / 打开 / ⋯ 三个按钮，其余命令收进一张底部功能表',
+      '功能表按 文档 / 导出 / 编辑 / 视图 / 排版与应用 分组，共 22 条，每行都有文字说明；调用的是与桌面完全相同的处理函数',
+      '修复：底部状态栏不再被裁切 —— 单行化，模式改为可点胶囊（沉浸排版 ⇄ 源码模式）',
+      '修复：欢迎页改为手机文案与两个 44px 大按钮，不再出现 Ctrl+/、拖入窗口 等桌面语汇',
+      '修复：隐藏残留的 48px 侧栏竖条（它把内容栏右推了 48px，且与顶栏入口重复）',
+      '修复：顶栏"打开"改用文件夹图标（原来是文件轮廓，被读成"新建文档"）'
+    ]
+  },
   {
     version: 'v2.4.7',
     date: '2026-10-14',
