@@ -23,39 +23,23 @@ abstract class BuildTask : DefaultTask() {
 
     @TaskAction
     fun assemble() {
-        val executable = """npm""";
-        try {
-            runTauriCli(executable)
-        } catch (e: Exception) {
-            if (Os.isFamily(Os.FAMILY_WINDOWS)) {
-                // Try different Windows-specific extensions
-                val fallbacks = listOf(
-                    "$executable.exe",
-                    "$executable.cmd",
-                    "$executable.bat",
-                )
-
-                var lastException: Exception = e
-                for (fallback in fallbacks) {
-                    try {
-                        runTauriCli(fallback)
-                        return
-                    } catch (fallbackException: Exception) {
-                        lastException = fallbackException
-                    }
-                }
-                throw lastException
-            } else {
-                throw e;
-            }
-        }
+        // On Windows `npm` is a shell script backed by npm.cmd, and CreateProcess - which is what
+        // Gradle's exec uses - can start neither a .cmd nor a .bat (only real executables). So
+        // none of the old fallback candidates (`npm`, `npm.exe`, `npm.cmd`, `npm.bat`) could be
+        // spawned, and the chain reported the LAST one it tried: "Cannot run program npm.bat
+        // ... CreateProcess error=2". That reads as "npm is not installed" even though it is,
+        // which is why this task was being skipped with `-x rustBuild*` - and skipping it also
+        // skipped the Kotlin generation it performs, leaving MainActivity's `TauriActivity`
+        // unresolved. Route the call through the command interpreter instead.
+        val windows = Os.isFamily(Os.FAMILY_WINDOWS)
+        runTauriCli(if (windows) "cmd" else "npm", if (windows) listOf("/c", "npm") else emptyList())
     }
 
-    fun runTauriCli(executable: String) {
+    fun runTauriCli(executable: String, prefixArgs: List<String> = emptyList()) {
         val rootDirRel = rootDirRel ?: throw GradleException("rootDirRel cannot be null")
         val target = target ?: throw GradleException("target cannot be null")
         val release = release ?: throw GradleException("release cannot be null")
-        val args = listOf("run", "--", "tauri", "android", "android-studio-script");
+        val args = prefixArgs + listOf("run", "--", "tauri", "android", "android-studio-script");
 
         execOperations.exec {
             workingDir(File(projectDir, rootDirRel))

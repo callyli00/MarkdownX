@@ -836,3 +836,60 @@ APK 也从 14.7 MB 变为 23.2 MB。若体积没变大，说明前端没被嵌�
   `versionCode` 按官方公式算：`major*1000000 + minor*1000 + patch`（v2.4.3 → `2403000`），改版本号时要同步。
 - 桌面 capability 的平台过滤**已实测生效**：探针在 Windows 上调用被 `fs:allow-read-text-file` 门控的插件命令成功返回，
   而一个不存在的命令返回 `not allowed. Command not found`（阴性控制项）——说明 `platforms` 取值（`windows`/`macOS`/`linux`，注意 macOS 大写 S）拼写正确。
+
+---
+
+### 13.8 【已修】Android 构建：`npm.bat` 失败的真因 + 两个被漏写的 codegen 产物
+
+**症状**：`./gradlew :app:assembleRelease` 报
+
+```
+Execution failed for task ':app:rustBuildArm64Release' (registered by plugin 'rust').
+> A problem occurred starting process 'command 'npm.bat''
+```
+
+**真因（不是 npm 没装）**：`buildSrc/.../BuildTask.kt` 先试 `npm`，失败后回退 `npm.exe` /
+`npm.cmd` / `npm.bat`，最后抛出**最后试的那个**（`npm.bat`）—— 报错因此极具误导性。四种全部失败的
+原因是 **Java 的 `CreateProcess` 只能启动真正的可执行映像，不能直接启动 `.cmd`/`.bat`**（必须经
+`cmd.exe /c`）。所以 `npm.cmd` 明明存在却报 `CreateProcess error=2`。
+
+**修法**（已入库）：Windows 上改为 `cmd /c npm ...`：
+
+```kotlin
+val windows = Os.isFamily(Os.FAMILY_WINDOWS)
+runTauriCli(if (windows) "cmd" else "npm", if (windows) listOf("/c", "npm") else emptyList())
+```
+
+**副作用（这才是最坑的地方）**：此前用 `-x rustBuildArm64Release -x rustBuildArmRelease ...`
+绕过该任务 —— 但**这个任务同时负责生成 Kotlin 代码**，跳过它会让 app 缺少
+`TauriActivity`，于是所有 ABI 都报 `Unresolved reference 'TauriActivity'`，**根本打不出 APK**。
+`BuildTask` 修好后不再需要任何 `-x` 绕法。
+
+**两个 CLI 没有（重新）写出的 codegen 产物**（都是 crate 模板 + 占位符替换，且都在
+`.gitignore` 里，因此干净检出必然缺）：
+
+| 模板 | 目标 | 占位符 | 缺失后果 |
+|---|---|---|---|
+| `tauri-*/mobile/android-codegen/TauriActivity.kt` | `app/src/main/java/<包路径>/generated/` | `{{package}}` | Kotlin 报 `Unresolved reference 'TauriActivity'`（生成的 MainActivity 与它**同包**，所以模板里不写 import） |
+| `tauri-*/mobile/proguard-tauri.pro` | `app/` | `$PACKAGE` | release 包装上后启动即崩：`NoSuchMethodError: MainActivity;.getPluginManager()Lapp/tauri/plugin/PluginManager;` —— R8 裁掉了 `PluginManager` 按名查找的方法 |
+
+**复制时必须替换占位符**，否则 keep 规则不匹配（这次就因为直接复制模板、`$PACKAGE` 未替换而白跑一轮）。
+已提供可重复执行的脚本：`python tools/android-codegen.py`（幂等，从 cargo registry 里按最高版本
+自动定位模板，包名读自 `tauri.conf.json`）。
+
+**可用的构建命令**（不再需要 `-x rustBuild*`）：
+
+```bash
+export JAVA_HOME="C:/Program Files/Android/Android Studio/jbr"
+export ANDROID_HOME="C:/Users/<user>/AppData/Local/Android/Sdk"
+export NDK_HOME="$ANDROID_HOME/ndk/30.0.16248370"
+export PATH="/c/Program Files/nodejs:$PATH"     # gradle daemon 靠 PATH 找 npm.cmd
+python tools/android-codegen.py                  # 缺失时补两个 codegen 产物
+npx tauri android build --apk --target aarch64
+```
+
+产物：`src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk`
+（只构建了 arm64 的 `.so`，所以 universal 也只有 arm64 → 23.2 MB）。
+
+**`versionCode`**：本次由 `2403000`(v2.4.3) 升到 `2407000`(v2.4.7)，沿用既有写法（注意本节上方记录的
+"`major*1000000 + minor*1000 + patch`"公式算不出 `2403000`，实际沿用值才是准的）。
