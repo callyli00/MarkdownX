@@ -131,6 +131,24 @@ export function escapeLatex(text: string): string {
   return text.replace(/[\\{}$&#^_%~]/g, (c) => '\\' + c);
 }
 
+/**
+ * The three metadata values the LaTeX export needs, already escaped and with the
+ * fallbacks applied, so the exporter's template stays a plain substitution and the
+ * fallback rule ("no frontmatter -> exactly the output we produced before") is testable
+ * in one place instead of being an expression duplicated inside the component.
+ */
+export function latexMetadata(source: string, fallbackTitle: string): { title: string; author: string; date: string } {
+  const props = readProperties(source);
+  const title = propertyValue(props, 'title');
+  const author = propertyValue(props, 'author');
+  const date = propertyValue(props, 'date');
+  return {
+    title: title ? escapeLatex(title) : fallbackTitle,
+    author: author ? escapeLatex(author) : 'MarkdownX',
+    date: date ? escapeLatex(date) : '\\today',
+  };
+}
+
 export function escapePropertyText(text: string): string {
   return text
     .replace(/&/g, '&amp;')

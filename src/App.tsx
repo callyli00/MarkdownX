@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
-import { readProperties, propertyValue, stripFrontmatter, escapeLatex } from './utils/properties';
+import { readProperties, propertyValue, stripFrontmatter, latexMetadata } from './utils/properties';
 import { extractOutline, visibleOutlineRows, countLines, type OutlineItem } from './utils/outline';
 import { renderDocument } from './utils/renderClient';
 import { checkForUpdate, installUpdate, type UpdateCheckResult, type UpdateProgress } from './utils/updater';
@@ -3311,7 +3311,7 @@ ${renderedHtml}
       if (targetPath) {
         // The YAML block must not travel into the .tex file as prose, and title/author/date
         // belong in the preamble command, not in the body.
-        const texProps = readProperties(activeFile.content);
+        const texMeta = latexMetadata(activeFile.content, activeFile.name.replace(/\.[^/.]+$/, ''));
         let texBody = stripFrontmatter(activeFile.content);
         texBody = texBody.replace(/^# (.+)$/gm, '\\section{$1}');
         texBody = texBody.replace(/^## (.+)$/gm, '\\subsection{$1}');
@@ -3329,9 +3329,9 @@ ${renderedHtml}
 \\usepackage{geometry}
 \\geometry{a4paper, margin=1in}
 
-\\title{${escapeLatex(propertyValue(texProps, 'title')) || activeFile.name.replace(/\.[^/.]+$/, '')}}
-\\author{${escapeLatex(propertyValue(texProps, 'author')) || 'MarkdownX'}}
-\\date{${propertyValue(texProps, 'date') ? escapeLatex(propertyValue(texProps, 'date')) : '\\today'}}
+\\title{${texMeta.title}}
+\\author{${texMeta.author}}
+\\date{${texMeta.date}}
 
 \\begin{document}
 \\maketitle

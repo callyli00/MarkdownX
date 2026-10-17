@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  extractFrontmatterBlock, readProperties, propertyValue, stripFrontmatter, escapeLatex,
+  extractFrontmatterBlock, readProperties, propertyValue, stripFrontmatter, escapeLatex, latexMetadata,
 } from '../properties';
 
 const DOC = '---\ntitle: 板的弯曲理论\nauthor: 甲\ndate: 2026-10-17\n---\n\n# 正文\n\n段落。\n';
@@ -37,6 +37,17 @@ describe('B 层 · 导出元数据', () => {
     expect(stripFrontmatter(weird)).toBe(weird);
     const unclosed = '---\ntitle: 没闭合\n\n正文\n';
     expect(stripFrontmatter(unclosed)).toBe(unclosed);
+  });
+
+  it('LaTeX 取值与回退：有 frontmatter 用它，没有则与旧输出完全一致', () => {
+    const withFm = latexMetadata('---\ntitle: 100% 板的_弯曲 & 理论\nauthor: 甲\ndate: 2026-10-17\n---\n\n# 正文\n', 'doc');
+    expect(withFm.title).toBe('100\\% 板的\\_弯曲 \\& 理论');
+    expect(withFm.author).toBe('甲');
+    expect(withFm.date).toBe('2026-10-17');
+    const without = latexMetadata('# 直接正文\n', 'doc');
+    expect(without.title).toBe('doc');
+    expect(without.author).toBe('MarkdownX');
+    expect(without.date).toBe('\\today');
   });
 
   it('LaTeX 转义：特殊字符必须被中和，否则导出文档会变义', () => {
