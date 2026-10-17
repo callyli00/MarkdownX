@@ -43,3 +43,7 @@ desktop.ini
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Tauri / Android codegen and build outputs: regenerable (see MAINTENANCE 13.8).
+# Committing them added ~446 MB of gradle intermediates to a release commit by mistake.
+src-tauri/gen/
