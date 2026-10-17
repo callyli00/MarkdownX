@@ -5,7 +5,8 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
-import { readProperties, propertyValue, stripFrontmatter, latexMetadata } from './utils/properties';
+import { readProperties, propertyValue, stripFrontmatter, latexMetadata, type PropertyKind } from './utils/properties';
+import { setProperty, removeProperty } from './utils/propertyEdit';
 import { extractOutline, visibleOutlineRows, countLines, type OutlineItem } from './utils/outline';
 import { renderDocument } from './utils/renderClient';
 import { checkForUpdate, installUpdate, type UpdateCheckResult, type UpdateProgress } from './utils/updater';
@@ -1965,6 +1966,51 @@ export const App: React.FC = () => {
   }, [activeFile?.id, activeFile?.path, updatePreview]);
 
   // 300ms debounce when typing in source mode
+  /**
+   * B3: the property editor.
+   *
+   * The preview is read-only, so editing a property means writing back into the SOURCE -
+   * the reverse of the double-click-to-source path. The row carries data-prop-* (key, kind,
+   * value), so this handler knows nothing about the card's markup and keeps working if the
+   * card is restyled.
+   */
+  const [propEditor, setPropEditor] = useState<{
+    key: string; value: string; kind: PropertyKind; isNew: boolean;
+  } | null>(null);
+
+  const handlePropsClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (!activeFile) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('[data-props-add]')) {
+      event.preventDefault();
+      setPropEditor({ key: '', value: '', kind: 'text', isNew: true });
+      return;
+    }
+    const row = target.closest('.props-row') as HTMLElement | null;
+    if (!row || !row.dataset.propKey) return;
+    event.preventDefault();
+    setPropEditor({
+      key: row.dataset.propKey,
+      value: row.dataset.propValue || '',
+      kind: (row.dataset.propKind as PropertyKind) || 'text',
+      isNew: false,
+    });
+  };
+
+  const commitPropEditor = () => {
+    if (!activeFile || !propEditor) return;
+    const key = propEditor.key.trim();
+    if (!key) return;                        // a property with no name is not a property
+    handleContentChange(setProperty(activeFile.content, key, propEditor.value, propEditor.kind));
+    setPropEditor(null);
+  };
+
+  const removePropEditor = () => {
+    if (!activeFile || !propEditor || propEditor.isNew) return;
+    handleContentChange(removeProperty(activeFile.content, propEditor.key));
+    setPropEditor(null);
+  };
+
   const handleContentChange = (newContent: string) => {
     setOpenFiles((prev) =>
       prev.map((f) => (f.id === activeFileId ? { ...f, content: newContent, isModified: true } : f))
@@ -4542,6 +4588,7 @@ ${texBody}
                     className="academic-article"
                     dangerouslySetInnerHTML={{ __html: renderedHtml }}
                     onDoubleClick={handlePreviewDoubleClick}
+                    onClick={handlePropsClick}
                   />
                 ) : (
                   <div
@@ -4854,6 +4901,70 @@ $$`}
       )}
 
       {/* About Modal — version, release notes, licence, build date, tech stack */}
+      {propEditor && (
+        <div className="props-editor-backdrop" onClick={() => setPropEditor(null)}>
+          <div className="props-editor" role="dialog" aria-label="编辑属性" onClick={(e) => e.stopPropagation()}>
+            <div className="props-editor-title">{propEditor.isNew ? '添加属性' : '编辑属性'}</div>
+            <label className="props-editor-field">
+              <span>属性名</span>
+              <input
+                value={propEditor.key}
+                readOnly={!propEditor.isNew}
+                placeholder="例如 title / author / tags"
+                onChange={(e) => setPropEditor({ ...propEditor, key: e.target.value })}
+              />
+            </label>
+            <label className="props-editor-field">
+              <span>类型</span>
+              <select
+                value={propEditor.kind}
+                onChange={(e) => setPropEditor({ ...propEditor, kind: e.target.value as PropertyKind })}
+              >
+                <option value="text">文本</option>
+                <option value="number">数字</option>
+                <option value="checkbox">是 / 否</option>
+                <option value="date">日期</option>
+                <option value="list">列表</option>
+                <option value="tags">标签</option>
+              </select>
+            </label>
+            <label className="props-editor-field">
+              <span>值</span>
+              {propEditor.kind === 'checkbox' ? (
+                <select
+                  value={/^(?:true|yes|1|是)$/i.test(propEditor.value) ? 'true' : 'false'}
+                  onChange={(e) => setPropEditor({ ...propEditor, value: e.target.value })}
+                >
+                  <option value="true">是 (true)</option>
+                  <option value="false">否 (false)</option>
+                </select>
+              ) : (
+                <input
+                  autoFocus
+                  value={propEditor.value}
+                  onChange={(e) => setPropEditor({ ...propEditor, value: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitPropEditor();
+                    if (e.key === 'Escape') setPropEditor(null);
+                  }}
+                />
+              )}
+            </label>
+            {(propEditor.kind === 'tags' || propEditor.kind === 'list') && (
+              <div className="props-editor-hint">多个值用逗号分隔，例如：力学, 板壳</div>
+            )}
+            <div className="props-editor-actions">
+              {!propEditor.isNew && (
+                <button className="props-editor-btn props-danger" onClick={removePropEditor}>删除</button>
+              )}
+              <span className="props-editor-grow" />
+              <button className="props-editor-btn" onClick={() => setPropEditor(null)}>取消</button>
+              <button className="props-editor-btn props-primary" onClick={commitPropEditor}>保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showAboutModal && (
         <div className="typo-modal-overlay" onClick={() => setShowAboutModal(false)}>
           <div className="typo-modal-box about-modal-box" onClick={(e) => e.stopPropagation()}>

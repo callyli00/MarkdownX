@@ -3682,3 +3682,74 @@ hr.footnotes-sep {
 .props-on { color: #059669; }
 .props-off { color: var(--wb-fg3); }
 body.theme-dark .props-card { background: rgba(255, 255, 255, 0.04); }
+
+/* B3 - property editing from the preview. */
+.props-row { cursor: pointer; border-radius: 5px; }
+.props-row:hover { background: rgba(47, 111, 237, 0.07); }
+.props-add {
+  margin-top: 6px;
+  padding: 3px 10px;
+  border: 1px dashed var(--wb-line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--wb-fg3);
+  font: inherit;
+  font-size: 0.86em;
+  cursor: pointer;
+}
+.props-add:hover { color: var(--wb-accent); border-color: var(--wb-accent); }
+
+.props-editor-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.34);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.props-editor {
+  width: min(420px, calc(100vw - 40px));
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: var(--wb-card);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+}
+.props-editor-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--wb-fg); }
+.props-editor-field { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.props-editor-field > span { flex: 0 0 56px; font-size: 12px; color: var(--wb-fg3); }
+.props-editor-field input,
+.props-editor-field select {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  background: var(--wb-main);
+  color: var(--wb-fg);
+  font: inherit;
+  font-size: 13px;
+}
+.props-editor-field input:read-only { color: var(--wb-fg3); background: var(--wb-side); }
+.props-editor-hint { margin: -4px 0 8px 66px; font-size: 11.5px; color: var(--wb-fg3); }
+.props-editor-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.props-editor-grow { flex: 1; }
+.props-editor-btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.props-editor-btn.props-primary { background: var(--wb-accent); border-color: var(--wb-accent); color: #fff; }
+.props-editor-btn.props-danger { color: #dc2626; border-color: #f3c9c9; }
+
+/* Invariant 3: the add button is chrome, not content - it must not reach the printout. */
+@media print {
+  .props-add { display: none !important; }
+}

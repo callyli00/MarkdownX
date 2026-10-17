@@ -180,7 +180,9 @@ export function buildPropertiesCard(props: Property[]): string {
       } else {
         body = `<span class="props-values"><span class="props-value">${escape(p.value)}</span></span>`;
       }
-      return `<div class="props-row props-row-${p.kind}"><span class="props-key">${escape(p.key)}</span>${body}</div>`;
+      // `data-prop-*` on the row is what the preview's click handler reads to know which
+      // property to edit; the card itself stays inert without JS.
+      return `<div class="props-row props-row-${p.kind}" data-prop-key="${escape(p.key)}" data-prop-kind="${p.kind}" data-prop-value="${escape(p.value)}"><span class="props-key">${escape(p.key)}</span>${body}</div>`;
     })
     .join('');
 
@@ -191,5 +193,7 @@ export function buildPropertiesCard(props: Property[]): string {
     })
     .join('');
 
-  return `<div class="props-card" data-props="${props.length}"${meta}>${rows}</div>`;
+  // The add button is CHROME, not content: it is hidden in print (see App.css) - invariant 3.
+  const addButton = '<button type="button" class="props-add" data-props-add="1">＋ 添加属性</button>';
+  return `<div class="props-card" data-props="${props.length}"${meta}>${rows}${addButton}</div>`;
 }
