@@ -190,6 +190,9 @@ const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
       '修复：文档开头的 frontmatter 会被 Markdown 当作 setext 标题，渲染成「title: x」加一条游离分隔线',
       '修复：LaTeX 导出会把整个 YAML 块当作正文写进 .tex 文件',
       '安全性：属性值里的 HTML 一律转义；LaTeX 导出的值会转义 % & _ ^ # $ { } ~ \\'
+    ]
+  },
+  {
     version: 'v2.4.8',
     date: '2026-10-17',
     items: [
