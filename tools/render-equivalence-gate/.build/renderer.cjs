@@ -5449,6 +5449,72 @@ function resolveRawHtmlImageSources(html2, documentBasePath, resolveAssets = tru
     })
   );
 }
+var CALLOUT_CANONICAL = /* @__PURE__ */ new Set([
+  "note",
+  "tip",
+  "warning",
+  "caution",
+  "important",
+  "theorem",
+  "definition",
+  "assumption"
+]);
+var CALLOUT_ALIASES = {
+  info: "note",
+  abstract: "note",
+  summary: "note",
+  tldr: "note",
+  todo: "note",
+  quote: "note",
+  cite: "note",
+  hint: "tip",
+  success: "tip",
+  check: "tip",
+  done: "tip",
+  example: "tip",
+  attention: "warning",
+  error: "important",
+  danger: "important",
+  failure: "important",
+  fail: "important",
+  missing: "important",
+  bug: "important",
+  question: "definition",
+  help: "definition",
+  faq: "definition"
+};
+var CALLOUT_TITLES = {
+  note: "\u6CE8\u89E3 (Note)",
+  info: "\u4FE1\u606F (Info)",
+  tip: "\u63D0\u793A (Tip)",
+  hint: "\u63D0\u793A (Hint)",
+  warning: "\u8B66\u544A (Warning)",
+  caution: "\u6CE8\u610F (Caution)",
+  important: "\u91CD\u8981 (Important)",
+  theorem: "\u5B9A\u7406 (Theorem)",
+  definition: "\u5B9A\u4E49 (Definition)",
+  assumption: "\u529B\u5B66\u5047\u5B9A (Assumption)",
+  todo: "\u5F85\u529E (Todo)",
+  success: "\u6210\u529F (Success)",
+  question: "\u7591\u95EE (Question)",
+  help: "\u5E2E\u52A9 (Help)",
+  faq: "\u5E38\u89C1\u95EE\u9898 (FAQ)",
+  failure: "\u5931\u8D25 (Failure)",
+  fail: "\u5931\u8D25 (Fail)",
+  danger: "\u5371\u9669 (Danger)",
+  error: "\u9519\u8BEF (Error)",
+  bug: "\u7F3A\u9677 (Bug)",
+  example: "\u793A\u4F8B (Example)",
+  quote: "\u5F15\u7528 (Quote)",
+  abstract: "\u6458\u8981 (Abstract)",
+  summary: "\u6458\u8981 (Summary)",
+  tldr: "\u592A\u957F\u4E0D\u770B (TL;DR)",
+  check: "\u5DF2\u6838\u5BF9 (Check)",
+  done: "\u5DF2\u5B8C\u6210 (Done)",
+  missing: "\u7F3A\u5931 (Missing)",
+  cite: "\u5F15\u7528 (Cite)",
+  attention: "\u6CE8\u610F (Attention)"
+};
 function configureMarked(documentBasePath = "", resolveAssets = true) {
   const renderer = new marked.Renderer();
   const headingIdCounts = /* @__PURE__ */ new Map();
@@ -5492,23 +5558,23 @@ function configureMarked(documentBasePath = "", resolveAssets = true) {
     const isToken = typeof tokenOrQuote === "object" && tokenOrQuote !== null;
     const rawHtml = isToken ? tokenOrQuote.text : tokenOrQuote;
     const content = typeof rawHtml === "string" ? rawHtml : "";
-    const match = content.match(/^\s*<p>\s*\[!(NOTE|TIP|WARNING|CAUTION|IMPORTANT|THEOREM|DEFINITION|ASSUMPTION)\](?:\s*([^\n<]+))?/i);
+    const match = content.match(/^\s*<p>\s*\[!([A-Za-z][A-Za-z-]*)\]([+-])?[ \t]*([^\n<]+)?/i);
     if (match) {
-      const type = match[1].toLowerCase();
-      const customTitle = match[2]?.trim() || "";
-      const defaultTitles = {
-        note: "\u6CE8\u89E3 (Note)",
-        tip: "\u63D0\u793A (Tip)",
-        warning: "\u8B66\u544A (Warning)",
-        caution: "\u6CE8\u610F (Caution)",
-        important: "\u91CD\u8981 (Important)",
-        theorem: "\u5B9A\u7406 (Theorem)",
-        definition: "\u5B9A\u4E49 (Definition)",
-        assumption: "\u529B\u5B66\u5047\u5B9A (Assumption)"
-      };
-      const title = customTitle || defaultTitles[type] || type.toUpperCase();
-      const cleanContent = content.replace(/^\s*<p>\s*\[![^\]]+\](?:[^\n<]+)?(?:\s*<br\s*\/?>)?/i, "<p>");
-      return `<div class="callout-card callout-${type}"><div class="callout-header"><span class="callout-icon"></span><span class="callout-title">${title}</span></div><div class="callout-content">${cleanContent}</div></div>`;
+      const literal = match[1].toLowerCase();
+      const fold = match[2] || "";
+      const customTitle = match[3]?.trim() || "";
+      const title = customTitle || CALLOUT_TITLES[literal] || literal.toUpperCase();
+      const canonical = CALLOUT_CANONICAL.has(literal) ? literal : CALLOUT_ALIASES[literal] || "note";
+      const cleanContent = content.replace(
+        /^\s*<p>\s*\[![^\]]+\](?:[+-])?(?:[^\n<]+)?(?:\s*<br\s*\/?>)?/i,
+        "<p>"
+      );
+      const head = `<span class="callout-icon"></span><span class="callout-title">${title}</span>`;
+      const body = `<div class="callout-content">${cleanContent}</div>`;
+      if (fold === "-" || fold === "+") {
+        return `<details class="callout-card callout-${canonical}" data-callout="${literal}"${fold === "+" ? " open" : ""}><summary class="callout-header">${head}</summary>${body}</details>`;
+      }
+      return `<div class="callout-card callout-${canonical}" data-callout="${literal}"><div class="callout-header">${head}</div>${body}</div>`;
     }
     return `<blockquote>${content}</blockquote>`;
   };
@@ -5726,6 +5792,60 @@ function processMathAndCitations(rawMarkdown) {
     translation,
     new RegExp(`(?<!\\\\)\\\\\\(((?:(?!${tagOpenerGuard})[\\s\\S])*?)\\\\\\)`, "g"),
     tokenizeInlineMath
+  );
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /(?<!\\)%%[\s\S]*?%%/g,
+    () => ""
+  );
+  const footnoteDefs = /* @__PURE__ */ new Map();
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /^\[\^([^\]\s]+)\]:[ \t]*([^\n]*(?:\n[ \t]{2,}[^\n]*)*)/gm,
+    (match, label, body) => {
+      footnoteDefs.set(label, { body: body.trim(), raw: match });
+      return `@@FOOTNOTE_DEF_${label}@@`;
+    }
+  );
+  const footnoteNumbers = /* @__PURE__ */ new Map();
+  const footnoteSeen = /* @__PURE__ */ new Set();
+  let footnoteCount = 0;
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /\[\^([^\]\s]+)\]/g,
+    (match, label) => {
+      if (!footnoteDefs.has(label)) return match;
+      if (!footnoteNumbers.has(label)) footnoteNumbers.set(label, ++footnoteCount);
+      const n = footnoteNumbers.get(label);
+      const isFirst = !footnoteSeen.has(label);
+      footnoteSeen.add(label);
+      return `<sup class="fn-ref"><a href="#fn-${n}"${isFirst ? ` id="fnref-${n}"` : ""}>${n}</a></sup>`;
+    }
+  );
+  let footnotesEmitted = 0;
+  for (const [label, def2] of footnoteDefs) {
+    const n = footnoteNumbers.get(label);
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const sentinel = new RegExp(`@@FOOTNOTE_DEF_${escaped}@@`, "g");
+    if (n === void 0) {
+      sanitized = trackedReplace(sanitized, translation, sentinel, () => def2.raw.replace(/^\[\^/, "\\[^"));
+      continue;
+    }
+    const rule = footnotesEmitted === 0 ? '<hr class="footnotes-sep">\n\n' : "";
+    const replacement = `${rule}<a id="fn-${n}"></a>
+
+**${n}.** ${def2.body} <a href="#fnref-${n}" class="fn-back" title="\u56DE\u5230\u5F15\u7528\u5904">\u21A9</a>`;
+    sanitized = trackedReplace(sanitized, translation, sentinel, () => replacement);
+    footnotesEmitted++;
+  }
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /(?<![=\w])==(?![\s=])([^\n]*?[^\s=])(?<![\s=])==(?!=)/g,
+    (_match, body) => `<mark class="md-mark">${body}</mark>`
   );
   const sanitizedMarkdown = unmaskVerbatimRegions(sanitized, store);
   const tokenSourceSpans = {};

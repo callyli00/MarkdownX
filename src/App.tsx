@@ -130,7 +130,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.4.7';
+const APP_VERSION = 'v2.4.9';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -172,6 +172,20 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.4.9',
+    date: '2026-10-17',
+    items: [
+      'Obsidian 风格 Markdown 扩展（第一层：纯渲染，不需要索引）：高亮 ==文字==、注释 %%文字%%',
+      '注释在预览、导出与打印中都不显示 —— 适合写给自己看的草稿批注',
+      'Callout 类型补齐：info / todo / success / question / danger / bug / example / quote / abstract / faq / failure 等',
+      'Callout 可折叠：[!faq]- 默认收起，[!tip]+ 默认展开（打印时自动展开，不会丢内容）',
+      '脚注 [^1]：按首次引用顺序编号，带回链；未引用的定义与未定义的引用都原样保留，不会静默丢字',
+      '任务列表 - [ ] / - [x] 补上样式',
+      '修复：Callout 不写标题时会误取下一行正文当标题（> [!note] 换行写正文）',
+      '修复：未被引用的脚注定义整行会被当作链接引用定义吞掉，作者文字会消失'
+    ]
+  },
   {
     version: 'v2.4.7',
     date: '2026-10-14',
