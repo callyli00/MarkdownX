@@ -354,7 +354,7 @@ var require_core = __commonJS({
     var MATCH_NOTHING_RE = /\b\B/;
     var IDENT_RE = "[a-zA-Z]\\w*";
     var UNDERSCORE_IDENT_RE = "[a-zA-Z_]\\w*";
-    var NUMBER_RE = "\\b\\d+(\\.\\d+)?";
+    var NUMBER_RE2 = "\\b\\d+(\\.\\d+)?";
     var C_NUMBER_RE = "(-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)";
     var BINARY_NUMBER_RE = "\\b(0b[01]+)";
     var RE_STARTERS_RE = "!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~";
@@ -473,7 +473,7 @@ var require_core = __commonJS({
     var HASH_COMMENT_MODE = COMMENT("#", "$");
     var NUMBER_MODE = {
       scope: "number",
-      begin: NUMBER_RE,
+      begin: NUMBER_RE2,
       relevance: 0
     };
     var C_NUMBER_MODE = {
@@ -547,7 +547,7 @@ var require_core = __commonJS({
       MATCH_NOTHING_RE,
       METHOD_GUARD,
       NUMBER_MODE,
-      NUMBER_RE,
+      NUMBER_RE: NUMBER_RE2,
       PHRASAL_WORDS_MODE,
       QUOTE_STRING_MODE,
       REGEXP_MODE,
@@ -5206,6 +5206,101 @@ function json(hljs) {
 
 // src/utils/markdownRenderer.ts
 var import_core3 = __toESM(require_stub_core(), 1);
+
+// src/utils/properties.ts
+var KEY_RE = /^([A-Za-z0-9_.\- ]+):[ \t]*(.*)$/;
+var BLOCK_ITEM_RE = /^\s*-\s+(.*)$/;
+var NUMBER_RE = /^-?\d+(?:\.\d+)?$/;
+var BOOL_RE = /^(?:true|false|yes|no)$/i;
+var DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?$/;
+function stripQuotes(text) {
+  const t = text.trim();
+  if (t.length >= 2 && (t.startsWith('"') && t.endsWith('"') || t.startsWith("'") && t.endsWith("'"))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+function detectKind(key, raw, items) {
+  if (items) return key.toLowerCase() === "tags" ? "tags" : "list";
+  if (BOOL_RE.test(raw)) return "checkbox";
+  if (DATE_RE.test(raw)) return "date";
+  if (NUMBER_RE.test(raw)) return "number";
+  return "text";
+}
+function parseFrontmatter(block2) {
+  const lines = block2.split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim() || line.trim().startsWith("#")) {
+      i++;
+      continue;
+    }
+    const match = KEY_RE.exec(line);
+    if (!match) {
+      i++;
+      continue;
+    }
+    const key = match[1].trim();
+    const raw = match[2].trim();
+    if (raw === "") {
+      const items = [];
+      let j = i + 1;
+      while (j < lines.length) {
+        const it = BLOCK_ITEM_RE.exec(lines[j]);
+        if (!it) break;
+        items.push(stripQuotes(it[1]));
+        j++;
+      }
+      if (items.length > 0) {
+        const kind = key.toLowerCase() === "tags" ? "tags" : "list";
+        out.push({ key, value: items.join(", "), kind, items });
+        i = j;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    i++;
+    if (/^\[.*\]$/.test(raw)) {
+      const items = raw.slice(1, -1).split(",").map((s) => stripQuotes(s)).filter((s) => s.length > 0);
+      const kind = key.toLowerCase() === "tags" ? "tags" : "list";
+      out.push({ key, value: items.join(", "), kind, items });
+      continue;
+    }
+    const value = stripQuotes(raw);
+    out.push({ key, value, kind: detectKind(key, value) });
+  }
+  return out;
+}
+function escapePropertyText(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function buildPropertiesCard(props) {
+  const escape2 = escapePropertyText;
+  const rows = props.map((p) => {
+    let body;
+    if (p.kind === "list" || p.kind === "tags") {
+      const chips = (p.items || []).map((v) => `<span class="props-chip">${p.kind === "tags" ? "#" : ""}${escape2(v)}</span>`).join("");
+      body = `<span class="props-values">${chips}</span>`;
+    } else if (p.kind === "checkbox") {
+      const on = /^(?:true|yes)$/i.test(p.value);
+      body = `<span class="props-bool ${on ? "props-on" : "props-off"}">${on ? "\u662F (true)" : "\u5426 (false)"}</span>`;
+    } else {
+      body = `<span class="props-values"><span class="props-value">${escape2(p.value)}</span></span>`;
+    }
+    return `<div class="props-row props-row-${p.kind}" data-prop-key="${escape2(p.key)}" data-prop-kind="${p.kind}" data-prop-value="${escape2(p.value)}"><span class="props-key">${escape2(p.key)}</span>${body}</div>`;
+  }).join("");
+  const meta = ["title", "author", "date", "description", "subject"].map((name) => {
+    const found = props.find((p) => p.key.toLowerCase() === name);
+    return found ? ` data-prop-${name}="${escape2(found.value)}"` : "";
+  }).join("");
+  const addButton = '<button type="button" class="props-add" data-props-add="1">\uFF0B \u6DFB\u52A0\u5C5E\u6027</button>';
+  return `<div class="props-card" data-props="${props.length}"${meta}>${rows}${addButton}</div>`;
+}
+
+// src/utils/markdownRenderer.ts
 core_default.registerLanguage("python", python);
 core_default.registerLanguage("cpp", cpp);
 core_default.registerLanguage("fortran", fortran);
@@ -5793,6 +5888,18 @@ function processMathAndCitations(rawMarkdown) {
     new RegExp(`(?<!\\\\)\\\\\\(((?:(?!${tagOpenerGuard})[\\s\\S])*?)\\\\\\)`, "g"),
     tokenizeInlineMath
   );
+  let propertiesCardHtml = "";
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /^---\n([\s\S]*?)\n---[ \t]*(?=\n|$)/,
+    (match, block2) => {
+      const parsed = parseFrontmatter(block2);
+      if (parsed.length === 0) return match;
+      propertiesCardHtml = buildPropertiesCard(parsed);
+      return "@@PROPS_CARD@@";
+    }
+  );
   sanitized = trackedReplace(
     sanitized,
     translation,
@@ -5847,6 +5954,9 @@ function processMathAndCitations(rawMarkdown) {
     /(?<![=\w])==(?![\s=])([^\n]*?[^\s=])(?<![\s=])==(?!=)/g,
     (_match, body) => `<mark class="md-mark">${body}</mark>`
   );
+  if (propertiesCardHtml) {
+    sanitized = trackedReplace(sanitized, translation, /@@PROPS_CARD@@/g, () => propertiesCardHtml);
+  }
   const sanitizedMarkdown = unmaskVerbatimRegions(sanitized, store);
   const tokenSourceSpans = {};
   const anchor = (key) => {
