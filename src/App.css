@@ -3813,3 +3813,185 @@ body.host-mobile .typora-empty-guide { padding: 0 20px; }
 }
 .empty-mobile-btn.solid { background: var(--wb-accent); border-color: var(--wb-accent); color: #fff; }
 .empty-mobile-btn svg { width: 16px; height: 16px; }
+/* A layer · highlight ().
+   Prints as a rule rather than a fill: browsers drop background colours when printing
+   unless the user has explicitly enabled them, and a highlight that silently vanishes
+   from the printout is worse than no highlight at all. NOT added to the print-hidden
+   list - it is content, not chrome. */
+mark.md-mark {
+  background: #fff3bf;
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+body.theme-dark mark.md-mark { background: #4d441c; color: #f0e6c8; }
+body.theme-sepia mark.md-mark { background: #f0e2b8; }
+@media print { mark.md-mark { background: transparent; border-bottom: 1.5px solid #d4b106; } }
+
+/* A layer - callouts, collapsible form (`[!type]-` collapsed, `[!type]+` expanded).
+   <summary> carries the existing .callout-header class, so the header appearance is
+   inherited; only the marker and the pointer feedback are added here. */
+details.callout-card > summary.callout-header {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+details.callout-card > summary.callout-header::-webkit-details-marker { display: none; }
+details.callout-card > summary.callout-header::after {
+  content: 'B8';
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.65;
+  transition: transform 0.15s ease;
+}
+details.callout-card[open] > summary.callout-header::after { transform: rotate(90deg); }
+
+/* Print: a collapsed callout must not silently lose its body in the PDF. The fold is a
+   reading affordance, not an instruction to drop content from the printout. */
+@media print {
+  details.callout-card > .callout-content { display: block !important; }
+}
+
+/* A layer - task lists (GFM). marked emits a disabled <input type="checkbox"> as the first
+   child of the affected <li>; the marker is dropped only on those items, so a mixed list
+   keeps its bullets on the plain entries. :has() is supported by the WebView2 engine; in
+   an older browser the export simply keeps the bullet - it degrades, it does not break. */
+li:has(> input[type='checkbox']) { list-style: none; margin-left: -1.15em; }
+li > input[type='checkbox'] {
+  margin-right: 6px;
+  vertical-align: -1px;
+  accent-color: var(--wb-accent);
+}
+
+/* A layer - footnotes (`[^label]`). The reference is a superscript link; the definition
+   is a numbered paragraph at the point the author wrote it, with a back-link. */
+hr.footnotes-sep {
+  margin: 2.2em 0 1.1em;
+  border: 0;
+  border-top: 1px solid var(--wb-line);
+}
+.fn-ref a {
+  text-decoration: none;
+  font-size: 0.78em;
+  vertical-align: super;
+  color: var(--wb-accent);
+  padding: 0 1px;
+}
+.fn-back {
+  text-decoration: none;
+  font-size: 0.85em;
+  color: var(--wb-fg3);
+  margin-left: 4px;
+}
+.fn-back:hover { color: var(--wb-accent); }
+
+/* B layer - YAML frontmatter rendered as a property card instead of raw YAML.
+   It prints: a title/author/date block is content the author wrote, and the same rule as
+   the A layer applies - nothing the author typed is dropped from the printout. */
+.props-card {
+  margin: 0 0 1.4em;
+  padding: 10px 14px;
+  border: 1px solid var(--wb-line);
+  border-left: 3px solid var(--wb-accent);
+  border-radius: 8px;
+  background: var(--wb-side);
+  font-size: 0.92em;
+}
+.props-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
+.props-key {
+  flex: 0 0 auto;
+  min-width: 74px;
+  color: var(--wb-fg3);
+  font-size: 0.92em;
+  letter-spacing: 0.2px;
+}
+.props-values { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.props-value { color: var(--wb-fg); }
+.props-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card);
+  color: var(--wb-accent);
+  font-size: 0.92em;
+}
+.props-bool { font-size: 0.92em; }
+.props-on { color: #059669; }
+.props-off { color: var(--wb-fg3); }
+body.theme-dark .props-card { background: rgba(255, 255, 255, 0.04); }
+
+/* B3 - property editing from the preview. */
+.props-row { cursor: pointer; border-radius: 5px; }
+.props-row:hover { background: rgba(47, 111, 237, 0.07); }
+.props-add {
+  margin-top: 6px;
+  padding: 3px 10px;
+  border: 1px dashed var(--wb-line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--wb-fg3);
+  font: inherit;
+  font-size: 0.86em;
+  cursor: pointer;
+}
+.props-add:hover { color: var(--wb-accent); border-color: var(--wb-accent); }
+
+.props-editor-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.34);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.props-editor {
+  width: min(420px, calc(100vw - 40px));
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: var(--wb-card);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+}
+.props-editor-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--wb-fg); }
+.props-editor-field { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.props-editor-field > span { flex: 0 0 56px; font-size: 12px; color: var(--wb-fg3); }
+.props-editor-field input,
+.props-editor-field select {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  background: var(--wb-main);
+  color: var(--wb-fg);
+  font: inherit;
+  font-size: 13px;
+}
+.props-editor-field input:read-only { color: var(--wb-fg3); background: var(--wb-side); }
+.props-editor-hint { margin: -4px 0 8px 66px; font-size: 11.5px; color: var(--wb-fg3); }
+.props-editor-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.props-editor-grow { flex: 1; }
+.props-editor-btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: var(--wb-card);
+  color: var(--wb-fg);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.props-editor-btn.props-primary { background: var(--wb-accent); border-color: var(--wb-accent); color: #fff; }
+.props-editor-btn.props-danger { color: #dc2626; border-color: #f3c9c9; }
+
+/* Invariant 3: the add button is chrome, not content - it must not reach the printout. */
+@media print {
+  .props-add { display: none !important; }
+}

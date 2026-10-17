@@ -354,7 +354,7 @@ var require_core = __commonJS({
     var MATCH_NOTHING_RE = /\b\B/;
     var IDENT_RE = "[a-zA-Z]\\w*";
     var UNDERSCORE_IDENT_RE = "[a-zA-Z_]\\w*";
-    var NUMBER_RE = "\\b\\d+(\\.\\d+)?";
+    var NUMBER_RE2 = "\\b\\d+(\\.\\d+)?";
     var C_NUMBER_RE = "(-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)";
     var BINARY_NUMBER_RE = "\\b(0b[01]+)";
     var RE_STARTERS_RE = "!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~";
@@ -473,7 +473,7 @@ var require_core = __commonJS({
     var HASH_COMMENT_MODE = COMMENT("#", "$");
     var NUMBER_MODE = {
       scope: "number",
-      begin: NUMBER_RE,
+      begin: NUMBER_RE2,
       relevance: 0
     };
     var C_NUMBER_MODE = {
@@ -547,7 +547,7 @@ var require_core = __commonJS({
       MATCH_NOTHING_RE,
       METHOD_GUARD,
       NUMBER_MODE,
-      NUMBER_RE,
+      NUMBER_RE: NUMBER_RE2,
       PHRASAL_WORDS_MODE,
       QUOTE_STRING_MODE,
       REGEXP_MODE,
@@ -5206,6 +5206,101 @@ function json(hljs) {
 
 // src/utils/markdownRenderer.ts
 var import_core3 = __toESM(require_stub_core(), 1);
+
+// src/utils/properties.ts
+var KEY_RE = /^([A-Za-z0-9_.\- ]+):[ \t]*(.*)$/;
+var BLOCK_ITEM_RE = /^\s*-\s+(.*)$/;
+var NUMBER_RE = /^-?\d+(?:\.\d+)?$/;
+var BOOL_RE = /^(?:true|false|yes|no)$/i;
+var DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?$/;
+function stripQuotes(text) {
+  const t = text.trim();
+  if (t.length >= 2 && (t.startsWith('"') && t.endsWith('"') || t.startsWith("'") && t.endsWith("'"))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+function detectKind(key, raw, items) {
+  if (items) return key.toLowerCase() === "tags" ? "tags" : "list";
+  if (BOOL_RE.test(raw)) return "checkbox";
+  if (DATE_RE.test(raw)) return "date";
+  if (NUMBER_RE.test(raw)) return "number";
+  return "text";
+}
+function parseFrontmatter(block2) {
+  const lines = block2.split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim() || line.trim().startsWith("#")) {
+      i++;
+      continue;
+    }
+    const match = KEY_RE.exec(line);
+    if (!match) {
+      i++;
+      continue;
+    }
+    const key = match[1].trim();
+    const raw = match[2].trim();
+    if (raw === "") {
+      const items = [];
+      let j = i + 1;
+      while (j < lines.length) {
+        const it = BLOCK_ITEM_RE.exec(lines[j]);
+        if (!it) break;
+        items.push(stripQuotes(it[1]));
+        j++;
+      }
+      if (items.length > 0) {
+        const kind = key.toLowerCase() === "tags" ? "tags" : "list";
+        out.push({ key, value: items.join(", "), kind, items });
+        i = j;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    i++;
+    if (/^\[.*\]$/.test(raw)) {
+      const items = raw.slice(1, -1).split(",").map((s) => stripQuotes(s)).filter((s) => s.length > 0);
+      const kind = key.toLowerCase() === "tags" ? "tags" : "list";
+      out.push({ key, value: items.join(", "), kind, items });
+      continue;
+    }
+    const value = stripQuotes(raw);
+    out.push({ key, value, kind: detectKind(key, value) });
+  }
+  return out;
+}
+function escapePropertyText(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function buildPropertiesCard(props) {
+  const escape2 = escapePropertyText;
+  const rows = props.map((p) => {
+    let body;
+    if (p.kind === "list" || p.kind === "tags") {
+      const chips = (p.items || []).map((v) => `<span class="props-chip">${p.kind === "tags" ? "#" : ""}${escape2(v)}</span>`).join("");
+      body = `<span class="props-values">${chips}</span>`;
+    } else if (p.kind === "checkbox") {
+      const on = /^(?:true|yes)$/i.test(p.value);
+      body = `<span class="props-bool ${on ? "props-on" : "props-off"}">${on ? "\u662F (true)" : "\u5426 (false)"}</span>`;
+    } else {
+      body = `<span class="props-values"><span class="props-value">${escape2(p.value)}</span></span>`;
+    }
+    return `<div class="props-row props-row-${p.kind}" data-prop-key="${escape2(p.key)}" data-prop-kind="${p.kind}" data-prop-value="${escape2(p.value)}"><span class="props-key">${escape2(p.key)}</span>${body}</div>`;
+  }).join("");
+  const meta = ["title", "author", "date", "description", "subject"].map((name) => {
+    const found = props.find((p) => p.key.toLowerCase() === name);
+    return found ? ` data-prop-${name}="${escape2(found.value)}"` : "";
+  }).join("");
+  const addButton = '<button type="button" class="props-add" data-props-add="1">\uFF0B \u6DFB\u52A0\u5C5E\u6027</button>';
+  return `<div class="props-card" data-props="${props.length}"${meta}>${rows}${addButton}</div>`;
+}
+
+// src/utils/markdownRenderer.ts
 core_default.registerLanguage("python", python);
 core_default.registerLanguage("cpp", cpp);
 core_default.registerLanguage("fortran", fortran);
@@ -5449,6 +5544,72 @@ function resolveRawHtmlImageSources(html2, documentBasePath, resolveAssets = tru
     })
   );
 }
+var CALLOUT_CANONICAL = /* @__PURE__ */ new Set([
+  "note",
+  "tip",
+  "warning",
+  "caution",
+  "important",
+  "theorem",
+  "definition",
+  "assumption"
+]);
+var CALLOUT_ALIASES = {
+  info: "note",
+  abstract: "note",
+  summary: "note",
+  tldr: "note",
+  todo: "note",
+  quote: "note",
+  cite: "note",
+  hint: "tip",
+  success: "tip",
+  check: "tip",
+  done: "tip",
+  example: "tip",
+  attention: "warning",
+  error: "important",
+  danger: "important",
+  failure: "important",
+  fail: "important",
+  missing: "important",
+  bug: "important",
+  question: "definition",
+  help: "definition",
+  faq: "definition"
+};
+var CALLOUT_TITLES = {
+  note: "\u6CE8\u89E3 (Note)",
+  info: "\u4FE1\u606F (Info)",
+  tip: "\u63D0\u793A (Tip)",
+  hint: "\u63D0\u793A (Hint)",
+  warning: "\u8B66\u544A (Warning)",
+  caution: "\u6CE8\u610F (Caution)",
+  important: "\u91CD\u8981 (Important)",
+  theorem: "\u5B9A\u7406 (Theorem)",
+  definition: "\u5B9A\u4E49 (Definition)",
+  assumption: "\u529B\u5B66\u5047\u5B9A (Assumption)",
+  todo: "\u5F85\u529E (Todo)",
+  success: "\u6210\u529F (Success)",
+  question: "\u7591\u95EE (Question)",
+  help: "\u5E2E\u52A9 (Help)",
+  faq: "\u5E38\u89C1\u95EE\u9898 (FAQ)",
+  failure: "\u5931\u8D25 (Failure)",
+  fail: "\u5931\u8D25 (Fail)",
+  danger: "\u5371\u9669 (Danger)",
+  error: "\u9519\u8BEF (Error)",
+  bug: "\u7F3A\u9677 (Bug)",
+  example: "\u793A\u4F8B (Example)",
+  quote: "\u5F15\u7528 (Quote)",
+  abstract: "\u6458\u8981 (Abstract)",
+  summary: "\u6458\u8981 (Summary)",
+  tldr: "\u592A\u957F\u4E0D\u770B (TL;DR)",
+  check: "\u5DF2\u6838\u5BF9 (Check)",
+  done: "\u5DF2\u5B8C\u6210 (Done)",
+  missing: "\u7F3A\u5931 (Missing)",
+  cite: "\u5F15\u7528 (Cite)",
+  attention: "\u6CE8\u610F (Attention)"
+};
 function configureMarked(documentBasePath = "", resolveAssets = true) {
   const renderer = new marked.Renderer();
   const headingIdCounts = /* @__PURE__ */ new Map();
@@ -5492,23 +5653,23 @@ function configureMarked(documentBasePath = "", resolveAssets = true) {
     const isToken = typeof tokenOrQuote === "object" && tokenOrQuote !== null;
     const rawHtml = isToken ? tokenOrQuote.text : tokenOrQuote;
     const content = typeof rawHtml === "string" ? rawHtml : "";
-    const match = content.match(/^\s*<p>\s*\[!(NOTE|TIP|WARNING|CAUTION|IMPORTANT|THEOREM|DEFINITION|ASSUMPTION)\](?:\s*([^\n<]+))?/i);
+    const match = content.match(/^\s*<p>\s*\[!([A-Za-z][A-Za-z-]*)\]([+-])?[ \t]*([^\n<]+)?/i);
     if (match) {
-      const type = match[1].toLowerCase();
-      const customTitle = match[2]?.trim() || "";
-      const defaultTitles = {
-        note: "\u6CE8\u89E3 (Note)",
-        tip: "\u63D0\u793A (Tip)",
-        warning: "\u8B66\u544A (Warning)",
-        caution: "\u6CE8\u610F (Caution)",
-        important: "\u91CD\u8981 (Important)",
-        theorem: "\u5B9A\u7406 (Theorem)",
-        definition: "\u5B9A\u4E49 (Definition)",
-        assumption: "\u529B\u5B66\u5047\u5B9A (Assumption)"
-      };
-      const title = customTitle || defaultTitles[type] || type.toUpperCase();
-      const cleanContent = content.replace(/^\s*<p>\s*\[![^\]]+\](?:[^\n<]+)?(?:\s*<br\s*\/?>)?/i, "<p>");
-      return `<div class="callout-card callout-${type}"><div class="callout-header"><span class="callout-icon"></span><span class="callout-title">${title}</span></div><div class="callout-content">${cleanContent}</div></div>`;
+      const literal = match[1].toLowerCase();
+      const fold = match[2] || "";
+      const customTitle = match[3]?.trim() || "";
+      const title = customTitle || CALLOUT_TITLES[literal] || literal.toUpperCase();
+      const canonical = CALLOUT_CANONICAL.has(literal) ? literal : CALLOUT_ALIASES[literal] || "note";
+      const cleanContent = content.replace(
+        /^\s*<p>\s*\[![^\]]+\](?:[+-])?(?:[^\n<]+)?(?:\s*<br\s*\/?>)?/i,
+        "<p>"
+      );
+      const head = `<span class="callout-icon"></span><span class="callout-title">${title}</span>`;
+      const body = `<div class="callout-content">${cleanContent}</div>`;
+      if (fold === "-" || fold === "+") {
+        return `<details class="callout-card callout-${canonical}" data-callout="${literal}"${fold === "+" ? " open" : ""}><summary class="callout-header">${head}</summary>${body}</details>`;
+      }
+      return `<div class="callout-card callout-${canonical}" data-callout="${literal}"><div class="callout-header">${head}</div>${body}</div>`;
     }
     return `<blockquote>${content}</blockquote>`;
   };
@@ -5727,6 +5888,75 @@ function processMathAndCitations(rawMarkdown) {
     new RegExp(`(?<!\\\\)\\\\\\(((?:(?!${tagOpenerGuard})[\\s\\S])*?)\\\\\\)`, "g"),
     tokenizeInlineMath
   );
+  let propertiesCardHtml = "";
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /^---\n([\s\S]*?)\n---[ \t]*(?=\n|$)/,
+    (match, block2) => {
+      const parsed = parseFrontmatter(block2);
+      if (parsed.length === 0) return match;
+      propertiesCardHtml = buildPropertiesCard(parsed);
+      return "@@PROPS_CARD@@";
+    }
+  );
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /(?<!\\)%%[\s\S]*?%%/g,
+    () => ""
+  );
+  const footnoteDefs = /* @__PURE__ */ new Map();
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /^\[\^([^\]\s]+)\]:[ \t]*([^\n]*(?:\n[ \t]{2,}[^\n]*)*)/gm,
+    (match, label, body) => {
+      footnoteDefs.set(label, { body: body.trim(), raw: match });
+      return `@@FOOTNOTE_DEF_${label}@@`;
+    }
+  );
+  const footnoteNumbers = /* @__PURE__ */ new Map();
+  const footnoteSeen = /* @__PURE__ */ new Set();
+  let footnoteCount = 0;
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /\[\^([^\]\s]+)\]/g,
+    (match, label) => {
+      if (!footnoteDefs.has(label)) return match;
+      if (!footnoteNumbers.has(label)) footnoteNumbers.set(label, ++footnoteCount);
+      const n = footnoteNumbers.get(label);
+      const isFirst = !footnoteSeen.has(label);
+      footnoteSeen.add(label);
+      return `<sup class="fn-ref"><a href="#fn-${n}"${isFirst ? ` id="fnref-${n}"` : ""}>${n}</a></sup>`;
+    }
+  );
+  let footnotesEmitted = 0;
+  for (const [label, def2] of footnoteDefs) {
+    const n = footnoteNumbers.get(label);
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const sentinel = new RegExp(`@@FOOTNOTE_DEF_${escaped}@@`, "g");
+    if (n === void 0) {
+      sanitized = trackedReplace(sanitized, translation, sentinel, () => def2.raw.replace(/^\[\^/, "\\[^"));
+      continue;
+    }
+    const rule = footnotesEmitted === 0 ? '<hr class="footnotes-sep">\n\n' : "";
+    const replacement = `${rule}<a id="fn-${n}"></a>
+
+**${n}.** ${def2.body} <a href="#fnref-${n}" class="fn-back" title="\u56DE\u5230\u5F15\u7528\u5904">\u21A9</a>`;
+    sanitized = trackedReplace(sanitized, translation, sentinel, () => replacement);
+    footnotesEmitted++;
+  }
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /(?<![=\w])==(?![\s=])([^\n]*?[^\s=])(?<![\s=])==(?!=)/g,
+    (_match, body) => `<mark class="md-mark">${body}</mark>`
+  );
+  if (propertiesCardHtml) {
+    sanitized = trackedReplace(sanitized, translation, /@@PROPS_CARD@@/g, () => propertiesCardHtml);
+  }
   const sanitizedMarkdown = unmaskVerbatimRegions(sanitized, store);
   const tokenSourceSpans = {};
   const anchor = (key) => {
