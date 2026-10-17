@@ -3646,3 +3646,39 @@ hr.footnotes-sep {
   margin-left: 4px;
 }
 .fn-back:hover { color: var(--wb-accent); }
+
+/* B layer - YAML frontmatter rendered as a property card instead of raw YAML.
+   It prints: a title/author/date block is content the author wrote, and the same rule as
+   the A layer applies - nothing the author typed is dropped from the printout. */
+.props-card {
+  margin: 0 0 1.4em;
+  padding: 10px 14px;
+  border: 1px solid var(--wb-line);
+  border-left: 3px solid var(--wb-accent);
+  border-radius: 8px;
+  background: var(--wb-side);
+  font-size: 0.92em;
+}
+.props-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; }
+.props-key {
+  flex: 0 0 auto;
+  min-width: 74px;
+  color: var(--wb-fg3);
+  font-size: 0.92em;
+  letter-spacing: 0.2px;
+}
+.props-values { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.props-value { color: var(--wb-fg); }
+.props-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--wb-line);
+  border-radius: 10px;
+  background: var(--wb-card);
+  color: var(--wb-accent);
+  font-size: 0.92em;
+}
+.props-bool { font-size: 0.92em; }
+.props-on { color: #059669; }
+.props-off { color: var(--wb-fg3); }
+body.theme-dark .props-card { background: rgba(255, 255, 255, 0.04); }

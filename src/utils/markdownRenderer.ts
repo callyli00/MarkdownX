@@ -5,6 +5,7 @@ import cpp from 'highlight.js/lib/languages/cpp';
 import fortran from 'highlight.js/lib/languages/fortran';
 import json from 'highlight.js/lib/languages/json';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { parseFrontmatter, buildPropertiesCard } from './properties';
 
 hljs.registerLanguage('python', python);
 hljs.registerLanguage('cpp', cpp);
@@ -860,6 +861,34 @@ function processMathAndCitations(rawMarkdown: string): {
     tokenizeInlineMath
   );
 
+  // ---- B layer: YAML frontmatter / properties -----------------------------------
+  //
+  // Handled FIRST, before every other pass, for two reasons:
+  //  * `---` + `title: x` + `---` is a legal SETEXT HEADING, so this block must never reach
+  //    the Markdown parser - left alone it becomes an <h2> plus a stray <hr> (that exact
+  //    failure mode is a regression test in frontmatter.test.ts);
+  //  * property values are DATA, not prose: a value containing `==x==` or `[^1]` must not be
+  //    rewritten by the highlight or footnote passes, so the block leaves the text before
+  //    those run.
+  //
+  // The card is put back at the END of this region through a sentinel - the same reason in
+  // reverse: the HTML it emits must not be reprocessed by those passes either.
+  //
+  // A block that yields no properties, or one that never closes, is left exactly as written:
+  // these passes never remove author text they do not understand.
+  let propertiesCardHtml = '';
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /^---\n([\s\S]*?)\n---[ \t]*(?=\n|$)/,
+    (match: string, block: string) => {
+      const parsed = parseFrontmatter(block);
+      if (parsed.length === 0) return match;
+      propertiesCardHtml = buildPropertiesCard(parsed);
+      return '@@PROPS_CARD@@';
+    }
+  );
+
   // ---- A layer: Obsidian-style inline extensions --------------------------------
   //
   // Both passes run HERE on purpose: fenced blocks, inline code spans and every
@@ -955,6 +984,11 @@ function processMathAndCitations(rawMarkdown: string): {
     /(?<![=\w])==(?![\s=])([^\n]*?[^\s=])(?<![\s=])==(?!=)/g,
     (_match: string, body: string) => `<mark class="md-mark">${body}</mark>`
   );
+
+  // Property card, injected after every rewriting pass so its own markup is final.
+  if (propertiesCardHtml) {
+    sanitized = trackedReplace(sanitized, translation, /@@PROPS_CARD@@/g, () => propertiesCardHtml);
+  }
 
   // Restore code samples / comments only after all math rewriting is finished,
   // so marked receives the author's original bytes. Masks were length
