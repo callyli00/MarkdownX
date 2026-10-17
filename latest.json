@@ -1,11 +1,11 @@
 {
-  "version": "2.4.9",
-  "notes": "#### Obsidian 风格 Markdown 扩展 · 第一层（纯渲染，不需要索引/库）\n- **高亮** `==文字==`：侧翼规则与 Obsidian 一致（`a == b` 这类散文比较不会被改写）；\n  打印时以**下划线**呈现而不是底色（浏览器默认不打印背景色）。\n- **注释** `%%文字%%`：预览、导出、打印**都不显示**；在源码层删除，因此四条导出链路自动一致。\n- **Callout 类型补齐 + 可折叠**：补 `info/todo/success/question/danger/bug/example/quote/abstract/faq/failure`\n  等 Obsidian 类型（**别名映射到既有配色族**，不新增颜色）；`[!faq]-` 收起、`[!tip]+` 展开，\n  用 `<details>` 实现（无需 JS，内容仍在 DOM 中，查找与大纲仍可见）；打印时自动展开。\n- **脚注** `[^label]`：引用→上标链接，定义→编号段落 + 回链；**按首次引用顺序编号**，\n  同一标签重复引用编号一致；未引用的定义与未定义的引用**都原样保留**。\n- **任务列表** `- [ ]` / `- [x]`：补样式（复选框对齐、去掉多余项目符号）。\n- **修两个既有缺陷**：① Callout 不写标题时会把下一行正文当成标题（标题捕获跨了换行）；\n  ② 未被引用的脚注定义整行会被 Markdown 当成链接引用定义吞掉，作者文字静默消失。\n- 验证：tsc；单测 133 项（14 文件）；渲染护栏 6/6 + 换行等价 6/6；真实应用读 DOM 20/20。",
-  "pub_date": "2026-10-17T04:29:20.621Z",
+  "version": "2.5.0",
+  "notes": "#### 文档属性（YAML frontmatter）—— B 层\n- **属性卡**：文档开头的 `title` / `author` / `date` / `tags` 等渲染成一张属性卡，而不是裸 YAML 与游离分隔线。\n- **类型**：文本 / 数字 / 是-否 / 日期 / 列表 / 标签；值按**纯文本**显示（属性里不渲染 Markdown，与 Obsidian 一致）。\n- **可编辑**：点属性卡任意一行即可改值、改类型；卡片上的「＋ 添加属性」可新增，编辑器里可删除。\n- **保守写回**：只动目标那一行，其余行（含注释行与未改动的键）**逐字节保持原样**；\n  块状列表改写时会连它的 `- 项` 一起处理，不留孤儿项；CRLF 文档仍是 CRLF。\n- **贯通导出**：`title`/`author`/`date` 会用于 HTML 与 Word 的文档标题、LaTeX 的 `\\title`/`\\author`/`\\date`；\n  没有 frontmatter 的文档输出与旧版**一字不变**。\n- **修复**：① frontmatter 被当作 setext 标题（渲染成 `<h2>title: x</h2>` + 游离 `<hr>`）；\n  ② LaTeX 导出把整个 YAML 块当正文写进 `.tex`。\n- 验证：tsc；单测 166 项（18 文件）；渲染护栏 6/6 + 换行等价 6/6；真实应用端到端 16/16（含源码回写实测）。",
+  "pub_date": "2026-10-17T05:39:23.824Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTUW11NElLelc2SHUwVXdIN0pUNUxxRFFZeTE0OE9ERGxPODVCWEtLQy8wZUtWaFVRMW1TRDdEeWpPa2dOU3oxZFlyZ2d3T1ZNODBFaUI0Z1VPRGl5UWVJK2htR0xWeGdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMjExMzYwCWZpbGU6TWFya2Rvd25YXzIuNC45X3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjQuOQp2Z2ZOa0VZZHAxb3dVSTE0ajFHZ2ZYNEhQTzByeVZ2Q2FUZ1VCa2ZMaloyK0VzcHM2TVltZW5SMUJjaTJ5U3VQdG5LeHBUZFUwZWVtZlh6UmpoOFhEZz09Cg==",
-      "url": "https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/MarkdownX_2.4.9_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTUW11NElLelc2SGc3SzNrOWxnMVpIRmNpQ09TOWpuZFFOTWpyOGlvdS9VVWdTemQvVk5SaDNsMDJyYkV0NVBkZW85aGhrRlp5T3Jad2NYZDJTRWFUckxLenVkSFVYMlFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMjE1NTYzCWZpbGU6TWFya2Rvd25YXzIuNS4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjUuMApXbHRGa3BCa1pNcWpHNFJqcU5qbVVlYklVNFpZY0VIMzJ1Q3NaSWhsS3RZVUI4bjRiTXh0ODRPdHRHYUtSM2c5cXV0Q1JTNkg0RW51ajNoRnlYaDZDdz09Cg==",
+      "url": "https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/MarkdownX_2.5.0_x64-setup.exe"
     }
   }
 }
