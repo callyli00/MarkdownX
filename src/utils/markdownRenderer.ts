@@ -361,6 +361,36 @@ function resolveRawHtmlImageSources(html: string, documentBasePath: string, reso
   );
 }
 
+/**
+ * Callouts. Canonical types each own a colour block in App.css; Obsidian's other type
+ * names are mapped onto one of them so an alias never needs its own colour (and so a
+ * future Styles feature has a single place to extend). The literal type is preserved in
+ * `data-callout` on the card for anything that wants to target it precisely.
+ */
+const CALLOUT_CANONICAL = new Set([
+  'note', 'tip', 'warning', 'caution', 'important', 'theorem', 'definition', 'assumption',
+]);
+const CALLOUT_ALIASES: Record<string, string> = {
+  info: 'note', abstract: 'note', summary: 'note', tldr: 'note', todo: 'note',
+  quote: 'note', cite: 'note',
+  hint: 'tip', success: 'tip', check: 'tip', done: 'tip', example: 'tip',
+  attention: 'warning',
+  error: 'important', danger: 'important', failure: 'important', fail: 'important',
+  missing: 'important', bug: 'important',
+  question: 'definition', help: 'definition', faq: 'definition',
+};
+const CALLOUT_TITLES: Record<string, string> = {
+  note: '注解 (Note)', info: '信息 (Info)', tip: '提示 (Tip)', hint: '提示 (Hint)',
+  warning: '警告 (Warning)', caution: '注意 (Caution)', important: '重要 (Important)',
+  theorem: '定理 (Theorem)', definition: '定义 (Definition)', assumption: '力学假定 (Assumption)',
+  todo: '待办 (Todo)', success: '成功 (Success)', question: '疑问 (Question)', help: '帮助 (Help)',
+  faq: '常见问题 (FAQ)', failure: '失败 (Failure)', fail: '失败 (Fail)', danger: '危险 (Danger)',
+  error: '错误 (Error)', bug: '缺陷 (Bug)', example: '示例 (Example)', quote: '引用 (Quote)',
+  abstract: '摘要 (Abstract)', summary: '摘要 (Summary)', tldr: '太长不看 (TL;DR)',
+  check: '已核对 (Check)', done: '已完成 (Done)', missing: '缺失 (Missing)',
+  cite: '引用 (Cite)', attention: '注意 (Attention)',
+};
+
 export function configureMarked(documentBasePath: string = '', resolveAssets: boolean = true): void {
   const renderer = new marked.Renderer();
   // Duplicate headings would otherwise share one id, making every outline entry
@@ -419,29 +449,43 @@ export function configureMarked(documentBasePath: string = '', resolveAssets: bo
       `</div>`;
   };
 
-  // Add Callout support for [!NOTE], [!TIP], [!WARNING], [!THEOREM], [!DEFINITION], [!ASSUMPTION]
+  // Callouts: `> [!type] Title` (Obsidian syntax) plus the academic types this project
+  // already used. `[!type]-` collapses the callout and `[!type]+` expands it.
+  //
+  // <details>/<summary> is used for the foldable form rather than a scripted toggle: the
+  // disclosure then works without JS, the content stays in the DOM (so find-in-document
+  // and the outline still see it), and the same appearance is inherited because the
+  // summary carries the existing `callout-header` class.
   renderer.blockquote = function (tokenOrQuote: any): string {
     const isToken = typeof tokenOrQuote === 'object' && tokenOrQuote !== null;
     const rawHtml = isToken ? tokenOrQuote.text : tokenOrQuote;
     const content = typeof rawHtml === 'string' ? rawHtml : '';
 
-    const match = content.match(/^\s*<p>\s*\[!(NOTE|TIP|WARNING|CAUTION|IMPORTANT|THEOREM|DEFINITION|ASSUMPTION)\](?:\s*([^\n<]+))?/i);
+    // `[ \t]*` and not `\s*`: a title lives on the SAME line as `[!type]`. With `\s*`
+    // the newline was crossed and the first line of the body was captured as the title
+    // (measured: `> [!note]` + body on the next line titled the callout "内容").
+    const match = content.match(/^\s*<p>\s*\[!([A-Za-z][A-Za-z-]*)\]([+-])?[ \t]*([^\n<]+)?/i);
     if (match) {
-      const type = match[1].toLowerCase();
-      const customTitle = match[2]?.trim() || '';
-      const defaultTitles: Record<string, string> = {
-        note: '注解 (Note)',
-        tip: '提示 (Tip)',
-        warning: '警告 (Warning)',
-        caution: '注意 (Caution)',
-        important: '重要 (Important)',
-        theorem: '定理 (Theorem)',
-        definition: '定义 (Definition)',
-        assumption: '力学假定 (Assumption)',
-      };
-      const title = customTitle || defaultTitles[type] || type.toUpperCase();
-      const cleanContent = content.replace(/^\s*<p>\s*\[![^\]]+\](?:[^\n<]+)?(?:\s*<br\s*\/?>)?/i, '<p>');
-      return `<div class="callout-card callout-${type}"><div class="callout-header"><span class="callout-icon"></span><span class="callout-title">${title}</span></div><div class="callout-content">${cleanContent}</div></div>`;
+      const literal = match[1].toLowerCase();
+      const fold = match[2] || '';
+      const customTitle = match[3]?.trim() || '';
+      const title = customTitle || CALLOUT_TITLES[literal] || literal.toUpperCase();
+      const canonical = CALLOUT_CANONICAL.has(literal)
+        ? literal
+        : (CALLOUT_ALIASES[literal] || 'note');
+      // The `[!type]` prefix AND the fold marker have to leave the first paragraph, or a
+      // collapsed callout would still show a stray '-' before its body text.
+      const cleanContent = content.replace(
+        /^\s*<p>\s*\[![^\]]+\](?:[+-])?(?:[^\n<]+)?(?:\s*<br\s*\/?>)?/i, '<p>'
+      );
+      const head = `<span class="callout-icon"></span><span class="callout-title">${title}</span>`;
+      const body = `<div class="callout-content">${cleanContent}</div>`;
+      if (fold === '-' || fold === '+') {
+        return `<details class="callout-card callout-${canonical}" data-callout="${literal}"${fold === '+' ? ' open' : ''}>` +
+          `<summary class="callout-header">${head}</summary>${body}</details>`;
+      }
+      return `<div class="callout-card callout-${canonical}" data-callout="${literal}">` +
+        `<div class="callout-header">${head}</div>${body}</div>`;
     }
 
     return `<blockquote>${content}</blockquote>`;
@@ -832,6 +876,71 @@ function processMathAndCitations(rawMarkdown: string): {
     /(?<!\\)%%[\s\S]*?%%/g,
     () => ''
   );
+
+  // ---- Footnotes (`[^label]`) --------------------------------------------------
+  //
+  // marked v12 has no footnote support, so this is built here, inside the masked region.
+  // A reference becomes an inline <sup>; its definition is rewritten IN PLACE into a
+  // numbered paragraph with a back-link.
+  //
+  // Why in place instead of hoisted to the document end: a single code path, and the
+  // definition keeps flowing through the normal pipeline - so a footnote containing
+  // maths, inline code or emphasis still renders, where a post-marked append would have
+  // needed a second render pass and a second math tokenizer.
+  //
+  // Anything unresolved stays literal. An unreferenced definition, or a reference with
+  // no definition, is never deleted: silently losing the author's text is worse than a
+  // visibly unresolved marker.
+  const footnoteDefs = new Map<string, { body: string; raw: string }>();
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /^\[\^([^\]\s]+)\]:[ \t]*([^\n]*(?:\n[ \t]{2,}[^\n]*)*)/gm,
+    (match: string, label: string, body: string) => {
+      footnoteDefs.set(label, { body: body.trim(), raw: match });
+      return `@@FOOTNOTE_DEF_${label}@@`;
+    }
+  );
+
+  const footnoteNumbers = new Map<string, number>();
+  const footnoteSeen = new Set<string>();
+  let footnoteCount = 0;
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /\[\^([^\]\s]+)\]/g,
+    (match: string, label: string) => {
+      if (!footnoteDefs.has(label)) return match;            // unresolved -> literal
+      if (!footnoteNumbers.has(label)) footnoteNumbers.set(label, ++footnoteCount);
+      const n = footnoteNumbers.get(label)!;
+      const isFirst = !footnoteSeen.has(label);
+      footnoteSeen.add(label);
+      // Only the first reference carries the anchor id: a label cited twice must not emit
+      // a duplicate id.
+      return `<sup class="fn-ref"><a href="#fn-${n}"${isFirst ? ` id="fnref-${n}"` : ''}>${n}</a></sup>`;
+    }
+  );
+
+  let footnotesEmitted = 0;
+  for (const [label, def] of footnoteDefs) {
+    const n = footnoteNumbers.get(label);
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const sentinel = new RegExp(`@@FOOTNOTE_DEF_${escaped}@@`, 'g');
+    if (n === undefined) {
+      // Never referenced. The line is put back, but with the opening bracket escaped:
+      // CommonMark reads `[^label]: text` as a LINK REFERENCE DEFINITION, so restoring it
+      // verbatim would make marked swallow the author's text silently (measured). Escaped,
+      // the line stays visible exactly as written, which is the honest outcome for a
+      // definition nobody cites.
+      sanitized = trackedReplace(sanitized, translation, sentinel, () => def.raw.replace(/^\[\^/, '\\[^'));
+      continue;
+    }
+    const rule = footnotesEmitted === 0 ? '<hr class="footnotes-sep">\n\n' : '';
+    const replacement = `${rule}<a id="fn-${n}"></a>\n\n` +
+      `**${n}.** ${def.body} <a href="#fnref-${n}" class="fn-back" title="回到引用处">↩</a>`;
+    sanitized = trackedReplace(sanitized, translation, sentinel, () => replacement);
+    footnotesEmitted++;
+  }
 
   // Highlight. The flanking rules are Obsidian's: no space directly after the opening
   // `==` and none directly before the closing one. That single rule is what keeps

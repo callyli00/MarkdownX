@@ -3587,3 +3587,62 @@ mark.md-mark {
 body.theme-dark mark.md-mark { background: #4d441c; color: #f0e6c8; }
 body.theme-sepia mark.md-mark { background: #f0e2b8; }
 @media print { mark.md-mark { background: transparent; border-bottom: 1.5px solid #d4b106; } }
+
+/* A layer - callouts, collapsible form (`[!type]-` collapsed, `[!type]+` expanded).
+   <summary> carries the existing .callout-header class, so the header appearance is
+   inherited; only the marker and the pointer feedback are added here. */
+details.callout-card > summary.callout-header {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+details.callout-card > summary.callout-header::-webkit-details-marker { display: none; }
+details.callout-card > summary.callout-header::after {
+  content: 'B8';
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.65;
+  transition: transform 0.15s ease;
+}
+details.callout-card[open] > summary.callout-header::after { transform: rotate(90deg); }
+
+/* Print: a collapsed callout must not silently lose its body in the PDF. The fold is a
+   reading affordance, not an instruction to drop content from the printout. */
+@media print {
+  details.callout-card > .callout-content { display: block !important; }
+}
+
+/* A layer - task lists (GFM). marked emits a disabled <input type="checkbox"> as the first
+   child of the affected <li>; the marker is dropped only on those items, so a mixed list
+   keeps its bullets on the plain entries. :has() is supported by the WebView2 engine; in
+   an older browser the export simply keeps the bullet - it degrades, it does not break. */
+li:has(> input[type='checkbox']) { list-style: none; margin-left: -1.15em; }
+li > input[type='checkbox'] {
+  margin-right: 6px;
+  vertical-align: -1px;
+  accent-color: var(--wb-accent);
+}
+
+/* A layer - footnotes (`[^label]`). The reference is a superscript link; the definition
+   is a numbered paragraph at the point the author wrote it, with a back-link. */
+hr.footnotes-sep {
+  margin: 2.2em 0 1.1em;
+  border: 0;
+  border-top: 1px solid var(--wb-line);
+}
+.fn-ref a {
+  text-decoration: none;
+  font-size: 0.78em;
+  vertical-align: super;
+  color: var(--wb-accent);
+  padding: 0 1px;
+}
+.fn-back {
+  text-decoration: none;
+  font-size: 0.85em;
+  color: var(--wb-fg3);
+  margin-left: 4px;
+}
+.fn-back:hover { color: var(--wb-accent); }
