@@ -89,6 +89,48 @@ export function parseFrontmatter(block: string): Property[] {
   return out;
 }
 
+/** The frontmatter block of a document (the text between the fences), or null. */
+export function extractFrontmatterBlock(source: string): string | null {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?=\r?\n|$)/.exec(source);
+  return match ? match[1] : null;
+}
+
+/** Properties of a whole document, empty when it has no (usable) frontmatter. */
+export function readProperties(source: string): Property[] {
+  const block = extractFrontmatterBlock(source);
+  return block === null ? [] : parseFrontmatter(block);
+}
+
+/** Case-insensitive lookup, '' when absent. */
+export function propertyValue(props: Property[], key: string): string {
+  const found = props.find((p) => p.key.toLowerCase() === key.toLowerCase());
+  return found ? found.value : '';
+}
+
+/**
+ * A source document with its frontmatter removed.
+ *
+ * Used by the exporters that work on the SOURCE rather than the rendered HTML (LaTeX):
+ * without this the YAML block travels into the .tex file as garbage prose.
+ * Mirrors the renderer's rule - a block that yields no properties is NOT stripped, because
+ * the reader must not lose text that merely looks like frontmatter.
+ */
+export function stripFrontmatter(source: string): string {
+  if (readProperties(source).length === 0) return source;
+  return source.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?=\r?\n|$)[\r\n]*/, '');
+}
+
+/**
+ * Escape a value for LaTeX.
+ *
+ * The exporters substitute values into a template that is already valid LaTeX, so this only
+ * has to neutralise the characters that would otherwise change the document's meaning
+ * (`%` starts a comment, `&` an alignment, `_`/`^` math mode, and so on).
+ */
+export function escapeLatex(text: string): string {
+  return text.replace(/[\\{}$&#^_%~]/g, (c) => '\\' + c);
+}
+
 export function escapePropertyText(text: string): string {
   return text
     .replace(/&/g, '&amp;')

@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
+import { readProperties, propertyValue, stripFrontmatter, escapeLatex } from './utils/properties';
 import { extractOutline, visibleOutlineRows, countLines, type OutlineItem } from './utils/outline';
 import { renderDocument } from './utils/renderClient';
 import { checkForUpdate, installUpdate, type UpdateCheckResult, type UpdateProgress } from './utils/updater';
@@ -3148,7 +3149,7 @@ export const App: React.FC = () => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${activeFile.name.replace(/\.[^/.]+$/, '')}</title>
+  <title>${propertyValue(readProperties(activeFile.content), 'title') || activeFile.name.replace(/\.[^/.]+$/, '')}</title>
   <script>
     window.MathJax = {
       tex: {
@@ -3283,7 +3284,7 @@ export const App: React.FC = () => {
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>${activeFile.name.replace(/\.[^/.]+$/, '')}</title>
+  <title>${propertyValue(readProperties(activeFile.content), 'title') || activeFile.name.replace(/\.[^/.]+$/, '')}</title>
 </head>
 <body>
 ${renderedHtml}
@@ -3308,7 +3309,10 @@ ${renderedHtml}
       });
 
       if (targetPath) {
-        let texBody = activeFile.content;
+        // The YAML block must not travel into the .tex file as prose, and title/author/date
+        // belong in the preamble command, not in the body.
+        const texProps = readProperties(activeFile.content);
+        let texBody = stripFrontmatter(activeFile.content);
         texBody = texBody.replace(/^# (.+)$/gm, '\\section{$1}');
         texBody = texBody.replace(/^## (.+)$/gm, '\\subsection{$1}');
         texBody = texBody.replace(/^### (.+)$/gm, '\\subsubsection{$1}');
@@ -3325,9 +3329,9 @@ ${renderedHtml}
 \\usepackage{geometry}
 \\geometry{a4paper, margin=1in}
 
-\\title{${activeFile.name.replace(/\.[^/.]+$/, '')}}
-\\author{MarkdownX}
-\\date{\\today}
+\\title{${escapeLatex(propertyValue(texProps, 'title')) || activeFile.name.replace(/\.[^/.]+$/, '')}}
+\\author{${escapeLatex(propertyValue(texProps, 'author')) || 'MarkdownX'}}
+\\date{${propertyValue(texProps, 'date') ? escapeLatex(propertyValue(texProps, 'date')) : '\\today'}}
 
 \\begin{document}
 \\maketitle
@@ -3358,7 +3362,7 @@ ${texBody}
         const wordDocument = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
 <head>
   <meta charset='utf-8'>
-  <title>${activeFile.name.replace(/\.[^/.]+$/, '')}</title>
+  <title>${propertyValue(readProperties(activeFile.content), 'title') || activeFile.name.replace(/\.[^/.]+$/, '')}</title>
   <!--[if gte mso 9]>
   <xml>
     <w:WordDocument>
