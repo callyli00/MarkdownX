@@ -233,7 +233,27 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 > 其中**本质上不是"计划"的两条**（打包目标收敛、外壳布局的两条硬要求）已上移到 §6
 > 不变量第 7、8 条 —— 它们是不该随计划一起被清掉的信息。
 
-当前待办：**无**（等待新功能立项）。
+### 11.1 A 层（Obsidian 风格 Markdown 扩展）—— 立项中
+
+用户按"分三层"的讨论结论先做 **A 层（纯渲染层，不需要索引/库）**。开工前已核对代码现状：
+**Mermaid 与 Callout 其实早已实现**（`renderMermaidDiagrams()` + `renderer.blockquote` 的
+`<div class="callout-card">`），所以本轮只做真正的缺口：
+
+| 项 | 现状 | 计划 |
+|---|---|---|
+| A1 高亮 `==文字==` | **缺** | 源码级转换（跑在代码/公式掩码之后，自动免疫），产出 `<mark class="md-mark">` |
+| A2 注释 `%%文字%%` | **缺** | 预览与导出均不显示；只作用于非围栏正文（Mermaid 的 `%%` 注释不受影响） |
+| A3 Callout 类型补全 | 只有 `NOTE/TIP/WARNING/CAUTION/IMPORTANT/THEOREM/DEFINITION/ASSUMPTION` | 补 Obsidian 别名（info/todo/success/question/danger/bug/example/quote/abstract/faq/failure）+ **可折叠** `[!type]-` / `[!type]+` |
+| A4 脚注 `[^1]` | **缺**（marked v12 核心不含脚注） | 收集定义、按首次引用编号、回链；导出链路（HTML/Word/LaTeX）兼容 |
+| A5 任务列表样式 | GFM 已渲染 checkbox，但**无样式、不可交互** | 补 CSS；"点选回写源码"单独评估 |
+| A6 验收 | — | tsc + 单测 + 渲染等价护栏 + 真实文档渲染实测 |
+
+**实现纪律**（本轮三条硬约束）：
+1. 新语法一律跑在**掩码之后**（代码块与公式此时已是等长哨兵），从而实现"公式内不误判"而不额外写守卫；
+2. 任何删改字符都必须走 `trackedReplace` + `SourceTranslation`，保住源码⇄预览偏移（不变量 2）；
+3. 新增的可见 UI 元素必须同步进 `@media print` 隐藏列表（不变量 3）。
+
+B 层（frontmatter/属性）与 C 层（双链/索引）**本轮不做**。
 
 ---
 

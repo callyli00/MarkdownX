@@ -816,6 +816,37 @@ function processMathAndCitations(rawMarkdown: string): {
     tokenizeInlineMath
   );
 
+  // ---- A layer: Obsidian-style inline extensions --------------------------------
+  //
+  // Both passes run HERE on purpose: fenced blocks, inline code spans and every
+  // formula are still masked at this point (unmaskVerbatimRegions is called below),
+  // so `==x==` or `%%note%%` written inside a code sample, a code span, a Mermaid
+  // fence or `$a == b$` is unreachable *by construction* - there is no hand-written
+  // guard that can drift out of sync with the tokenizer.
+  //
+  // Comments first: a comment may legitimately contain `==`, and stripping it first
+  // means the highlight pass never sees text the reader is not meant to read.
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /(?<!\\)%%[\s\S]*?%%/g,
+    () => ''
+  );
+
+  // Highlight. The flanking rules are Obsidian's: no space directly after the opening
+  // `==` and none directly before the closing one. That single rule is what keeps
+  // ordinary prose comparisons out (`a == b`, `if (a == 5)`), and requiring the
+  // delimiter not to touch a word character keeps dense prose such as `a==b==c`
+  // literal. The trade-off is that `a==b` (no spaces) is not highlighted either -
+  // deliberately conservative: a missed highlight is visible and harmless, while a
+  // false one silently rewrites the author's text.
+  sanitized = trackedReplace(
+    sanitized,
+    translation,
+    /(?<![=\w])==(?![\s=])([^\n]*?[^\s=])(?<![\s=])==(?!=)/g,
+    (_match: string, body: string) => `<mark class="md-mark">${body}</mark>`
+  );
+
   // Restore code samples / comments only after all math rewriting is finished,
   // so marked receives the author's original bytes. Masks were length
   // preserving, so this round trip is transparent to the translation.
