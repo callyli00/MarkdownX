@@ -6,6 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
 import { readProperties, propertyValue, stripFrontmatter, latexMetadata, type PropertyKind } from './utils/properties';
+import { classifyLink, resolveRelativePath, anchorCandidates } from './utils/linkTarget';
 import { setProperty, removeProperty } from './utils/propertyEdit';
 import { extractOutline, visibleOutlineRows, countLines, type OutlineItem } from './utils/outline';
 import { renderDocument } from './utils/renderClient';
@@ -1995,6 +1996,55 @@ export const App: React.FC = () => {
       kind: (row.dataset.propKind as PropertyKind) || 'text',
       isNew: false,
     });
+  };
+
+  /**
+   * Clicking a link inside the preview.
+   *
+   * The WebView default is wrong for two of the three classes: `#anchor` swaps the document
+   * URL instead of scrolling the preview container, and a relative file link would NAVIGATE
+   * AWAY from the app - the editor replaced by a raw file view. Both are intercepted here.
+   * A file link reuses `openFileByPath`, i.e. exactly the path the sidebar and the recent
+   * list already use, so an already-open target is focused instead of opened twice.
+   *
+   * Returns true when the click was consumed.
+   */
+  const handlePreviewLink = (event: React.MouseEvent<HTMLElement>): boolean => {
+    const anchor = (event.target as HTMLElement).closest('a');
+    if (!anchor) return false;
+    const target = classifyLink(anchor.getAttribute('href') || '');
+    if (target.kind === 'anchor') {
+      event.preventDefault();
+      // Heading ids are percent-encoded, hand-written anchors are not: try both, plus the
+      // `heading-` prefix the renderer adds.
+      const candidates = [...anchorCandidates(target.fragment), ...anchorCandidates(`heading-${target.fragment}`)];
+      for (const id of candidates) {
+        const el = document.getElementById(id);
+        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); return true; }
+      }
+      return true;
+    }
+    if (target.kind === 'file') {
+      event.preventDefault();
+      const base = activeFile?.path || '';
+      if (!base) return true;          // unsaved document: nothing to resolve a relative link against
+      const resolved = resolveRelativePath(target.path, base);
+      if (resolved !== base) void openFileByPath(resolved);
+      return true;
+    }
+    if (target.kind === 'external') {
+      event.preventDefault();
+      // Never fall back to letting the WebView navigate: that destroys the editor.
+      void openExternalUrl(target.url);
+      return true;
+    }
+    return false;
+  };
+
+  /** One entry point for preview clicks: links first, then the property editor. */
+  const handlePreviewClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (handlePreviewLink(event)) return;
+    handlePropsClick(event);
   };
 
   const commitPropEditor = () => {
@@ -4588,7 +4638,7 @@ ${texBody}
                     className="academic-article"
                     dangerouslySetInnerHTML={{ __html: renderedHtml }}
                     onDoubleClick={handlePreviewDoubleClick}
-                    onClick={handlePropsClick}
+                    onClick={handlePreviewClick}
                   />
                 ) : (
                   <div
