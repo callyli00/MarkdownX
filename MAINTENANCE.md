@@ -11,6 +11,12 @@
 
 **工作目录**：`Z:\MarkDownX_app`（NAS 上的唯一真源；本地副本已废弃，见 §1.5）。
 
+> **本手册里所有命令都用「仓库相对路径」**（`scripts/…`、`src-tauri/…`、`tools/…`），
+> 因此**在原仓库或任意一份本地 clone 里都原样可用** ✓。只有三类路径是绝对的、且必须显式给出：
+> **签名私钥**（`TAURI_SIGNING_PRIVATE_KEY_PATH`）、**Android SDK/JDK**（§13）、以及 **NAS 本身**（§1.5）。
+> 注意 **不要**把 `/tmp`、`$HOME` 这类 MSYS 路径传给原生程序（`git`/`curl`/`robocopy`）——本 shell
+> 关闭了路径转换，会静默走错地方；要用 `C:/…` 或仓库相对路径（§8 有这条坑的原始记录）。
+
 ```bash
 npm ci                      # 首次：按 lock 精确安装（postinstall 会拷 MathJax / PDF.js 离线资源）
 npm run dev                 # 只跑前端热更（调 UI 时用这个，不碰 Rust）
@@ -54,7 +60,10 @@ npm run tauri build          # 缺私钥则不会产出 .sig，自动升级即�
 | 签名私钥 | `Z:\MarkDownX-keys\markdownx-updater.key`（**仓库之外**，git 看不到；`tauri.conf.json` 里只有公钥）|
 | 版本号来源 | `package.json` 的 `version` 是唯一权威，其余 5 处要同步（§3）|
 
-### NAS 上的三个环境事实（不知道会误以为"项目坏了"）
+### NAS 上必须知道的环境事实（不知道会误以为"项目坏了"）
+
+> 先记住分工：**NAS 是唯一真源与协作点（一切以 git 提交为准）**；而**重工具链要在本地盘的一次
+> clone 里运行** —— 下面前三条说明 git 与环境，后两条说明为什么必须这么做。
 
 1. **git 会拒绝操作**：SMB 共享里文件属主是 NAS 自己的账户，git 报 `detected dubious ownership`。
    在**每一台**访问这份副本的机器上各执行一次（限定路径，不要用 `*`）：
