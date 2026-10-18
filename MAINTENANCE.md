@@ -9,24 +9,67 @@
 
 ## 1. 三分钟上手
 
-```bash
-npm install                 # 顺带执行 postinstall 拷 MathJax 离线包
-npm run dev                 # 仅前端热更
-npm run tauri dev           # 完整桌面应用（Rust 增量编译较慢）
+**工作目录**：`Z:\MarkDownX_app`（NAS 上的唯一真源；本地副本已废弃，见 §1.5）。
 
-# 改动后必过的两道门
-npx tsc --noEmit                                    # 类型检查
-node tools/render-equivalence-gate/gate.cjs         # 渲染等价护栏（见 §6）
+```bash
+npm ci                      # 首次：按 lock 精确安装（postinstall 会拷 MathJax / PDF.js 离线资源）
+npm run dev                 # 只跑前端热更（调 UI 时用这个，不碰 Rust）
+npm run tauri dev           # 完整桌面应用（首次 Rust 编译较慢，之后是增量）
 ```
 
-打包（Windows）：
+**改动后必过的三道门**（缺一不可）：
 
 ```bash
-export MSYS2_ARG_CONV_EXCL='*'
-export TAURI_SIGNING_PRIVATE_KEY="C:/Users/callyli00/.tauri/markdownx-updater.key"
+npx tsc --noEmit                              # ① 类型检查
+npm run test                                  # ② 单测（vitest）
+node tools/render-equivalence-gate/gate.cjs   # ③ 渲染等价护栏
+# ③ 的判据只有两行，必须是这样：
+#   PASS 6/6 documents equivalent
+#   PASS line-ending equivalence 6/6
+```
+
+> ⚠️ **判据只认脚本自己的那两行结论，不要去数 PASS 行数** —— 数行数会在断言段变化时给出错误的
+> "通过"（真的犯过一次，见 §8.6）。
+
+**动了渲染器就多一步**：护栏里有黄金文件契约 —— 输出变了，要么把行为改回去，要么**逐字符审查差异后
+带着理由重新生成黄金**（见 §9.5）。
+
+打包（Windows，签名私钥在仓库之外）：
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="Z:/MarkDownX-keys/markdownx-updater.key"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 npm run tauri build          # 缺私钥则不会产出 .sig，自动升级即失效
 ```
+
+---
+
+## 1.5 环境与工作目录（NAS）
+
+| 项 | 位置 / 说明 |
+|---|---|
+| **唯一真源** | `Z:\MarkDownX_app`（NAS 共享；本地 `C:\Users\callyli00\Documents\MarkdownX-v1.6.0-Source` 已废弃删除）|
+| 远端 | `https://github.com/callyli00/MarkdownX`（`origin`）|
+| 分支语义 | `main` = 桌面发布线（**发版从这里出**）；`feat/android-port` = Android 线（含移动端外壳与 Android 构建配置）|
+| 签名私钥 | `Z:\MarkDownX-keys\markdownx-updater.key`（**仓库之外**，git 看不到；`tauri.conf.json` 里只有公钥）|
+| 版本号来源 | `package.json` 的 `version` 是唯一权威，其余 5 处要同步（§3）|
+
+### NAS 上的三个环境事实（不知道会误以为"项目坏了"）
+
+1. **git 会拒绝操作**：SMB 共享里文件属主是 NAS 自己的账户，git 报 `detected dubious ownership`。
+   在**每一台**访问这份副本的机器上各执行一次（限定路径，不要用 `*`）：
+   ```bash
+   git config --global --add safe.directory 'Z:/MarkDownX_app'
+   # 若用 UNC 路径（脚本内部可能用），再加一条：
+   git config --global --add safe.directory '%(prefix)///192.168.5.51/personal_folder/MarkDownX_app'
+   ```
+2. **首次构建慢是正常的**：`node_modules`、`src-tauri/target`、`src-tauri/gen/**/build` 都是可再生成的，
+   迁移时被有意排除 → Rust 首次全量构建约 10 分钟，Android 首次同理，第二次起才有缓存。
+3. **Windows 的 git TLS 可能握手失败**：症状是 `schannel: failed to receive handshake, SSL/TLS connection failed`
+   （而同一台机器上 `curl https://github.com` 却正常）。切到 Git for Windows 自带的 OpenSSL 后端即可：
+   ```bash
+   git config --global http.sslBackend openssl     # 需要改回时设回 schannel
+   ```
 
 ---
 
@@ -56,6 +99,22 @@ Tauri 命令：`get_cli_args`、`read_file_from_path`、`read_dir_files`、`togg
 
 ---
 
+### 2.1 平台无关的核心模块（新增功能优先落这里，因为可单测）
+
+| 文件 | 职责 |
+|---|---|
+| `src/utils/markdownRenderer.ts` | 渲染主管线：入口 LF 归一化 → Mermaid 围栏抬升 → 数学/引用的等长哨兵掩码 → A/B 层扩展 → marked → 后处理。**改这里必跑护栏** |
+| `src/utils/outline.ts` | 大纲提取（在 LF 空间做，避免 CRLF 下逐行正则全灭） |
+| `src/utils/properties.ts` | B 层：frontmatter 解析、属性卡渲染、导出元数据（`latexMetadata`/`escapeLatex`） |
+| `src/utils/propertyEdit.ts` | B 层写回：`setProperty`/`removeProperty`（只动目标行，其余逐字节原样） |
+| `src/utils/linkTarget.ts` | 预览链接分类与相对路径解析（锚点/文件/外部） |
+| `src/platform/documentUri.ts`、`recents.ts` | Android 线的文档库与最近文件（在 `feat/android-port` 上） |
+
+`src/utils/__tests__/` 下每个模块都有对应单测；**新功能优先在这类纯模块里实现并在那里测试**，
+`App.tsx` 只做接线。
+
+---
+
 ## 3. 版本号同步（6 处，缺一处就"版本不符"）
 
 | 文件 | 字段 |
@@ -74,15 +133,36 @@ Tauri 命令：`get_cli_args`、`read_file_from_path`、`read_dir_files`、`togg
 ## 4. 发布流程（已端到端验证）
 
 ```bash
-# ① 改版本号 + 在 README 写 ### [vX.Y.Z] - 日期 说明
-# ② 签名打包 + 生成 latest.json
-node scripts/release-update.mjs --owner callyli00 --repo MarkdownX
-# ③ 上传 raw 分支 + 建/更新 Release + 自动实测三条链路
-node scripts/release-update.mjs --owner callyli00 --repo MarkdownX --skip-build --publish
+# ① 改版本号（§3 的 6 处 + package-lock 第 3/9 行）+ README 写 ### [vX.Y.Z] - 日期
+#    + App.tsx 的 RELEASE_NOTES 顶部加一条（关于对话框读它）
+# ② 构建（会产出安装包 + .sig + latest.json）
+TAURI_SIGNING_PRIVATE_KEY_PATH=Z:/MarkDownX-keys/markdownx-updater.key \
+  node scripts/release-update.mjs --owner callyli00 --repo MarkdownX
+# ③ 确认产物存在（缺 .sig 说明没签名，装完的客户端将来无法升级）
+ls -la src-tauri/target/release/bundle/nsis/MarkdownX_<版本>_x64-setup.exe*
+# ④ 生成/复核 latest.json（复用已构建产物）
+TAURI_SIGNING_PRIVATE_KEY_PATH=Z:/MarkDownX-keys/markdownx-updater.key \
+  node scripts/release-update.mjs --owner callyli00 --repo MarkdownX --skip-build
+# ⑤ 发布：把「安装包 + latest.json」推到 release-assets 分支，再建 Release
+#    ⚠️ **不要用脚本的 --publish**：它走 Contents API 上传，大文件踩过事故（§8.5）
 ```
 
-`--publish` 会自动：清理被取代的旧安装包 → 上传安装包与 `latest.json` → 创建/更新 GitHub Release
-→ **打印 raw 与 Release 的 HTTP 结果**。看到三行 `✓ HTTP 200` 才算发布成功。
+**发布成功的判据**（三条链路都要 HTTP 200，且版本号一致）：
+
+```bash
+curl -s https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/latest.json | grep -o '"version":"[^"]*"'
+curl -sI https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/MarkdownX_<版本>_x64-setup.exe | grep -i content-length
+curl -sL https://github.com/callyli00/MarkdownX/releases/latest/download/latest.json | grep -o '"version":"[^"]*"'
+```
+
+② raw 清单的 `content-length` 必须与本地安装包**字节数完全一致**；raw CDN 有约 5 分钟缓存，读到旧版本等 1~2 分钟再试。
+
+> **NAS 上的已知灯下黑（2026-10-18 实测）**：② 这一步脚本可能在 1 秒内以
+> `stdin is not a tty` 退出 —— 那是 `execFileSync(..., { shell: true, stdio: 'inherit' })`
+> 在无 TTY 上下文里抛错让**脚本**早退，但它启的**构建子进程会脱离父进程继续跑完**。
+> 所以：看到这句不要立刻重跑（会同时再来一份构建、争同一个 target 锁）；
+> 用 `cargo`/`rustc` 进程是否存在 + 产物是否出现来判断构建是否结束，再用 ④ 继续。
+> **另：不要把脚本输出接 `| tail`** —— 构建几百行输出会把真正的报错吞掉（也踩过）。
 
 | 发布会落点 | 内容 | 用途 |
 |---|---|---|
@@ -210,6 +290,24 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 
 ---
 
+## 8.6 三条提交/验证纪律（2026-10-18 连续踩到后固化）
+
+1. **提交范围显式列举，禁用 `git add -A` 兜底。**
+   一次 `git add -A` 把 `src-tauri/gen/` 的 Android 构建产物（446 MB）扫进了发布提交，只能回退重做。
+   现在 `src-tauri/gen/` 已在 `.gitignore` 里，但纪律仍然成立：**只 add 你真正改过的路径**。
+2. **判据只认脚本自己的结论，不数行数。**
+   我连续几轮上报"护栏 12 行 PASS"，那是 `grep -c "^PASS"` 数出来的 —— 而当时护栏其实是
+   `FAIL 5/6 documents equivalent`。**读脚本输出的 `PASS/FAIL N/N` 那一行**，不要读计数器。
+3. **长任务一律写日志文件再读末尾，不要接 `| tail` 看输出。**
+   构建类命令的几百行输出里，真正的报错会被 `tail` 截掉，只剩无关的收尾行 —— 
+   结果是拿"看起来失败"或"看起来成功"去猜。日志文件 + `tail -40 <日志>` 才是可靠读法。
+
+附带一条**契约**纪律：**黄金文件（`tools/render-equivalence-gate/golden/`）只能带理由改。**
+改渲染器导致输出变化时，先逐字符审查差异（确认只有预期改动），再重新生成并写明原因；
+不要为了让护栏变绿而直接覆盖黄金。做法见 §9.5。
+
+---
+
 ## 9. 验证方法论（"能跑"必须有证据）
 
 | 层次 | 手段 |
@@ -223,6 +321,43 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 | 网络可达性 | 对每个候选 URL `curl` 计时与跳转数（见 §5） |
 
 浏览器 harness 目前在临时目录、不随仓库分发；**仓库内持久可复现的只有 tsc + gate**，其余需按上表重建。
+
+---
+
+## 9.5 新增或修改一个功能：标准流程
+
+**先定位再动手**（`search_files`/`grep` 找锚点，不要凭记忆改）→ **改 → 跑三道门（§1）→ 提交（§8.6.1）**。
+
+按改动类型看额外要动什么：
+
+| 你改了什么 | 必须同步做的事 |
+|---|---|
+| 渲染器（`src/utils/markdownRenderer.ts` 等） | 跑护栏；输出有变化就按契约处理黄金文件（下方流程）；必要时补单测 |
+| 预览里的交互（`src/App.tsx`） | 纯逻辑抽到 `src/utils/*.ts` 并写单测；**在真实应用里验证**（§9 的手法） |
+| 外壳/样式（`src/App.css`） | 新增的**界面元素**要判断是否属于内容：chrome 必须加进 `@media print` 隐藏列表（不变量 3） |
+| 版本相关（发版） | §3 的 6 处 + `package-lock` 第 3/9 行 + README + `RELEASE_NOTES` + `MAINTENANCE` 对应版本；`Cargo.lock` 里 markdown-x 的版本行会在构建后由 cargo 写回，记得补记一次 |
+| Android 相关 | 在 `feat/android-port` 分支上做；APK 配方见该分支的 §13 |
+
+**黄金文件的正确处理流程**（渲染器输出变化时）：
+
+```bash
+# 1) 拿出当前渲染，与黄金逐字符比对（不要只看长度）
+node -e "…"                   # 渲染目标语料 → 临时文件
+# 2) 用 Python 的 difflib 逐行 + 逐字符看差异，确认只有预期改动
+# 3) 确认后覆盖该语料的黄金，并把差异写进提交说明
+cp <当前渲染> tools/render-equivalence-gate/golden/<语料>.md.html
+# 4) 重跑护栏，读它自己的结论：PASS 6/6 + PASS 6/6
+```
+
+**真实应用里的验证手法**（本项目长期使用，可复用）：
+
+- 桌面调试包：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 启动
+  `src-tauri/target/debug/markdown-x.exe <样本文档>`，再用 CDP（WebSocket + `Runtime.evaluate`）读 DOM 断言；
+- 预览是**只读**的、编辑在「源码」视图：要验证"回写源码"，必须切到 `.wb-view-tab` 文本为 `源码`
+  的那个页签去读 `textarea`（预览模式下**没有** textarea）；
+- React 受控输入要用**原生 setter + 派发 `input` 事件**才能触发 `onChange`（直接改 `.value` 无效）；
+- 「没滚动」「没生效」先怀疑**样本设计**（文档太短不需要滚动、目标在文档最末够不到顶部）——
+  这两次都误判过，见 §8.6 的教训。
 
 ---
 
