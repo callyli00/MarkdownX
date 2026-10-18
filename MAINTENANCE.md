@@ -93,6 +93,18 @@ node scripts/release-update.mjs --owner callyli00 --repo MarkdownX --skip-build 
 **签名私钥**：`C:\Users\callyli00\.tauri\markdownx-updater.key`（仓库外、未被 git 跟踪）。
 **丢了它，已安装客户端将永久无法接受后续更新** —— 请离线备份到密码管理器。配置里只有公钥。
 
+**NAS 上的副本（源码迁到 `Z:\MarkDownX_app` 后新增）**：`Z:\MarkDownX-keys\markdownx-updater.key`
+（在 `Z:\MarkDownX_app` **之外** ✓，git 看不到它 ✓，已核对 SHA-256 与原件一致 ✓）。
+在 NAS 上发版时显式指定路径：
+
+```bash
+TAURI_SIGNING_PRIVATE_KEY_PATH=Z:/MarkDownX-keys/markdownx-updater.key \
+  node scripts/release-update.mjs --owner callyli00 --repo MarkdownX
+```
+
+脚本默认路径仍是本机 `C:/Users/callyli00/.tauri/…`（`scripts/release-update.mjs` 第 27 行）✓。
+注意：网络盘上无法设置 POSIX 权限 ✓，访问控制依赖 NAS 的账号权限 ✓。
+
 ---
 
 ## 5. 自动升级机制（应用检查、用户决定、不回滚）
