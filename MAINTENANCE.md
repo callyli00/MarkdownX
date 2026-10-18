@@ -79,6 +79,29 @@ npm run tauri build          # 缺私钥则不会产出 .sig，自动升级即�
    ```bash
    git config --global http.sslBackend openssl     # 需要改回时设回 schannel
    ```
+4. **`vite dev` 不要跑在网络盘上**（2026-10-18 实测）：从 NAS 启动，**120 秒仍未就绪** ——
+   dev server 要遍历 `node_modules` 的十几万个小文件走 SMB。**要看界面就把仓库 clone 到本地盘再跑。**
+5. **Android 构建无法在网络盘上进行**（同次实测）：`npx tauri android build` 在 NAS 路径上 3 秒内 panic ——
+   `AssetDirOutsideOfAppRoot { asset_dir: "assets", root_dir: "Z:\\…\\src-tauri" }`；
+   改成 UNC 路径同样 panic（`helpers\\app_paths.rs:140`），所以不是盘符形式问题，是 Tauri CLI 的路径解析
+   不支持网络路径。**Android 打包必须在本地盘的 clone 里做。**
+   （**桌面**构建不受影响：同一份仓库在 NAS 上成功产出了 v2.6.0 的 NSIS 安装包与签名。）
+
+### 因此的分工（均已实测）
+
+| 用途 | 放在哪 | 依据 |
+|---|---|---|
+| 唯一真源 / 协作 / 归档 | **NAS `Z:\MarkDownX_app`** | 一切以 git 为准；本手册命令皆为仓库相对路径，在 clone 里同样可用 |
+| `vite dev`（要看界面时） | **本地盘的 clone** | 网络盘上 120 秒仍未就绪（事实 4）|
+| Android 打包 | **本地盘的 clone** | 网络盘上 3 秒 panic（事实 5）|
+| 桌面发版构建 / 发布脚本 | 两边皆可 | NAS 上已验证可行（会慢一些）|
+
+本地工作区示例（可随时删，仅用于构建）：
+```bash
+git clone -b feat/android-port https://github.com/callyli00/MarkdownX.git C:/Users/<user>/mrx-android-build
+cd C:/Users/<user>/mrx-android-build && npm ci && npx tauri android build --apk --target aarch64
+```
+> 附带好处：**用全新 clone 构建，等于同时验证了"推上去的分支能被独立构建成功"** ✓。
 
 ---
 
