@@ -137,7 +137,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.5.0';
+const APP_VERSION = 'v2.6.0';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -179,6 +179,17 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.6.0',
+    date: '2026-10-18',
+    items: [
+      'Markdown 文件内链接跳转：预览里点 #锚点 会滚动到目标（不再改写文档 URL）',
+      '相对文件链接（如 [邻居](./other.md)）在应用内直接打开目标文件，不再把编辑器导航走',
+      '脚注与回链获得双向跳转：点引用跳到脚注本体，点 ↩ 跳回引用处',
+      '外部链接交给系统浏览器打开，且绝不回退到让 WebView 自己导航',
+      '修复：护栏黄金文件未随 A 层 callout 产出更新（补上 data-callout 后重新生成并逐字符审查过差异）'
+    ]
+  },
   {
     version: 'v2.5.0',
     date: '2026-10-17',
