@@ -3329,6 +3329,8 @@ body.theme-dark .doc-tab-badge {
 @media print {
   .ctx-menu,
   .ctx-menu-backdrop,
+  /* Invariant 3: chrome must not reach the printout. The palette is chrome. */
+  .pdf-tool-palette,
   .sb-splitter-open { display: none !important; }
 }
 
@@ -3599,15 +3601,21 @@ body.host-mobile .wb-tb-right { gap: 2px; }
    takes its own wrapped line. `flex-wrap`, not `overflow-x: auto`: an overflow container
    would force the cross axis to auto too and clip the export dropdown hanging out of this
    row (a trap already recorded for the menu code). */
-body.host-mobile .wb-topbar { flex-wrap: wrap; height: auto; min-height: 56px; padding-block: 4px; }
-body.host-mobile .wb-tb-left { flex-wrap: wrap; }
-body.host-mobile .pdf-tool-icons {
-  flex: 1 1 100%;
-  order: 2;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-}
+/* NOTE (fixed 2026-10-18): this block used to let the top bar wrap and gave the eight PDF
+   tool icons `flex: 1 1 100%`, i.e. a full extra row INSIDE the top bar. With a PDF open the
+   bar grew to two rows and the document tab strip below it was pushed down / covered - the
+   reported Android bug. The tools now live in a palette (one button in the bar, see
+   .pdf-tool-palette), so the bar is single-row again and nothing here may re-enable wrapping. */
+body.host-mobile .wb-topbar { flex-wrap: nowrap; }
+body.host-mobile .wb-tb-left { flex-wrap: nowrap; }
+
+/* Mobile PDF tool palette: every row carries icon + label, because touch has no hover and
+   the desktop row relied on `title` for that. Rows inherit the touch-sized .dropdown-item
+   rule below (min-height 44px). */
+.pdf-tool-palette { min-width: 210px; }
+.pdf-tool-palette-item.active { background: var(--wb-sel); }
+.pdf-tool-palette-label { display: flex; align-items: center; gap: 10px; }
+.pdf-tool-palette-label svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--wb-fg2); }
 
 /* Touch has no hover state, so anything that only becomes reachable on :hover can
    never be reached at all. Give the list rows a finger-sized row instead. */

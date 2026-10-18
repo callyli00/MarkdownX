@@ -1353,6 +1353,14 @@ export const App: React.FC = () => {
   // PDF viewing state lives here (not inside PdfViewer) because the controls are
   // spread across the app chrome: tool icons in the top bar, zoom in the status bar.
   const [pdfTool, setPdfTool] = useState<ViewerTool | null>(null);
+  /**
+   * Mobile PDF tool palette (option B): the top bar carries ONE button instead of the eight
+   * tool icons. On a 406px viewport the eight icons forced the icon row to wrap, which grew
+   * the top bar to two rows and pushed the document tab strip down / under it. A palette also
+   * answers a second problem the icon row had on touch: there is no hover, so the tool titles
+   * were unreachable - here every row carries its own label.
+   */
+  const [isPdfPaletteOpen, setIsPdfPaletteOpen] = useState(false);
   const [pdfScale, setPdfScale] = useState<number>(1.25);
   const [pdfPrintToken, setPdfPrintToken] = useState<number>(0);
   /** Text selected in the viewer, waiting for a toolbar mark button to be pressed. */
@@ -3112,6 +3120,10 @@ export const App: React.FC = () => {
   };
 
   /** Toolbar icon semantics: apply to a pending selection, else toggle the tool. */
+  // Leaving a PDF (or switching tabs) must not leave the palette flagged open, or opening
+  // the next PDF would show it already expanded. Declared here, after `activeFile`.
+  useEffect(() => { if (activeFile?.kind !== 'pdf') setIsPdfPaletteOpen(false); }, [activeFile?.kind]);
+
   const onPdfToolButton = (id: ViewerTool | null) => {
     const isMark = id === 'highlight' || id === 'underline' || id === 'strikeout';
     if (id && isMark && applyMarkToPendingSelection(id)) {
@@ -4191,7 +4203,8 @@ ${texBody}
 
           {/* PDF annotation tools: icon buttons placed AFTER print/export, and only
               rendered while a PDF tab is active (Markdown never shows them). */}
-          {activeFile?.kind === 'pdf' && (
+          {/* Desktop: the eight tool icons sit in the bar exactly as before. */}
+          {activeFile?.kind === 'pdf' && !isMobile && (
             <div className="pdf-tool-icons">
               {PDF_TOOL_ICONS.map((t) => (
                 <button
@@ -4203,6 +4216,36 @@ ${texBody}
                   <AppIcon name={t.icon} size={16} />
                 </button>
               ))}
+            </div>
+          )}
+          {/* Mobile: ONE button, whose icon IS the armed tool, opening a labelled palette.
+              Same PDF_TOOL_ICONS list and same onPdfToolButton handler as the desktop row -
+              no second set of logic to drift out of sync. */}
+          {activeFile?.kind === 'pdf' && isMobile && (
+            <div className="wb-menu-host">
+              <button
+                className={`wb-icon-btn ${pdfTool ? 'active' : ''}`}
+                onClick={() => setIsPdfPaletteOpen((v) => !v)}
+                title={pdfTool ? `标注工具（当前：${PDF_TOOL_ICONS.find((t) => t.id === pdfTool)?.title ?? ''}）` : '标注工具'}
+              >
+                <AppIcon name={PDF_TOOL_ICONS.find((t) => t.id === pdfTool)?.icon ?? 'marker'} size={16} />
+              </button>
+              {isPdfPaletteOpen && (
+                <div className="typora-dropdown-menu wb-dropdown pdf-tool-palette">
+                  {PDF_TOOL_ICONS.map((t) => (
+                    <div
+                      key={String(t.id)}
+                      className={`dropdown-item pdf-tool-palette-item ${pdfTool === t.id ? 'active' : ''}`}
+                      onClick={() => { setIsPdfPaletteOpen(false); onPdfToolButton(t.id); }}
+                    >
+                      <span className="pdf-tool-palette-label">
+                        <AppIcon name={t.icon} size={16} />
+                        <span>{t.title}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
