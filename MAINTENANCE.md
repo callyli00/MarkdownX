@@ -778,6 +778,16 @@ JDK 版本不会撞墙的依据：Tauri CLI 的 `gradle_max_supported_java("9.6.
   正是后续 intent 关联、权限、返回键要动的地方，必须版本可控。
 - 例外：`src-tauri/gen/schemas` 仍然忽略（tauri-build 每次构建重建 ACL schema）。
 
+> **2026-10-20 补：这条纪律曾被 `.gitignore` 违反过，而症状是"静默的"。**
+> `.gitignore` 里当时有一条兜底的 `src-tauri/gen/`（§8.6.1 的 446 MB 事故之后加的）。
+> 它和本节直接冲突，危险之处在于**已跟踪的文件不受忽略规则影响** —— 所以 41 个骨架文件照常
+> 可提交、看起来一切正常；但**任何新增文件都会被静默忽略**：`git status` 什么都不显示，
+> 你以为提交了、其实 git 从没见过它（改 manifest、加一个 Kotlin 文件都会中招）。
+> 已替换为按目录的精确规则：`src-tauri/gen/android/**/build/`、`.gradle/`、`local.properties`、
+> `key.properties`、`keystore.properties`、`.tauri/`、`tauri.settings.gradle`、
+> `app/src/main/java/**/generated/`、`app/proguard-tauri.pro`、`app/src/main/jniLibs/`。
+> 模板自带的内层 `.gitignore` 仍是第一道防线；§8.6.1「提交范围显式列举、禁用 `git add -A`」照旧。
+
 ### 13.4 Android 平台约束（已核实的支持矩阵，逐项来自官方文档）
 
 | 能力 | Android | 备注 |

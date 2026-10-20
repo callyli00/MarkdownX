@@ -46,4 +46,23 @@ yarn-error.log*
 
 # Tauri / Android codegen and build outputs: regenerable (see MAINTENANCE 13.8).
 # Committing them added ~446 MB of gradle intermediates to a release commit by mistake.
-src-tauri/gen/
+#
+# 2026-10-20: the blanket `src-tauri/gen/` rule that used to live here is replaced by the
+# explicit rules below. The Android skeleton MUST stay version controlled (MAINTENANCE
+# 13.3); while the blanket rule existed, any NEW file under src-tauri/gen/android/ was
+# silently ignored - `git status` showed nothing, so an edit could look committed while
+# git never saw it. Already-tracked files kept working, which is exactly what hid the
+# problem. Build outputs remain ignored via the template's own inner .gitignore files
+# (gen/android/.gitignore, gen/android/app/.gitignore) plus these rules.
+src-tauri/gen/android/**/build/
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/key.properties
+src-tauri/gen/android/keystore.properties
+src-tauri/gen/android/.tauri/
+src-tauri/gen/android/tauri.settings.gradle
+# codegen 产物：由 tools/android-codegen.py 生成（MAINTENANCE 13.8）
+src-tauri/gen/android/app/src/main/java/**/generated/
+src-tauri/gen/android/app/proguard-tauri.pro
+# 未 strip 时可达 153 MB 的 .so，由 Tauri CLI 以符号链接放进 jniLibs
+src-tauri/gen/android/app/src/main/jniLibs/
