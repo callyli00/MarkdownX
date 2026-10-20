@@ -4,6 +4,10 @@
 以及**哪些坑真的踩过、哪些结论真的验证过**。
 
 > 对应版本：v2.6.0（2026-10-18）。每条操作都来自本项目的实际执行记录，不是推测。
+>
+> **2026-10-20 补**：本机 profile 重装后工具链被清空，补上「已有什么 / 还缺什么 / 怎么装」的基线核实
+> （§1.6，至此本机重新具备桌面打包与 Android 构建的前提）；另记录一条会**静默误判成"项目坏了"**的坑 ——
+> UNC 当前目录会让 `npm`/`npx` 在 `C:\Windows` 里执行（§1.5 事实 6）。
 
 ---
 
@@ -63,7 +67,7 @@ npm run tauri build          # 缺私钥则不会产出 .sig，自动升级即�
 ### NAS 上必须知道的环境事实（不知道会误以为"项目坏了"）
 
 > 先记住分工：**NAS 是唯一真源与协作点（一切以 git 提交为准）**；而**重工具链要在本地盘的一次
-> clone 里运行** —— 下面前三条说明 git 与环境，后两条说明为什么必须这么做。
+> clone 里运行** —— 下面 1~3 条说明 git 与环境，4~6 条说明为什么"离开网络盘"这条边界比看上去更宽。
 
 1. **git 会拒绝操作**：SMB 共享里文件属主是 NAS 自己的账户，git 报 `detected dubious ownership`。
    在**每一台**访问这份副本的机器上各执行一次（限定路径，不要用 `*`）：
@@ -86,6 +90,16 @@ npm run tauri build          # 缺私钥则不会产出 .sig，自动升级即�
    改成 UNC 路径同样 panic（`helpers\\app_paths.rs:140`），所以不是盘符形式问题，是 Tauri CLI 的路径解析
    不支持网络路径。**Android 打包必须在本地盘的 clone 里做。**
    （**桌面**构建不受影响：同一份仓库在 NAS 上成功产出了 v2.6.0 的 NSIS 安装包与签名。）
+6. **UNC 当前目录会让 `npm`/`npx` 跑到 `C:\Windows` 去执行**（2026-10-20 实测，且**不报路径错误**）：
+   `cmd.exe` 不支持 UNC 作为当前目录，会打印
+   `CMD.EXE was started with the above path as the current directory. UNC paths are not supported.
+   Defaulting to Windows directory.` 然后在 `C:\Windows` 里跑。两个现场：
+   - `npx tsc --noEmit` → 打印 tsc 的**帮助文本**（找不到 tsconfig），exit 1；
+   - `npm run test` → `RUN v2.1.9 C:/Windows`，随后 `EPERM: operation not permitted, scandir 'C:\Windows\CSC'`，exit 1。
+   两者都看起来像"项目坏了"，实际是工作目录错了。**直接 `node` 跑脚本不受影响** ——
+   同一时刻 `node tools/render-equivalence-gate/gate.cjs` 在 UNC 下仍然 `PASS 6/6 + 6/6`。
+   → 凡是要经 cmd 的命令（`npm` / `npx` / `tauri`）都把工作目录设成**盘符路径** `Z:\MarkDownX_app`，
+   或 `cd` 进本地 clone。自查：`(Get-Location).Path` 应以 `Z:\` 开头，而不是 `\\`。
 
 ### 因此的分工（均已实测）
 
@@ -102,6 +116,44 @@ git clone -b feat/android-port https://github.com/callyli00/MarkdownX.git C:/Use
 cd C:/Users/<user>/mrx-android-build && npm ci && npx tauri android build --apk --target aarch64
 ```
 > 附带好处：**用全新 clone 构建，等于同时验证了"推上去的分支能被独立构建成功"** ✓。
+
+### 1.6 本机构建工具链基线（2026-10-20 重装后重新核实）
+
+> **为什么要有这一节**：2026-10-18 那次 v2.6.0 打包之后，本机用户 profile 被重装，
+> `~\.rustup`、`~\.cargo`、`~\.tauri` **都已不存在**，而 `src-tauri/target/release/` 里仍留着
+> 24.8 MB 的 `markdown-x.exe` 和签名好的安装包 —— 极易误判成"工具链还在"。重建时照本节做。
+
+**已核实无需安装**（2026-10-20 本机实测，不是推测）：
+
+| 组件 | 实测版本 | 核实方式 |
+|---|---|---|
+| Visual Studio Enterprise 2022 | `17.14.36915.13`，MSVC `14.44.35207`，`cl` 19.44.35222 | `vswhere -all -products * -format json`；直接执行 `VC\Tools\MSVC\<ver>\bin\Hostx64\x64\cl.exe` |
+| Windows SDK | `10.0.26100.0` | `C:\Program Files (x86)\Windows Kits\10\lib` |
+| Node.js / npm | `v24.16.0` / `11.17.0` | `node -v` / `npm -v` |
+| WebView2 运行时 | `155.0.4283.62` | 注册表 `EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}` 的 `pv` |
+
+**结论：C++ 侧完整，唯一需要管理员的那一步可以跳过**；下面三样均为**用户级安装**：
+
+| 项 | 版本（钉死依据） | 装法 |
+|---|---|---|
+| Rust | stable **msvc** 工具链；上次成功构建是 `rustc 1.98.1`（证据：`src-tauri/target/.rustc_info.json`）| `rustup-init.exe -y --default-toolchain stable-x86_64-pc-windows-msvc --profile default`，再 `rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android`（§13.5）|
+| JDK | **21 LTS** | `aka.ms/download-jdk/microsoft-jdk-21-windows-x64.zip` → `%LOCALAPPDATA%\Java`。依据：wrapper 钉 Gradle **9.6.1** + AGP **9.3.1** + `jvmTarget = JVM_1_8` → JDK 17+ 即可；Tauri 的 `gradle_max_supported_java("9.6.1") = 26` 给出上界。原 Android Studio 自带 jbr 是 25.0.3，也可用 |
+| Android SDK | cmdline-tools **23.0**（`commandlinetools-win-16111833_latest.zip`，解压后**必须**是 `cmdline-tools\latest`）+ `platforms;android-36`、`platforms;android-37`、`build-tools;36.0.0`、`platform-tools`、`ndk;30.0.16248370` | 版本从 `dl.google.com/android/repository/repository2-3.xml` 查得；`ndk` 与两个 `compileSdk` 取自 `gen/android/app/build.gradle.kts` 与 `:tauri-android`（§13.6.2 第 2 条：**36 和 37 都要**）|
+
+环境变量（用户级）：`JAVA_HOME`、`ANDROID_HOME`、`NDK_HOME = %ANDROID_HOME%\ndk\30.0.16248370`；
+PATH 追加 `%USERPROFILE%\.cargo\bin`、`%ANDROID_HOME%\cmdline-tools\latest\bin`、`%ANDROID_HOME%\platform-tools`。
+**注册表里新设的变量当前 shell 继承不到**（同 §13.1），装完要新开进程。
+（不要把 PATH 用 `setx PATH` 写，它会截断到 1024 字符；用 `[Environment]::SetEnvironmentVariable('Path', …,'User')`。）
+
+两个一次性前提：
+
+1. **开发者模式必须开**（§13.6.1）：否则 Android 构建卡在 `.so` 的符号链接那一步，报
+   `Creation symbolic link is not allowed for this system`。
+2. **签名私钥要回填**：默认路径 `~\.tauri\markdownx-updater.key` 已随 profile 重装丢失，从
+   `Z:\MarkDownX-keys\markdownx-updater.key` 复制回去（或发版时显式给 `TAURI_SIGNING_PRIVATE_KEY_PATH`，见 §4）。
+
+**验证状态（诚实声明）**：上表"已核实无需安装"四行与三样缺项清单均为 2026-10-20 本机/官方索引实测；
+但**端到端（桌面 NSIS 打包 + Android APK）尚未在本机复验**。复验通过后应在此补记实际产物大小与版本。
 
 ---
 
