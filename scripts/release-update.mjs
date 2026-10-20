@@ -8,8 +8,14 @@
  *   1. Builds the app with updater artifacts enabled, signing with the minisign key
  *      that lives OUTSIDE this repository (never commit it).
  *   2. Collects the NSIS installer plus its .sig file.
- *   3. Writes latest.json in the format the Tauri updater expects.
+ *   3. Stages and minisign-signs the Android APK with the SAME key, then writes
+ *      latest.json in the format the Tauri updater expects.
  *   4. Prints the two commands that publish it (GitHub CLI, or the manual route).
+ *
+ * The APK signature is not optional. `tauri-plugin-updater` deserializes every entry of the
+ * `platforms` map into `{ url, signature }` with no default on `signature`, so one
+ * signature-less entry (the Android one) makes the whole manifest unreadable on the desktop.
+ * See scripts/release-manifest.mjs for the full story.
  *
  * Release notes come from this project's README changelog: the newest `### [vX.Y.Z]`
  * section is used verbatim, so notes live in exactly one place.
@@ -29,6 +35,7 @@ import {
   writeFileSync
 } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { ANDROID_PLATFORM, WINDOWS_PLATFORM, buildManifest, rawAssetUrl } from './release-manifest.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_KEY = 'C:/Users/callyli00/.tauri/markdownx-updater.key';
@@ -101,6 +108,49 @@ if (!existsSync(signatureFile)) {
 }
 const signature = readFileSync(signatureFile, 'utf8').trim();
 
+/**
+ * Minisign-sign one file in place and return the signature text.
+ *
+ * The Tauri CLI is invoked as `node <cli.js>` instead of `npx tauri`/`shell:true`: no shell
+ * means no quoting of Windows paths (the repo and bundle dir live on a NAS share), and
+ * `--app-version` stamps the version into the signature's trusted comment so a future
+ * `requireSignedVersion` can pin an artifact to the release that announced it.
+ */
+function signFile(file) {
+  const sigPath = `${file}.sig`;
+  rmSync(sigPath, { force: true });
+  execFileSync(
+    process.execPath,
+    [
+      join(ROOT, 'node_modules', '@tauri-apps', 'cli', 'tauri.js'),
+      'signer', 'sign', file,
+      '--private-key-path', keyPath,
+      '--app-version', version
+    ],
+    {
+      cwd: ROOT,
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || ''
+      }
+    }
+  );
+  if (!existsSync(sigPath)) {
+    throw new Error(`APK 签名没有产出 ${sigPath}：更新清单将无法生成（缺少 signature 会让桌面端报 missing field）`);
+  }
+  return readFileSync(sigPath, 'utf8').trim();
+}
+
+// 2b. stage and sign the APK
+// Signing happens on the STAGED file so the trusted comment's `file:` field names the asset
+// the manifest actually advertises. The signature is required even though only the Android app
+// downloads this asset - `tauri-plugin-updater` deserializes every `platforms` entry, so a
+// signature-less entry breaks the desktop too (see scripts/release-manifest.mjs).
+const apkAssetName = `MarkdownX_${version}_universal-release.apk`;
+const apkStaged = apkPath ? stageFile(apkPath, apkAssetName) : null;
+const apkSignature = apkStaged ? signFile(apkStaged) : null;
+
 // 3. release notes straight from the README changelog
 const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
 const heading = `### [${tag}]`;
@@ -117,30 +167,31 @@ if (start !== -1) {
 }
 
 const assetName = `MarkdownX_${version}_x64-setup.exe`;
-const apkAssetName = `MarkdownX_${version}_universal-release.apk`;
-const manifest = {
+const manifest = buildManifest({
   version,
   notes,
-  pub_date: new Date().toISOString(),
-  platforms: {
-    'windows-x86_64': {
-      signature,
-      url: `https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${assetName}`
+  pubDate: new Date().toISOString(),
+  // Both platforms, one manifest: the desktop and the Android updaters read the same file so a
+  // release can never advertise two different versions. Every entry carries a real signature -
+  // `buildManifest` refuses to emit one that does not (v2.6.1 shipped a signature-less Android
+  // entry and every desktop update check died with `missing field 'signature'`).
+  platforms: [
+    {
+      platform: WINDOWS_PLATFORM,
+      url: rawAssetUrl(owner, repo, ASSET_BRANCH, assetName),
+      signature
     },
-    // Android reads the same manifest (`android_update.rs`): the APK is an EXTRA platform
-    // entry rather than a second manifest file, so one release can never advertise two
-    // different versions. No signature field: the APK is not minisign-signed - Android
-    // itself refuses to install a package whose signing certificate differs from the
-    // installed app's, which is the check that matters here.
-    ...(apkPath
-      ? {
-          'android-universal': {
-            url: `https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${apkAssetName}`
+    ...(apkStaged
+      ? [
+          {
+            platform: ANDROID_PLATFORM,
+            url: rawAssetUrl(owner, repo, ASSET_BRANCH, apkAssetName),
+            signature: apkSignature
           }
-        }
-      : {})
-  }
-};
+        ]
+      : [])
+  ]
+});
 
 const manifestPath = join(bundleDir, 'latest.json');
 mkdirSync(dirname(manifestPath), { recursive: true });
@@ -149,7 +200,10 @@ writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 console.log('\n✓ 产物');
 console.log(`   安装包:   ${installer}`);
 console.log(`   签名:     ${signatureFile}`);
-console.log(`   APK:      ${apkPath ? `${apkPath}  → ${apkAssetName}` : '（本次不含 Android 资产）'}`);
+console.log(
+  `   APK:      ${apkStaged ? `${apkStaged}  → ${apkAssetName}` : '（本次不含 Android 资产）'}`
+);
+if (apkStaged) console.log(`   APK 签名: ${apkStaged}.sig（必需：桌面端会解析整个 platforms 映射）`);
 console.log(`   更新清单: ${manifestPath}`);
 console.log(`\n   应用将拉取: https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/latest.json`);
 
@@ -293,7 +347,8 @@ function stageFile(src, name) {
 
 if (process.argv.includes('--publish')) {
   console.log('\n→ 发布（分支用 git 强推，资产用 gh release upload；都不走 Contents API）');
-  const apkStaged = apkPath ? stageFile(apkPath, apkAssetName) : null;
+  // `apkStaged` was already staged and signed above, before the manifest was written, so the
+  // published bytes and the signature in latest.json are guaranteed to describe the same file.
   const releaseAssets = [installer, manifestPath, ...(apkStaged ? [apkStaged] : [])];
   publishAssetBranch(releaseAssets);
   // Also (re)create the GitHub Release: human-facing page, tag, and the fallback endpoint.

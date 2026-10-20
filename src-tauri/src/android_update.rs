@@ -17,10 +17,17 @@
 //!   "notes": "…",
 //!   "platforms": {
 //!     "windows-x86_64": { "signature": "…", "url": "…setup.exe" },
-//!     "android-universal": { "url": "…universal-release.apk" }
+//!     "android-universal": { "signature": "…", "url": "…universal-release.apk" }
 //!   }
 //! }
 //! ```
+//!
+//! The APK entry carries a signature too, even though nothing on Android checks it. It is not
+//! decorative: `tauri-plugin-updater` deserializes every entry of `platforms` into
+//! `{ url, signature }` and fails the whole document when one is missing, so a signature-less
+//! Android entry broke the DESKTOP updater in v2.6.1 (`missing field 'signature'`). Android
+//! itself ignores the field - the trust anchor there is the Android signing certificate, since
+//! the OS refuses to install over a package with a different one. See `parse_manifest`.
 //!
 //! Only the Android commands in `lib.rs` use these items, but the module is compiled on every
 //! target so `cargo test` (which runs on the host) covers it. Hence the dead-code allowance

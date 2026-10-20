@@ -1408,8 +1408,8 @@ ACL manifest、请求来自 local origin，app 命令直接放行。所以桥的
 **修复**：`scripts/release-update.mjs` 新增 `--apk <path>` 参数，APK 会被：
 
 1. 改名为 `MarkdownX_<version>_universal-release.apk`；
-2. 写进 `latest.json` 的 `platforms["android-universal"]`（**无签名字段** —— APK 不是 minisign 签的，
-   完整性由 Android 的证书校验保证，见 §13.9）；
+2. 写进 `latest.json` 的 `platforms["android-universal"]`（**同样带签名字段** —— 当初以为"只有手机读这一项"
+   而省略了签名，结果把桌面端的更新检查整个搞挂，详见 §13.11）；
 3. 随安装包一起强推到 `release-assets` 分支，并作为 Release 资产上传。
 
 **本次实测（全部 HTTP 200）**：
@@ -1451,3 +1451,79 @@ node scripts/release-update.mjs --owner callyli00 --repo MarkdownX `
 
 **仍需真机验收**（同 §13.9 清单）：本节只证明"资产确实发布出去了、地址可达"，
 打印对话框与下载—安装整条链路还没有物理设备可验。
+
+### 13.11 v2.6.1 复发：桌面端「检查更新失败 ✗ missing field `signature`」
+
+**症状**：桌面版点「检查更新」立刻报错，提示框还建议"请确认更新源已配置 … 且网络可达"。
+
+```
+检查更新失败 ✗
+missing field `signature`
+```
+
+但 `raw.githubusercontent.com/.../latest.json`、两个资产、Release 兜底端点全部 HTTP 200 —— **网络完全正常**，
+是**清单读不了**。
+
+**根因（不是 Android 的问题，是 Android 的改动打到了桌面端）**：§13.10 为了"手机端能拿到 APK"往
+`latest.json` 的 `platforms` 里加了 `android-universal` 一项，并**特意省掉了 `signature`**
+（理由：APK 不是 minisign 签的、只有手机读这一项、完整性由 Android 证书校验保证）。
+
+前两条都错了，而且是同一个错：
+
+1. **签名是必填的**。`tauri-plugin-updater` 2.13.1 的
+   `ReleaseManifestPlatform`（`updater.rs:84-89`）是
+   `{ url: Url, signature: String }`，`signature` 上**没有** `#[serde(default)]`；
+2. **桌面会解析每一项**。`InnerRemoteRelease.platforms`
+   （`updater.rs:1575`）是 `Option<HashMap<String, ReleaseManifestPlatform>>` —— 反序列化一个 map
+   会把**每个值都构造出来**，不是按目标平台惰性取。于是"只有手机读的那一项"照样把整份文档拖挂了。
+
+失败点在**反序列化**阶段，早于 `get_urls` 的目标平台查找（`updater.rs:701-731`），所以桌面根本走不到
+"只有 `windows-x86_64` 和我有关"那一步 —— `missing field` 就是 serde 的原始报错。
+
+那个"请确认更新源已配置/网络可达"的提示是**误导**：它把"清单解析失败"归因到了配置和网络。
+
+**修复（一处，覆盖两端）**：**用同一把 updater 私钥把 APK 也签了**，`android-universal` 带上真实签名。
+
+- 桌面：`platforms` 全部条目齐全 → 恢复正常（`windows-x86_64` 的签名本来就对，未改动）；
+- Android：`android_update.rs::parse_manifest` 只读 `version` / `notes` /
+  `platforms["android-universal"].url`，**完全不看 `signature`** —— 多一个字段对它零影响，
+  信任锚仍然是 Android 自己的安装证书校验（同 §13.9 第 7 条）。
+
+没有选"给 Android 单开一份清单"或"让桌面端自己过滤平台"：前者破坏"一次发布只有一个版本"的约束，
+后者要绕过插件默认路径、为一个既定形状的问题改客户端。
+
+**代码层面的防线**（避免第三次）：
+
+1. 清单构造抽成纯模块 `scripts/release-manifest.mjs` 的 `buildManifest()` / `assertManifest()`：
+   `url` 与 `signature` 同级必填，`signature` 为空/纯空白一律抛错；`platforms` 用**数组**传
+   （键名打错不会静默多出一项），并拒绝重复平台。
+2. `scripts/release-update.mjs` 现在**先暂存 APK、再签名、最后写清单**，签到的是
+   `bundle/MarkdownX_<version>_universal-release.apk` 本体 —— 发布字节与清单里的签名必然描述同一个文件。
+   签名调 `node node_modules/@tauri-apps/cli/tauri.js signer sign …`（不走 `shell:true`，共享路径免引号问题），
+   并带 `--app-version`，把版本写进 trusted comment。
+3. 单测 `scripts/release-manifest.test.mjs`（新增，`vitest.config.ts` 的 `include` 因此扩到
+   `scripts/**/*.test.mjs`）：直接复现历史形状（Android 项无 `signature`）断言**构造阶段就抛错**。
+4. 集成测试 `src-tauri/tests/updater_manifest.rs`（新增目录）：用**真实**的
+   `tauri_plugin_updater::RemoteRelease` 反序列化双平台清单，并断言
+   "少一个 signature → 整份文档 `expect_err`" —— 这条把插件的行为本身钉住，
+   将来插件改了要求会在这里失败，而不是在用户机器上。该文件用
+   `#![cfg(any(windows, macos, linux))]` 圈住，因为 `tauri-plugin-updater` 只在桌面目标上是依赖（`Cargo.toml:44-46`）。
+
+**验收（真实验签，不是"字段非空"）**：
+
+- 用独立 crate 调 `minisign-verify`（与插件 `verify_signature` 同一套原语）
+  对 `bundle/MarkdownX_2.6.1_universal-release.apk` + 其 `.sig` + `tauri.conf.json` 里的 `pubkey`
+  做密码学校验：**VERIFY OK**，trusted comment =
+  `timestamp… file:MarkdownX_2.6.1_universal-release.apk version:2.6.1`；
+- 线上 `release-assets` 分支的 APK 重新下载后 SHA-256 = `A296F528…6A6F`，与本地被签的那份**逐字节一致**
+  → 签名对**发布出去的字节**有效；
+- 拉线上 `latest.json`，用真实 `tauri_plugin_updater::RemoteRelease` 反序列化：**通过**，
+  `windows sig len=440`、`android sig len=448`、`notes_len=1906`；
+- 端点复测：raw 三件资产 + `releases/latest/download/latest.json` 全 **HTTP 200**。
+
+**门禁**：`npx tsc --noEmit` 0；vitest **25 文件 / 214 用例**（原 24/204，+1 文件 +10 用例）；
+`node tools/render-equivalence-gate/gate.cjs` **6/6 + 6/6**；`cargo test` **13 个**（10 单测 + 3 集成）。
+
+**教训**：跨平台共用一个清单时，"某一项只有另一个平台会读"是**伪假设** ——
+序列化格式的必填字段对所有读者生效。改共享格式前，先看消费者**类型定义**怎么写的，
+别只看它**取用逻辑**取不取。

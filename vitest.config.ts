@@ -6,6 +6,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    // `scripts/**/*.test.mjs` guards build-time output the app consumes at runtime (the updater
+    // manifest). It stays plain JS on purpose: `tsconfig.json` includes only `src`, so release
+    // tooling is deliberately outside the type-checked program.
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.mjs'],
   },
 });
