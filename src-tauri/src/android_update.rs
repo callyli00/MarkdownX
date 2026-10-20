@@ -21,6 +21,11 @@
 //!   }
 //! }
 //! ```
+//!
+//! Only the Android commands in `lib.rs` use these items, but the module is compiled on every
+//! target so `cargo test` (which runs on the host) covers it. Hence the dead-code allowance
+//! everywhere else - the alternative would be `cfg`-gating the module and losing the tests.
+#![cfg_attr(not(target_os = "android"), allow(dead_code))]
 
 /// Key under `platforms` that carries the APK. One universal APK holds every ABI, so there
 /// is exactly one Android asset per release rather than a per-ABI family the manifest would
