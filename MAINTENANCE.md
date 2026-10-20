@@ -152,6 +152,21 @@ PATH 追加 `%USERPROFILE%\.cargo\bin`、`%ANDROID_HOME%\cmdline-tools\latest\bi
 2. **签名私钥要回填**：默认路径 `~\.tauri\markdownx-updater.key` 已随 profile 重装丢失，从
    `Z:\MarkDownX-keys\markdownx-updater.key` 复制回去（或发版时显式给 `TAURI_SIGNING_PRIVATE_KEY_PATH`，见 §4）。
 
+**装完后的验收顺序**（顺序本身是有原因的，见下条注）：
+
+```powershell
+cd Z:\MarkDownX_app                      # 必须盘符路径；UNC 会让 npm/npx 跑到 C:\Windows（§1.5 事实 6）
+npx tauri info                           # 期望 rustc / Cargo / rustup 三项从 ✘ 变 ✔
+cd src-tauri; cargo fetch; cd ..          # 干净机器必需：否则下一步报 no cargo registry sources
+python tools/android-codegen.py          # 补两个 codegen 产物（幂等）
+npm run tauri build                      # 验收：NSIS 安装包 + .sig
+npx tauri android build --apk --target aarch64
+```
+
+> `cargo fetch` 那一步是 2026-10-20 实测出来的：`android-codegen.py` 从 cargo registry 的
+> `tauri-2.12.1/mobile/` 取模板，而全新机器上 `~\.cargo\registry\src` 还不存在 —— 直接跑脚本会
+> 以 `no cargo registry sources` 退出，看起来像"脚本坏了"。详见 §13.8。
+
 **验证状态（诚实声明）**：上表"已核实无需安装"四行与三样缺项清单均为 2026-10-20 本机/官方索引实测；
 但**端到端（桌面 NSIS 打包 + Android APK）尚未在本机复验**。复验通过后应在此补记实际产物大小与版本。
 
@@ -1197,6 +1212,12 @@ runTauriCli(if (windows) "cmd" else "npm", if (windows) listOf("/c", "npm") else
 已提供可重复执行的脚本：`python tools/android-codegen.py`（幂等，从 cargo registry 里按最高版本
 自动定位模板，包名读自 `tauri.conf.json`）。
 
+> **干净机器上必须先 `cargo fetch`**（2026-10-20 实测）：`android-codegen.py` 的模板取自
+> cargo registry 里的 `tauri-<ver>/mobile/`，而新机器没跑过任何 cargo 命令时该目录不存在，
+> 脚本会直接退出：`no cargo registry sources at C:\Users\<user>\.cargo\registry\src`。
+> 在 `src-tauri/` 里先跑一次 `cargo fetch`（只下载依赖、不编译；`Cargo.lock` 已锁 tauri **2.12.1**），
+> 再跑 codegen 就正常。**顺序不能反过来** —— 否则会误以为"脚本坏了"。
+
 **可用的构建命令**（不再需要 `-x rustBuild*`）：
 
 ```bash
@@ -1204,6 +1225,7 @@ export JAVA_HOME="C:/Program Files/Android/Android Studio/jbr"
 export ANDROID_HOME="C:/Users/<user>/AppData/Local/Android/Sdk"
 export NDK_HOME="$ANDROID_HOME/ndk/30.0.16248370"
 export PATH="/c/Program Files/nodejs:$PATH"     # gradle daemon 靠 PATH 找 npm.cmd
+(cd src-tauri && cargo fetch)                    # 干净机器必需：填充 registry，见上方提示
 python tools/android-codegen.py                  # 缺失时补两个 codegen 产物
 npx tauri android build --apk --target aarch64
 ```
