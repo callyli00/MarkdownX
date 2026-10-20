@@ -1,0 +1,15 @@
+{
+  "version": "2.6.1",
+  "notes": "#### 手机端打印与在应用内更新（Android）\n- **打印**：`window.print()` 在 Android WebView 里是静默空操作，改为调用 Android 系统打印服务\n  （`PrintManager` + WebView 的 `createPrintDocumentAdapter`）。它跑的是与桌面相同的 Chromium 打印管线，\n  因此**同一套 `@media print` 样式表**生效：界面全部隐藏、版心铺平、A4 分页，输出即桌面那份。\n  系统对话框里可直接选打印机，也可「另存为 PDF」。\n- **打印时不动 DOM**：打印适配器在你于系统对话框中确认之后才抓取 WebView，所以打印前不能改页面、\n  打印后也不能立刻回收 —— 打印样式表独自完成排版，正是为了满足这一点。\n- **手机端 PDF**：PDF 查看器在打印样式里是隐藏的，且 iframe 路径的 `contentWindow.print()` 同样无实现，\n  所以手机端该按钮改为**导出压平副本**（得到任何阅读器 / 手机打印 App 都能打印的 PDF），菜单文案随之变化。\n- **在应用内更新**：`tauri-plugin-updater` 不支持 Android，APK 更新链路自己实现 —— 读 `latest.json`\n  （与桌面同一份清单，APK 是 `platforms` 里多出的一项）→ Rust 侧比较版本 → 下载到应用缓存 →\n  交给系统安装器；签名是否一致由 Android 自己强制（证书不同则拒绝安装）。\n- **先要权限再下载**：Android 8+ 需要「安装未知应用」授权，插件在**下载前**检查并跳到该设置页，\n  避免白花 20+ MB 流量。「检查更新」也在手机端恢复（启动 20 秒后静默检查，发现新版本只在帮助处点一个小圆点）。\n- **发布流程带上 APK**：`node scripts/release-update.mjs --apk <apk> …` 会把 APK 写进\n  `latest.json` 的 `android-universal` 项并上传到 `release-assets` 与 Release 资产，桌面与手机共用同一个版本号。",
+  "pub_date": "2026-10-20T08:43:01.848Z",
+  "platforms": {
+    "windows-x86_64": {
+      "url": "https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/MarkdownX_2.6.1_x64-setup.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTUW11NElLelc2SHU5Rk90eFZjdDJTN3NRdGFoZFdPczVXT3V3WU5KM0RxVkpSNEhJTnhnUTE3NWl5QXlEOUVMS1MvYmw5TFlUcE1sd1NMTkR2NGQ3eTR2VHlvTTQwWmdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNDc1ODI4CWZpbGU6TWFya2Rvd25YXzIuNi4xX3g2NC1zZXR1cC5leGUJdmVyc2lvbjoyLjYuMQpzWFA0SlFaZy9TQ1hwRzc2ZjJsZ2dhZlBXdEZBUUVQWDVBT0lxTE9RQjlhSFZtMjkvRGpIekNBZFpHZWFGeUhzZCs3OHlEcE8wSDZicVlweWk2U2ZDQT09Cg=="
+    },
+    "android-universal": {
+      "url": "https://raw.githubusercontent.com/callyli00/MarkdownX/release-assets/MarkdownX_2.6.1_universal-release.apk",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTUW11NElLelc2SHRKK2dBZ1BMT0w1WVV1RWxrRGdYOHFHQ1hOKytqUjRrVmh1MzllSUVmVllMUjBVRnNuSURsanNYeHdIQytWVHpJRFdiUEZOSzlpdGdsT2FhM2Y2UWdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNDg1NzgxCWZpbGU6TWFya2Rvd25YXzIuNi4xX3VuaXZlcnNhbC1yZWxlYXNlLmFwawl2ZXJzaW9uOjIuNi4xClpNYmVpZTN6b3l5TTZjalN3SHg5S2hyRHFCc2twTS9XYUdoTkk0L2ROcnNLWWZST1hOLzBld3ROSEZxMHliMU9oakwzS09OVDNFM3RZNDJrcS96eUFRPT0K"
+    }
+  }
+}
