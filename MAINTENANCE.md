@@ -178,7 +178,52 @@ npx tauri android build --apk --target aarch64
 | `npx tauri info` 环境段 | ✅ 全 ✔ | `rustc 1.99.1 (58cf8f9c3)`、`cargo 1.99.1`、`rustup 1.29.1`、`MSVC: Visual Studio Enterprise 2022`、`WebView2 155.0.4283.62`。**注意：要在本地 clone 里跑** —— 装上 Rust 后它要解析 cargo 元数据，从网络盘跑会挂起 >10 分钟（两次实测），本地盘 120s 内返回 |
 | 桌面 `npm run tauri build` | ✅ | 7.6 分钟（首次全量编译）；产物 `MarkdownX_2.6.0_x64-setup.exe` **12.78 MiB** + `.sig`；日志末尾 `No updater private key password provided, assuming an empty password`、`Finished 1 updater signature` |
 | `python tools/android-codegen.py` | ✅ | 先 `cargo fetch` 后正常；模板取自 `tauri-2.12.1\mobile`，写入 `TauriActivity.kt`(1442 B) 与 `proguard-tauri.pro`(182 B)，占位符已替换 |
-| `npx tauri android build --apk` | ⛔ **仅剩开发者模式** | ① 网络盘上立即 panic（`AssetDirOutsideOfAppRoot`，`mobile/mod.rs:640`，0 分钟）→ 必须在本地 clone；② 本地 clone 里 Rust 交叉编译**成功**（`libmarkdown_x_lib.so` **20.6 MB**，与"带 `custom-protocol` 应 >20 MB"的判据相符），随后在符号链接处失败：`Failed to create a symbolic link ... Creation symbolic link is not allowed for this system` |
+| `npx tauri android build --apk` | ⛔ CLI 路径仍需开发者模式；✅ **APK 经无提权旁路已产出** | ① 网络盘上立即 panic（`AssetDirOutsideOfAppRoot`，`mobile/mod.rs:640`，0 分钟）→ 必须在本地 clone；② 本地 clone 里 Rust 交叉编译**成功**（`libmarkdown_x_lib.so` **20.6 MB**，与"带 `custom-protocol` 应 >20 MB"的判据相符），随后卡在 `.so` 符号链接：`Creation symbolic link is not allowed for this system`；③ 按下面 §1.6.1 的旁路出包成功 |
+
+### 1.6.1 开发者模式开不了时，如何仍然产出 APK（2026-10-20 实测）
+
+Tauri CLI 在 `jniLibs/` 里建**符号链接**，非管理员在未开开发者模式的 Windows 上必然失败，且没有开关可绕
+（§13.6.1）。但 CLI 的两件事是分开的：**编 `.so`** 与 **建链接并调 gradle**。只要 `.so` 已就绪，
+就可以复制进去、跳过那几个任务直接用 gradle 装配：
+
+```powershell
+# 0) 前置：codegen 产物（-x 会连带跳过生成 TauriActivity 的任务，所以这里必须先有）
+python tools/android-codegen.py
+# 1) .so 已由失败的那次 CLI 构建编出；复制（不是链接）到 jniLibs
+$jni = "src-tauri\gen\android\app\src\main\jniLibs\arm64-v8a"
+New-Item -ItemType Directory -Force $jni | Out-Null
+Copy-Item "src-tauri\target\aarch64-linux-android\release\libmarkdown_x_lib.so" $jni -Force
+# 2) 跳过会建符号链接的 rustBuild* 任务，直接装配 release 包
+cd src-tauri\gen\android
+.\gradlew.bat :app:assembleUniversalRelease --console=plain `
+  -x rustBuildArm64Release -x rustBuildArmRelease -x rustBuildX86Release -x rustBuildX86_64Release -x rustBuildUniversalRelease
+```
+
+**新机器上还会撞到第二个坑（本条为 2026-10-20 首次记录）**：
+
+```
+Execution failed for task ':app:validateSigningUniversalRelease'.
+> Keystore file 'C:\Users\<user>\.android\debug.keystore' not found for signing config 'selfSigned'.
+```
+
+新机器没有那个 keystore（平时由 Android Studio 首次 debug 构建自动生成）。用 JDK 自带 keytool 按标准参数补：
+
+```powershell
+& "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v `
+  -keystore "$env:USERPROFILE\.android\debug.keystore" -alias androiddebugkey `
+  -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android `
+  -dname "CN=Android Debug,O=Android,C=US"
+```
+
+**产物与验收（实测）**：
+`gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` = **22.19 MB**，687 个条目、
+解压合计 23.1 MB（与文件大小相符，未见 §13.6.3 的"体积翻倍假象"）；包内 `lib/arm64-v8a/libmarkdown_x_lib.so`
+**21,053.9 KB**；`apksigner verify --print-certs` exit 0（`CN=Android Debug`）；
+`aapt2 dump badging` → `package com.markdownx.editor versionCode=2600000 versionName=2.6.0`、
+`minSdkVersion 24`、`targetSdkVersion 37`、`launchable-activity com.markdownx.editor.MainActivity`。
+
+> **这条旁路是给"开不了开发者模式"时的兜底，不是首选**：`npx tauri android build --apk` 是正规入口，
+> 一旦开发者模式打开，仍应按 §1.6 的验收顺序走 CLI。
 
 实际安装到的版本：Rust `1.99.1`（stable-x86_64-pc-windows-msvc，另加 4 个 android target）、
 JDK `21.0.12.1`（`%LOCALAPPDATA%\Java\jdk-21.0.12.1+1`）、SDK `platforms/android-36` +
