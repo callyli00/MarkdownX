@@ -194,7 +194,12 @@ function publishAssetBranch(files) {
   const names = files.map((file) => basename(file));
   files.forEach((file) => copyFileSync(file, join(dir, basename(file))));
 
-  const run = (args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+  // `-c safe.directory=*`: the staging repo lives inside the build tree, which on the NAS
+  // share is owned by the file server account rather than the account running this script.
+  // Git then refuses every command with "dubious ownership in repository at ..." and the
+  // release cannot be published from a share checkout at all.
+  const run = (args) =>
+    execFileSync('git', ['-c', 'safe.directory=*', ...args], { cwd: dir, stdio: 'pipe' });
   run(['init', '-q']);
   run(['checkout', '-q', '-b', ASSET_BRANCH]);
   // Explicit paths only (never `git add -A`): `bundleDir` lives inside target/, and a stray
