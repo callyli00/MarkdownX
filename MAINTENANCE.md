@@ -245,19 +245,27 @@ JDK `21.0.12.1`（`%LOCALAPPDATA%\Java\jdk-21.0.12.1+1`）、SDK `platforms/andr
 | `src/utils/markdownRenderer.ts` | ~1026 | **渲染管线**：`renderMarkdown`（整篇）/`renderMarkdownPayload`（Worker 安全）/`finalizeAssetUrls`（主线程）；公式与引用 token 化；位置锚点 `data-src-*`；Mermaid 与代码遮蔽 |
 | `src/utils/renderClient.ts` | ~140 | 渲染客户端：≥20KB 走 Worker，**任何失败回退同步**（只慢不错） |
 | `src/utils/renderWorker.ts` | 47 | Worker 入口（纯字符串→字符串，禁止引入 DOM 依赖） |
-| `src/utils/updater.ts` | ~109 | 自动升级：检查/安装，**失败归一为状态值，绝不抛错** |
-| `src-tauri/src/lib.rs` | ~214 | Rust 命令、**单实例回调**、文件监视器、插件注册 |
+| `src/utils/updater.ts` | ~250 | 自动升级：桌面走 updater 插件、Android 走原生桥（同一份 `latest.json`），**失败归一为状态值，绝不抛错** |
+| `src-tauri/src/android_update.rs` | ~190 | Android 更新清单解析 + 版本比较（**无 cfg，宿主可 `cargo test`**；7 项单测） |
+| `src-tauri/src/lib.rs` | ~330 | Rust 命令、**单实例回调**、文件监视器、插件注册、**Android 原生桥** |
 | `src-tauri/installer-hooks.nsh` | 67 | NSIS 钩子：文件关联（`OpenWithProgids` + 仅认领无主类型 + 立即刷新） |
 | `src-tauri/tauri.conf.json` | ~89 | 窗口/CSP/打包目标/**文件关联**/**updater 端点与公钥** |
-| `scripts/release-update.mjs` | ~271 | 发布：签名打包 → 清单 → 上传 raw + 建 Release → **自动实测** |
+| `src-tauri/gen/android/app/src/main/java/com/markdownx/editor/MobileExtrasPlugin.kt` | ~300 | **Android 原生能力**：系统打印 + APK 下载/安装（§13.9） |
+| `scripts/release-update.mjs` | ~310 | 发布：签名打包 → 清单（含 APK）→ 上传 raw + 建 Release → **自动实测** |
 | `scripts/copy-mathjax.cjs` | ~85 | 离线 MathJax 打包（含 35 个 TeX 扩展；缺了公式会报错） |
 | `tools/render-equivalence-gate/` | — | 渲染等价护栏（语料 + 黄金文件 + gate） |
 | `src/pdf/` | — | PDF 预览/标注/结构编辑（v2.3.0 新增；纯逻辑带 Vitest 覆盖） |
 | `scripts/copy-pdfjs.cjs` / `scripts/copy-cjk-font.cjs` | — | 离线拷贝 PDF.js 资源与 CJK 便签字体 |
 
-Tauri 命令：`get_cli_args`、`read_file_from_path`、`read_dir_files`、`toggle_fullscreen`、
-`toggle_always_on_top`、`open_devtools`、`start_watching_file`、`stop_watching_file`。
-权限见 `src-tauri/capabilities/default.json`（含 `updater:default`、`process:allow-restart`）。
+Tauri 命令：`get_cli_args`、`get_host_platform`、`read_file_from_path`、`read_dir_files`、
+`toggle_fullscreen`、`toggle_always_on_top`、`open_devtools`、`start_watching_file`、
+`stop_watching_file`、`list_system_fonts`，以及 Android 桥的四个（v2.6.1）：
+`native_print`、`android_update_check`、`android_update_install`、`android_update_progress`。
+权限见 `src-tauri/capabilities/desktop.json` 与 `mobile.json`（含 `updater:default`、
+`process:allow-restart`）。**Android 桥的四个命令是 app 命令，不是 `plugin:` 命令** —— 本应用没有
+app 级 ACL manifest，app 命令对 local origin 直接放行，所以它们不需要任何 capability 例外；
+Kotlin 类仍经一个**不暴露任何命令**的 Tauri 插件包装注册，因为 `register_android_plugin` 只存在于
+`PluginApi` 上（见 §13.9）。
 
 ---
 
@@ -1081,8 +1089,10 @@ curl http://127.0.0.1:9222/json
 supported on macOS on wry"，最后一句 "`window.print()` works on all platforms" 在 Android 上是**错的**
 —— WebView 没有 print 实现，`window.print()` 是静默空操作（不报错、界面无变化）。
 `core:webview:allow-print` 权限在移动端存在，但它守护的 API 被编译掉了（又一处"有权限、无 API"）。
-要真正的**安卓系统打印**只能自己写 Kotlin 插件（`PrintManager` + `WebView.createPrintDocumentAdapter()`）；
-手机端当前用**文件导出**（HTML/Word/LaTeX/PDF）替代。
+
+**v2.6.1 已实现真正的安卓系统打印**（§13.9）：Kotlin 侧 `PrintManager` +
+`WebView.createPrintDocumentAdapter()`，跑的是与桌面相同的 Chromium 打印管线，所以 `@media print`
+样式表原样生效。此条保留作为"为什么必须自己写 Kotlin"的证据链。
 
 **PDF"打开不渲染"**：真机实测根因**不是没渲染，而是渲染得太宽**。
 实测：查看器宽 303px，而 canvas 按 `cssW=744`（A4 @96dpi 自然宽度）绘制 →
@@ -1298,3 +1308,92 @@ npx tauri android build --apk --target aarch64
 
 **`versionCode`**：本次由 `2403000`(v2.4.3) 升到 `2407000`(v2.4.7)，沿用既有写法（注意本节上方记录的
 "`major*1000000 + minor*1000 + patch`"公式算不出 `2403000`，实际沿用值才是准的）。
+
+**`versionCode` 的真实公式（2026-10-20 复核）**：`major*1e6 + minor*1e5 + patch*1e3`，与历史值全部吻合
+（2.4.3→2403000、2.4.7→2407000、2.5.0→2500000、2.6.0→2600000、**2.6.1→2601000**）。
+本次先按 `patch*100` 误写成 2600100（数值仍递增，但会打乱后续排序），已改回 2601000 并重新出包。
+`tauri.properties` 由 CLI 从 `tauri.android.conf.json` 写入；手改 conf 后必须让 CLI 再跑一次
+（或同步改 `gen/android/app/tauri.properties`），否则 Gradle 仍用旧 versionCode。
+
+---
+
+### 13.9 Android 原生桥：系统打印 + 应用内 APK 更新（v2.6.1 实现）
+
+两条硬事实决定了必须写 Kotlin：`window.print()` 在 Android WebView 里**无实现**（§13.6.6），
+`tauri-plugin-updater` **不支持 mobile**（§13.4）。实现分三处，缺一处就是"点了没反应"：
+
+| 位置 | 职责 |
+|---|---|
+| `src-tauri/gen/android/app/src/main/java/com/markdownx/editor/MobileExtrasPlugin.kt` | Kotlin 侧：`printDocument` / `fetchText` / `installUpdate` / `downloadState` |
+| `src-tauri/src/lib.rs`（`#[cfg(target_os = "android")]` 段） | 注册 Kotlin 类、`run_mobile_plugin` 转发、清单端点从配置读回 |
+| `src-tauri/src/android_update.rs` | 清单解析 + 版本比较（**无 cfg，宿主 `cargo test` 覆盖**） |
+
+**调用链与命名必须一致**：
+
+```
+JS: invoke('native_print' | 'android_update_check' | 'android_update_install' | 'android_update_progress')
+  → lib.rs: #[tauri::command] → PluginHandle::run_mobile_plugin("<method>", payload)
+  → Kotlin: @Command fun <method>(invoke: Invoke)      ← 方法名就是 run_mobile_plugin 的字符串
+```
+
+**为什么是 app 命令而不是 `plugin:` 命令**：`tauri/src/webview/mod.rs` 对**任何** `plugin:` 前缀的命令
+都强制走 ACL（`if plugin_command.is_some() || has_app_acl_manifest || !is_local`），而本应用没有 app 级
+ACL manifest、请求来自 local origin，app 命令直接放行。所以桥的四个命令**不需要**任何 capability 条目，
+也就没有"权限给了、命令仍被拒"这一类故障。Kotlin 类仍然需要一个 **Tauri 插件壳**，因为
+`register_android_plugin` 只存在于 `PluginApi` 上；这个壳叫 `markdownx-mobile`，**不声明任何命令**。
+
+**打印**（`MobileExtrasPlugin.printDocument`）：
+
+1. `PrintManager.print(jobName, webView.createPrintDocumentAdapter(jobName), null)`；jobName 带时间戳，
+   因为系统保留打印历史、重名会让连续两次打印难以分辨。
+2. 它跑的是与桌面相同的 Chromium 打印管线 → **`@media print` 样式表原样生效**（不变量 3 继续成立：
+   界面元素本来就被那张表隐藏、版心铺平、A4 分页）。输出等于桌面那份，不是手机截图。
+3. **打印期间绝不改 DOM**：适配器要等用户在系统对话框里确认之后才抓取 WebView。所以"打印前加个
+   body class、打完立刻删"这种做法在这里是错的 —— 也正是打印样式表独自完成排版的原因。
+4. 命令本身只把任务丢到主线程并立刻 resolve；`run_mobile_plugin` 不会等到用户按"打印"。
+5. **手机端 PDF**：打印样式表故意 `display:none` 掉查看器，iframe 路径的 `contentWindow.print()`
+   同样无实现，所以手机端该按钮改为**导出压平副本**（`handleExportFlattenedPdf`），菜单文案随文件类型变。
+
+**更新**（`fetchText` / `installUpdate` / `downloadState`）：
+
+1. 清单是**同一份 `latest.json`**：APK 是 `platforms` 里多出的 `android-universal` 一项，
+   桌面与手机因此不可能对同一版本号有两种说法。签名字段只对 Windows 有意义（minisign）；
+   APK 不是 minisign 签的 —— 它的完整性由 **PackageManager 校验签名证书**保证，证书不符系统直接拒绝安装。
+2. 端点不写死在 Kotlin 里：`lib.rs` 从**合并后的运行时配置**读 `plugins.updater.endpoints`
+   （即 `tauri.conf.json` 那一处，唯一真源），再依次尝试。
+3. 版本比较在 Rust（`android_update::compare_versions`，数值逐段比较，`2.10.0 > 2.9.9`；
+   预发布 `2.7.0-beta.1` 不会被当成比 `2.7.0` 新）；网络在 Kotlin（`HttpURLConnection`，不引入
+   reqwest 这类要从零交叉编译的依赖）。
+4. 下载到 `cacheDir/updates/MarkdownX-<ver>.apk`（`.part` 临时文件 + 长度校验后改名），
+   旧包在下次下载时删除。进度写在 `@Volatile` 字段里，JS 每 600ms 轮询 `android_update_progress`。
+5. 安装：`FileProvider(applicationId + ".fileprovider")` 取 `content://`（模板里已有 `cache-path` 根，
+   所以**不需要**额外存储权限），`ACTION_VIEW` + `application/vnd.android.package-archive` +
+   `FLAG_GRANT_READ_URI_PERMISSION`。
+6. 权限：manifest 里 `REQUEST_INSTALL_PACKAGES`，外加用户一次性授权「安装未知应用」；
+   **下载前**就检查并在未授权时跳转设置页，避免白花 20+ MB 流量。
+7. 调试包换钥匙的后果：Android 要求升级包与被装包**同一签名证书**。本机 `~/.android/debug.keystore`
+   是本次会话生成的；若手机上是别的密钥签的旧包，安装会失败，需要先卸载旧包（会丢 localStorage 偏好）。
+
+**R8 不能把插件类裁掉**（这类故障只在真机复现）：release 开了 R8，而插件类**只被 JNI 按名查找**。
+`tauri-android` 的 `consumer-rules.pro` 里有
+`-keep @app.tauri.annotation.TauriPlugin public class * { @app.tauri.annotation.Command public <methods>; ... }`，
+所以 app 自己的 `@TauriPlugin` 类会自动保留。**已实测**（从产物 `classes.dex` 里按字节搜索）：
+`com/markdownx/editor/MobileExtrasPlugin`、`printDocument`、`fetchText`、`installUpdate`、`downloadState`、
+以及 `Lapp/tauri/annotation/Command;` / `Lapp/tauri/annotation/TauriPlugin;` 注解串都在。
+升级 tauri 版本或改动 consumer rules 后，这条检查必须重做 —— 否则运行时报
+`No command printDocument found for plugin`。
+
+**验证边界（必须说清楚，别把"编译过"当"能用"）**：
+
+- **已验证**：`tsc` 0；单测 204 项（新增 `updaterAndroid.test.ts` 8 项）；护栏 6/6 + 换行 6/6；
+  Rust 单测 10 项（含 `android_update` 7 项）；`cargo build --release --target aarch64-linux-android`
+  （55.85s，含 `register_android_plugin`）；`:app:assembleUniversalRelease` → BUILD SUCCESSFUL
+  （Kotlin 编译通过）；APK badging `versionCode='2601000' versionName='2.6.1'` +
+  `uses-permission REQUEST_INSTALL_PACKAGES`；dex 检查见上；桌面 NSIS 2.6.1 同时产出。
+- **未验证（无真机，必须由用户实测）**：系统打印对话框里的真实输出、下载—安装整条流程。
+- **真机验收清单**：
+  1. 打开 md →「全部功能」→「打印…」→ 系统打印面板出现 →「另存为 PDF」→ 检查输出无顶栏/侧栏、A4 分页；
+  2. 「检查更新」→ 应看到 2.6.1（前提是已发布 2.6.1 资产）→「下载并安装」→ 系统安装器 → 装完关于页显示 v2.6.1；
+  3. 首次点安装若被拦：允许「安装未知应用」后回来再点一次（进度与错误都显示在更新弹窗里）；
+  4. 排障：`adb logcat` 过滤 `Tauri/MobileExtrasPlugin` 看失败原因；
+     `adb shell dumpsys package com.markdownx.editor | findstr version` 看实际版本。
