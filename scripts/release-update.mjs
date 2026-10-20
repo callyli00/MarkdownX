@@ -19,8 +19,15 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -169,50 +176,44 @@ function ghBin() {
   throw new Error('找不到 gh CLI：请安装 GitHub CLI，或用 GH_BIN 指定其完整路径');
 }
 
-function gh(args, inputFile) {
-  const full = ['api', ...args];
-  if (inputFile) full.push('--input', inputFile);
-  return execFileSync(ghBin(), full, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim();
-}
-
-function ensureAssetBranch() {
-  try {
-    gh([`repos/${owner}/${repo}/git/ref/heads/${ASSET_BRANCH}`]);
-    console.log(`   ${ASSET_BRANCH} 分支已存在`);
-    return;
-  } catch {
-    /* does not exist yet */
-  }
-  const head = JSON.parse(gh([`repos/${owner}/${repo}/git/ref/heads/main`]));
-  const payload = join(bundleDir, '.tmp-branch.json');
-  writeFileSync(payload, JSON.stringify({ ref: `refs/heads/${ASSET_BRANCH}`, sha: head.object.sha }));
-  gh([`repos/${owner}/${repo}/git/refs`, '--method', 'POST'], payload);
-  console.log(`   已创建 ${ASSET_BRANCH} 分支（基于 main）`);
-}
-
 /**
- * No rollback is wanted, so superseded artifacts are removed: the branch keeps the files of
- * the release being published (and anything it does not recognise as its own).
+ * Publish the `release-assets` branch by force-pushing one fresh commit.
+ *
+ * Deliberately NOT the Contents API: `PUT /repos/.../contents/<file>` starts answering
+ * `401 Bad credentials` for bodies above ~5 MB (verified at 13 MB - see MAINTENANCE §8.5),
+ * which looks like a broken credential and is not. A git push of the same files goes through
+ * the normal transport instead, and it matters now that the APK alone is 20+ MB.
+ *
+ * The branch is a publish target, not history: one commit, always exactly the current
+ * release's files (which is also how superseded installers/APKs disappear).
  */
-function pruneSuperseded(keepNames) {
-  let listing;
-  try {
-    listing = JSON.parse(gh([`repos/${owner}/${repo}/contents?ref=${ASSET_BRANCH}`]));
-  } catch (err) {
-    console.log(`   （读不到分支文件列表，跳过清理：${String(err).split('\n')[0]}）`);
-    return;
-  }
-  const ours = /^MarkdownX_.*(_x64-setup\.exe|_universal-release\.apk)$/;
-  for (const item of listing) {
-    if (item.type !== 'file') continue;
-    if (!ours.test(item.name) || keepNames.includes(item.name)) continue;
-    const payload = join(bundleDir, '.tmp-delete.json');
-    writeFileSync(payload, JSON.stringify({ message: `release ${tag}: drop superseded ${item.name}`, sha: item.sha, branch: ASSET_BRANCH }));
-    gh([`repos/${owner}/${repo}/contents/${item.name}`, '--method', 'DELETE'], payload);
-    console.log(`   已移除旧产物 ${item.name}`);
-  }
-  const after = JSON.parse(gh([`repos/${owner}/${repo}/contents?ref=${ASSET_BRANCH}`])).map((i) => i.name);
-  console.log(`   分支现有文件: ${after.join(', ')}`);
+function publishAssetBranch(files) {
+  const dir = join(bundleDir, '.release-assets');
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const names = files.map((file) => basename(file));
+  files.forEach((file) => copyFileSync(file, join(dir, basename(file))));
+
+  const run = (args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+  run(['init', '-q']);
+  run(['checkout', '-q', '-b', ASSET_BRANCH]);
+  // Explicit paths only (never `git add -A`): `bundleDir` lives inside target/, and a stray
+  // `add -A` once swept 446 MB of Android build output into a release commit (§8.6).
+  run(['add', '--', ...names]);
+  run([
+    '-c', 'user.name=MarkdownX Maintainer',
+    '-c', 'user.email=maintainer@markdownx.local',
+    'commit', '-q', '-m', `release ${tag}: ${names.join(', ')}`
+  ]);
+  run(['push', '-f', '--quiet', remoteUrlWithToken(), `HEAD:${ASSET_BRANCH}`]);
+  console.log(`   ${ASSET_BRANCH} 分支已更新: ${names.join(', ')}`);
+}
+
+/** HTTPS remote carrying the gh token; never printed - it is a credential. */
+function remoteUrlWithToken() {
+  const token = execFileSync(ghBin(), ['auth', 'token'], { encoding: 'utf8' }).trim();
+  if (!token) throw new Error('gh auth token 为空：先执行 gh auth login');
+  return `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
 }
 
 function uploadFile(localPath, remoteName) {
@@ -272,15 +273,25 @@ function verifyRaw() {
   }
 }
 
+/**
+ * Copy an artifact to `bundleDir` under the name the manifest advertises.
+ *
+ * The APK comes out of Gradle as `app-universal-release.apk`, while the manifest points at
+ * `MarkdownX_<version>_universal-release.apk`: the branch file, the Release asset and the URL
+ * must all carry the same name or the download 404s.
+ */
+function stageFile(src, name) {
+  const dest = join(bundleDir, name);
+  if (resolve(src) !== resolve(dest)) copyFileSync(src, dest);
+  return dest;
+}
+
 if (process.argv.includes('--publish')) {
-  console.log('\n→ 经 GitHub API 发布（api.github.com 可达，绕开 github.com）');
-  ensureAssetBranch();
-  pruneSuperseded([assetName, ...(apkPath ? [apkAssetName] : [])]);
-  uploadFile(installer, assetName);
-  if (apkPath) uploadFile(apkPath, apkAssetName);
-  uploadFile(manifestPath, 'latest.json');
+  console.log('\n→ 发布（分支用 git 强推，资产用 gh release upload；都不走 Contents API）');
+  const apkStaged = apkPath ? stageFile(apkPath, apkAssetName) : null;
+  const releaseAssets = [installer, manifestPath, ...(apkStaged ? [apkStaged] : [])];
+  publishAssetBranch(releaseAssets);
   // Also (re)create the GitHub Release: human-facing page, tag, and the fallback endpoint.
-  const releaseAssets = [installer, manifestPath, ...(apkPath ? [apkPath] : [])];
   try {
     const notesFile = join(bundleDir, '.tmp-notes.md');
     writeFileSync(notesFile, notes + '\n');
@@ -307,6 +318,6 @@ if (process.argv.includes('--publish')) {
   verifyEndpoints();
   console.log('\n完成。raw 有几分钟缓存；客户端 20 秒后开始检查，失败会静默重试。');
 } else {
-  console.log('\n→ 发布：加 --publish 由脚本经 API 上传；或手动把产物放进 release-assets 分支');
+  console.log('\n→ 发布：加 --publish 由脚本推送；或手动把产物放进 release-assets 分支');
   console.log(`   node scripts/release-update.mjs --owner ${owner} --repo ${repo} --apk <apk> --skip-build --publish`);
 }
