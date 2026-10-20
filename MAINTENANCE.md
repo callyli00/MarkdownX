@@ -100,6 +100,10 @@ npm run tauri build          # 缺私钥则不会产出 .sig，自动升级即�
    同一时刻 `node tools/render-equivalence-gate/gate.cjs` 在 UNC 下仍然 `PASS 6/6 + 6/6`。
    → 凡是要经 cmd 的命令（`npm` / `npx` / `tauri`）都把工作目录设成**盘符路径** `Z:\MarkDownX_app`，
    或 `cd` 进本地 clone。自查：`(Get-Location).Path` 应以 `Z:\` 开头，而不是 `\\`。
+7. **`npx tauri info` 在网络盘上会挂起**（2026-10-20 实测，**装上 Rust 之后**才出现）：
+   未装 Rust 时它只读 `Cargo.lock`，秒回；装上 Rust 后它要解析 cargo 元数据，从 `Z:\MarkDownX_app`
+   跑超过 10 分钟无输出（连续两次只在被强杀前才结束）。同一份仓库在本地 clone 里 **120 秒内**返回、
+   `Environment` 段全 ✔。→ 查环境这一项请在本地 clone 里做，别把挂起当成"工具链坏了"。
 
 ### 因此的分工（均已实测）
 
@@ -167,8 +171,22 @@ npx tauri android build --apk --target aarch64
 > `tauri-2.12.1/mobile/` 取模板，而全新机器上 `~\.cargo\registry\src` 还不存在 —— 直接跑脚本会
 > 以 `no cargo registry sources` 退出，看起来像"脚本坏了"。详见 §13.8。
 
-**验证状态（诚实声明）**：上表"已核实无需安装"四行与三样缺项清单均为 2026-10-20 本机/官方索引实测；
-但**端到端（桌面 NSIS 打包 + Android APK）尚未在本机复验**。复验通过后应在此补记实际产物大小与版本。
+**验证状态（2026-10-20 当天实测结果）**：
+
+| 验收项 | 结果 | 证据 |
+|---|---|---|
+| `npx tauri info` 环境段 | ✅ 全 ✔ | `rustc 1.99.1 (58cf8f9c3)`、`cargo 1.99.1`、`rustup 1.29.1`、`MSVC: Visual Studio Enterprise 2022`、`WebView2 155.0.4283.62`。**注意：要在本地 clone 里跑** —— 装上 Rust 后它要解析 cargo 元数据，从网络盘跑会挂起 >10 分钟（两次实测），本地盘 120s 内返回 |
+| 桌面 `npm run tauri build` | ✅ | 7.6 分钟（首次全量编译）；产物 `MarkdownX_2.6.0_x64-setup.exe` **12.78 MiB** + `.sig`；日志末尾 `No updater private key password provided, assuming an empty password`、`Finished 1 updater signature` |
+| `python tools/android-codegen.py` | ✅ | 先 `cargo fetch` 后正常；模板取自 `tauri-2.12.1\mobile`，写入 `TauriActivity.kt`(1442 B) 与 `proguard-tauri.pro`(182 B)，占位符已替换 |
+| `npx tauri android build --apk` | ⛔ **仅剩开发者模式** | ① 网络盘上立即 panic（`AssetDirOutsideOfAppRoot`，`mobile/mod.rs:640`，0 分钟）→ 必须在本地 clone；② 本地 clone 里 Rust 交叉编译**成功**（`libmarkdown_x_lib.so` **20.6 MB**，与"带 `custom-protocol` 应 >20 MB"的判据相符），随后在符号链接处失败：`Failed to create a symbolic link ... Creation symbolic link is not allowed for this system` |
+
+实际安装到的版本：Rust `1.99.1`（stable-x86_64-pc-windows-msvc，另加 4 个 android target）、
+JDK `21.0.12.1`（`%LOCALAPPDATA%\Java\jdk-21.0.12.1+1`）、SDK `platforms/android-36` +
+`platforms/android-37.0`、`build-tools/36.0.0`、`ndk/30.0.16248370`、`platform-tools`、`cmdline-tools/latest`。
+
+**本轮踩到并已写进本文的三个坑**：`JAVA_HOME` 照字面抄了 zip 名（实际目录是 `jdk-21.0.12.1+1`）；
+`rustup target add` 的四个 android target 容易漏（漏了就只能在 Windows 上编）；`platforms;android-37`
+不存在（见上表）。
 
 ---
 
