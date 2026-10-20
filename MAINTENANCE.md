@@ -1397,3 +1397,57 @@ ACL manifest、请求来自 local origin，app 命令直接放行。所以桥的
   3. 首次点安装若被拦：允许「安装未知应用」后回来再点一次（进度与错误都显示在更新弹窗里）；
   4. 排障：`adb logcat` 过滤 `Tauri/MobileExtrasPlugin` 看失败原因；
      `adb shell dumpsys package com.markdownx.editor | findstr version` 看实际版本。
+
+### 13.10 v2.6.1 已发布（2026-10-20）：APK 拉不到更新的根因与修复
+
+**根因（"APK 无法直接从 GitHub 上拉取更新"）**：发布用的 `latest.json` 里 `platforms` 只有
+`windows-x86_64` 一项，**没有 `android-universal`**；`release-assets` 分支上也没有 APK 文件。
+手机端读同一份清单 → 找不到 APK 项 → 永远拿不到下载地址。
+所以这不是网络问题，是**发布脚本从来没把 APK 写进清单**。
+
+**修复**：`scripts/release-update.mjs` 新增 `--apk <path>` 参数，APK 会被：
+
+1. 改名为 `MarkdownX_<version>_universal-release.apk`；
+2. 写进 `latest.json` 的 `platforms["android-universal"]`（**无签名字段** —— APK 不是 minisign 签的，
+   完整性由 Android 的证书校验保证，见 §13.9）；
+3. 随安装包一起强推到 `release-assets` 分支，并作为 Release 资产上传。
+
+**本次实测（全部 HTTP 200）**：
+
+| 端点 | 结果 |
+|---|---|
+| `raw.githubusercontent.com/.../release-assets/latest.json` | 200，`version=2.6.1`，含 `android-universal` |
+| `raw.githubusercontent.com/.../release-assets/MarkdownX_2.6.1_universal-release.apk` | 200，23 501 536 B |
+| `raw.githubusercontent.com/.../release-assets/MarkdownX_2.6.1_x64-setup.exe` | 200，13 415 661 B |
+| `github.com/.../releases/latest/download/latest.json` | 200（Release 兜底） |
+| `github.com/.../releases/latest/download/...apk` | 206/200（Release 兜底） |
+
+GitHub Release `v2.6.1`（非 draft、非 prerelease，即 `releases/latest`）带 3 个资产：
+`latest.json`、`MarkdownX_2.6.1_x64-setup.exe`、`MarkdownX_2.6.1_universal-release.apk`。
+
+**产物核对**（不是"编译过"就算数）：
+
+- APK badging：`versionCode='2601000' versionName='2.6.1'`、`minSdk 24`、`targetSdk 37`、
+  `native-code: 'arm64-v8a'`；
+- APK 签名：`apksigner verify` 退出码 0，证书 `CN=Android Debug`（**仅供侧载测试，不是分发签名**，
+  见 §13.9 第 7 条）；
+- APK 内的 `lib/arm64-v8a/libmarkdown_x_lib.so` 与本次新编的 `.so` **SHA-256 完全一致**
+  （`94367C40…`）—— 所以 Gradle 报 `UP-TO-DATE` 是正确的，不是"用了旧包"。
+
+**发布脚本自身的一个坑**：`publishAssetBranch` 会在构建目录里 `git init` 一个暂存仓库。在 NAS 共享
+上，那个目录归文件服务器账号所有，Git 直接拒绝执行：
+`fatal: dubious ownership in repository at '//CALLYLI00/.../bundle/.release-assets'`
+→ **在共享目录上根本发不了版**。修法：所有 git 调用加 `-c safe.directory=*`（提交 `2a168b9`）。
+
+**发布命令**（从共享目录直接可用）：
+
+```powershell
+node scripts/release-update.mjs --owner callyli00 --repo MarkdownX `
+  --apk <app-universal-release.apk> --skip-build --publish
+```
+
+`--skip-build` 复用已有产物；不带该参数时脚本会自己跑 `tauri build`（桌面），
+**但不会**跑 Android 构建 —— APK 必须由 §1.6.1 的流程单独产出后用 `--apk` 传进来。
+
+**仍需真机验收**（同 §13.9 清单）：本节只证明"资产确实发布出去了、地址可达"，
+打印对话框与下载—安装整条链路还没有物理设备可验。
