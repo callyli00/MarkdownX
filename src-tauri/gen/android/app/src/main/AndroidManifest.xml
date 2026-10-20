@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- In-app APK updates (MobileExtrasPlugin). Without this permission Android refuses the
+         ACTION_VIEW install intent for a package-archive URI; the user must also grant
+         "install unknown apps" once, which the plugin asks for before downloading. The
+         permission installs nothing by itself: the system installer still shows its own
+         confirmation, and PackageManager still rejects an APK whose signing certificate
+         differs from the installed app's. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

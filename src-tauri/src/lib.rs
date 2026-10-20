@@ -11,6 +11,13 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 #[cfg(desktop)]
 use tauri::{AppHandle, Emitter, Manager, State};
+// Android needs `Manager` on its own: this is the only place it calls `app.manage(...)`.
+#[cfg(target_os = "android")]
+use tauri::Manager;
+
+// Reading the update manifest and deciding "is this newer" - pure logic, unit-tested on the
+// host. See the module docs for why the network half lives in Kotlin instead.
+mod android_update;
 
 #[derive(serde::Serialize)]
 pub struct FileEntry {
@@ -363,6 +370,213 @@ fn list_system_fonts() -> Result<Vec<String>, String> {
     ])
 }
 
+// ---------------------------------------------------------------------------
+// Android native bridge
+// ---------------------------------------------------------------------------
+// Two things the WebView cannot do on Android and that are therefore implemented in Kotlin
+// (`gen/android/app/src/main/java/com/markdownx/editor/MobileExtrasPlugin.kt`):
+//
+//   1. Printing. `window.print()` in an Android WebView is a silent no-op (no error, no
+//      dialog, no console output) - the tauri `Webview::print()` API it would map to is
+//      `#[cfg(desktop)]`. The real facility is Android's print service.
+//   2. Updating. `tauri-plugin-updater` does not support Android, so the APK update path is
+//      ours: fetch `latest.json`, compare versions here, download the APK, hand it to the
+//      system installer (Android itself enforces that the signature matches the installed
+//      app, so a tampered APK cannot be installed over it).
+//
+// The frontend reaches this through ordinary app commands (`native_print`, …) rather than
+// `plugin:` commands: app commands are already allowed for this local-origin window, so no
+// capability entry is involved and there is no ACL that can silently deny the call. The
+// Kotlin class is still registered through a Tauri plugin *wrapper* because
+// `register_android_plugin` only exists on a plugin's `PluginApi` - that wrapper declares
+// no commands of its own.
+
+/// Handle to the Kotlin plugin instance, held in managed state.
+#[cfg(target_os = "android")]
+#[derive(Clone)]
+struct MobileNative(tauri::plugin::PluginHandle<tauri::Wry>);
+
+/// Body text as returned by the Kotlin `fetchText` command.
+#[cfg(target_os = "android")]
+#[derive(serde::Deserialize)]
+struct FetchedText {
+    text: String,
+}
+
+/// Reply of `android_update_check`, shaped for the JS side.
+#[cfg(target_os = "android")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidUpdateCheck {
+    available: bool,
+    current_version: String,
+    version: String,
+    notes: String,
+    url: String,
+}
+
+/// Run a Kotlin command off the async runtime's core threads: `run_mobile_plugin` blocks
+/// until Kotlin resolves, and the fetch half of an update check can take seconds.
+#[cfg(target_os = "android")]
+async fn call_native<T>(
+    handle: tauri::plugin::PluginHandle<tauri::Wry>,
+    command: &'static str,
+    payload: serde_json::Value,
+) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        handle
+            .run_mobile_plugin::<T>(command, payload)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The updater endpoints already configured for the desktop updater
+/// (`tauri.conf.json → plugins.updater.endpoints`), read back from the merged runtime
+/// config so Android and desktop can never be pointed at different manifests.
+#[cfg(target_os = "android")]
+fn update_manifest_urls(app: &tauri::AppHandle) -> Vec<String> {
+    let Some(updater) = app.config().plugins.0.get("updater") else {
+        return Vec::new();
+    };
+    match updater.get("endpoints") {
+        Some(serde_json::Value::String(single)) => vec![single.clone()],
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn native_print(state: tauri::State<'_, MobileNative>) -> Result<(), String> {
+    call_native::<serde_json::Value>(
+        state.0.clone(),
+        "printDocument",
+        serde_json::json!({}),
+    )
+    .await
+    .map(|_| ())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn native_print() -> Result<(), String> {
+    // Desktop prints through WebView2's own pipeline (`window.print()`), so the native
+    // bridge has nothing to do there. The command keeps one name on every platform.
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_update_check(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, MobileNative>,
+) -> Result<AndroidUpdateCheck, String> {
+    let urls = update_manifest_urls(&app);
+    if urls.is_empty() {
+        return Err("没有可用的更新源（tauri.conf.json → plugins.updater.endpoints）".to_string());
+    }
+
+    let handle = state.0.clone();
+    let body = tauri::async_runtime::spawn_blocking(move || {
+        let mut last_error = String::from("更新源不可达");
+        for url in urls {
+            match handle.run_mobile_plugin::<FetchedText>(
+                "fetchText",
+                serde_json::json!({ "url": url }),
+            ) {
+                Ok(reply) => return Ok(reply.text),
+                Err(err) => last_error = err.to_string(),
+            }
+        }
+        Err(last_error)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let release = android_update::parse_manifest(&body)?;
+    let current = app.package_info().version.to_string();
+    Ok(AndroidUpdateCheck {
+        available: android_update::is_newer(&release.version, &current),
+        current_version: current,
+        version: release.version,
+        notes: release.notes,
+        url: release.url,
+    })
+}
+
+/// Start the download in the background and return at once; the frontend then polls
+/// `android_update_progress`. When the bytes are complete the Kotlin side launches the
+/// system installer itself.
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_update_install(
+    state: tauri::State<'_, MobileNative>,
+    url: String,
+    version: String,
+) -> Result<serde_json::Value, String> {
+    call_native::<serde_json::Value>(
+        state.0.clone(),
+        "installUpdate",
+        serde_json::json!({ "url": url, "version": version }),
+    )
+    .await
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+async fn android_update_progress(
+    state: tauri::State<'_, MobileNative>,
+) -> Result<serde_json::Value, String> {
+    call_native::<serde_json::Value>(
+        state.0.clone(),
+        "downloadState",
+        serde_json::json!({}),
+    )
+    .await
+}
+
+// Desktop/iOS stubs: the same command names exist everywhere so a shared frontend call can
+// never fail with "command not found". Android is the only target that implements them.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn android_update_check() -> Result<AndroidUpdateStub, String> {
+    Err("应用内 APK 更新仅在 Android 上可用".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn android_update_install(_url: String, _version: String) -> Result<serde_json::Value, String> {
+    Err("应用内 APK 更新仅在 Android 上可用".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn android_update_progress() -> Result<serde_json::Value, String> {
+    Err("应用内 APK 更新仅在 Android 上可用".to_string())
+}
+
+/// Placeholder reply type for the non-Android stubs, only needed to give those commands a
+/// concrete return type.
+#[cfg(not(target_os = "android"))]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidUpdateStub {
+    available: bool,
+    current_version: String,
+    version: String,
+    notes: String,
+    url: String,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Cross-platform plugins only. Rebinding `builder` inside a cfg block is the
@@ -402,6 +616,22 @@ pub fn run() {
             }
         }));
 
+    // Android: register the Kotlin class that owns printing and APK updates. This wrapper
+    // declares no commands - the frontend calls app commands - it exists only because
+    // `register_android_plugin` is reachable from a plugin's `PluginApi` and nowhere else.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("markdownx-mobile")
+            .setup(|app, api| {
+                let handle = api
+                    .register_android_plugin("com.markdownx.editor", "MobileExtrasPlugin")
+                    .map_err(|e| e.to_string())?;
+                app.manage(MobileNative(handle));
+                Ok(())
+            })
+            .build(),
+    );
+
     builder
         .invoke_handler(tauri::generate_handler![
             get_cli_args,
@@ -413,7 +643,11 @@ pub fn run() {
             open_devtools,
             start_watching_file,
             stop_watching_file,
-            list_system_fonts
+            list_system_fonts,
+            native_print,
+            android_update_check,
+            android_update_install,
+            android_update_progress
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

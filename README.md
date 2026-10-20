@@ -1,4 +1,4 @@
-# MarkdownX (v2.6.0)
+# MarkdownX (v2.6.1)
 
 > 一款专为计算力学、材料科学及算法推导文档设计的高性能、极简 Typora 风格桌面 Markdown & LaTeX 编辑/排版应用。
 > 采用 **Tauri v2 + Rust** 原生内核与 **React 18 + TypeScript + Vite** 前端架构，实现毫秒级启动与超低内存占用。
@@ -33,6 +33,25 @@
 ---
 
 ## 版本更新履历 (Changelog)
+
+### [v2.6.1] - 2026-10-20
+
+#### 手机端打印与在应用内更新（Android）
+- **打印**：`window.print()` 在 Android WebView 里是静默空操作，改为调用 Android 系统打印服务
+  （`PrintManager` + WebView 的 `createPrintDocumentAdapter`）。它跑的是与桌面相同的 Chromium 打印管线，
+  因此**同一套 `@media print` 样式表**生效：界面全部隐藏、版心铺平、A4 分页，输出即桌面那份。
+  系统对话框里可直接选打印机，也可「另存为 PDF」。
+- **打印时不动 DOM**：打印适配器在你于系统对话框中确认之后才抓取 WebView，所以打印前不能改页面、
+  打印后也不能立刻回收 —— 打印样式表独自完成排版，正是为了满足这一点。
+- **手机端 PDF**：PDF 查看器在打印样式里是隐藏的，且 iframe 路径的 `contentWindow.print()` 同样无实现，
+  所以手机端该按钮改为**导出压平副本**（得到任何阅读器 / 手机打印 App 都能打印的 PDF），菜单文案随之变化。
+- **在应用内更新**：`tauri-plugin-updater` 不支持 Android，APK 更新链路自己实现 —— 读 `latest.json`
+  （与桌面同一份清单，APK 是 `platforms` 里多出的一项）→ Rust 侧比较版本 → 下载到应用缓存 →
+  交给系统安装器；签名是否一致由 Android 自己强制（证书不同则拒绝安装）。
+- **先要权限再下载**：Android 8+ 需要「安装未知应用」授权，插件在**下载前**检查并跳到该设置页，
+  避免白花 20+ MB 流量。「检查更新」也在手机端恢复（启动 20 秒后静默检查，发现新版本只在帮助处点一个小圆点）。
+- **发布流程带上 APK**：`node scripts/release-update.mjs --apk <apk> …` 会把 APK 写进
+  `latest.json` 的 `android-universal` 项并上传到 `release-assets` 与 Release 资产，桌面与手机共用同一个版本号。
 
 ### [v2.6.0] - 2026-10-18
 

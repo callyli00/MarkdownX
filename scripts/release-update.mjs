@@ -52,6 +52,23 @@ if (!existsSync(keyPath)) {
 const skipBuild = process.argv.includes('--skip-build');
 console.log(`→ 版本 ${version}；使用签名私钥 ${keyPath}${skipBuild ? '（--skip-build：复用已有产物）' : ''}`);
 
+// Android APK: an explicit --apk wins; otherwise the standard Gradle output location is
+// tried. The APK is normally built in the LOCAL checkout (an Android build cannot run from
+// the NAS: tauri-cli panics with AssetDirOutsideOfAppRoot), so a path is often needed.
+//   npx tauri android build --apk     (in the local clone)
+const APK_CANDIDATES = [
+  arg('apk'),
+  join(ROOT, 'src-tauri', 'gen', 'android', 'app', 'build', 'outputs', 'apk', 'universal', 'release', 'app-universal-release.apk'),
+  join(ROOT, 'src-tauri', 'gen', 'android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk')
+].filter(Boolean);
+const apkPath = APK_CANDIDATES.find((candidate) => existsSync(candidate)) || null;
+if (!apkPath) {
+  console.warn(
+    '\n⚠ 没有找到 APK：本次发布不含 Android 资产，手机端「检查更新」会报“更新清单里没有 android-universal 条目”。\n' +
+    '  补上：node scripts/release-update.mjs --owner ' + (owner || '<owner>') + ' --apk <apk 路径> --skip-build --publish'
+  );
+}
+
 // 1. signed build (updater artifacts + .sig)
 if (!skipBuild) {
   execFileSync('npm', ['run', 'tauri', 'build'], {
@@ -93,6 +110,7 @@ if (start !== -1) {
 }
 
 const assetName = `MarkdownX_${version}_x64-setup.exe`;
+const apkAssetName = `MarkdownX_${version}_universal-release.apk`;
 const manifest = {
   version,
   notes,
@@ -101,7 +119,19 @@ const manifest = {
     'windows-x86_64': {
       signature,
       url: `https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${assetName}`
-    }
+    },
+    // Android reads the same manifest (`android_update.rs`): the APK is an EXTRA platform
+    // entry rather than a second manifest file, so one release can never advertise two
+    // different versions. No signature field: the APK is not minisign-signed - Android
+    // itself refuses to install a package whose signing certificate differs from the
+    // installed app's, which is the check that matters here.
+    ...(apkPath
+      ? {
+          'android-universal': {
+            url: `https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${apkAssetName}`
+          }
+        }
+      : {})
   }
 };
 
@@ -112,6 +142,7 @@ writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 console.log('\n✓ 产物');
 console.log(`   安装包:   ${installer}`);
 console.log(`   签名:     ${signatureFile}`);
+console.log(`   APK:      ${apkPath ? `${apkPath}  → ${apkAssetName}` : '（本次不含 Android 资产）'}`);
 console.log(`   更新清单: ${manifestPath}`);
 console.log(`\n   应用将拉取: https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/latest.json`);
 
@@ -159,8 +190,11 @@ function ensureAssetBranch() {
   console.log(`   已创建 ${ASSET_BRANCH} 分支（基于 main）`);
 }
 
-/** No rollback is wanted, so superseded installers are removed: the branch keeps two files. */
-function pruneOldInstallers(keepName) {
+/**
+ * No rollback is wanted, so superseded artifacts are removed: the branch keeps the files of
+ * the release being published (and anything it does not recognise as its own).
+ */
+function pruneSuperseded(keepNames) {
   let listing;
   try {
     listing = JSON.parse(gh([`repos/${owner}/${repo}/contents?ref=${ASSET_BRANCH}`]));
@@ -168,13 +202,14 @@ function pruneOldInstallers(keepName) {
     console.log(`   （读不到分支文件列表，跳过清理：${String(err).split('\n')[0]}）`);
     return;
   }
+  const ours = /^MarkdownX_.*(_x64-setup\.exe|_universal-release\.apk)$/;
   for (const item of listing) {
     if (item.type !== 'file') continue;
-    if (!/^MarkdownX_.*_x64-setup\.exe$/.test(item.name) || item.name === keepName) continue;
+    if (!ours.test(item.name) || keepNames.includes(item.name)) continue;
     const payload = join(bundleDir, '.tmp-delete.json');
     writeFileSync(payload, JSON.stringify({ message: `release ${tag}: drop superseded ${item.name}`, sha: item.sha, branch: ASSET_BRANCH }));
     gh([`repos/${owner}/${repo}/contents/${item.name}`, '--method', 'DELETE'], payload);
-    console.log(`   已移除旧安装包 ${item.name}`);
+    console.log(`   已移除旧产物 ${item.name}`);
   }
   const after = JSON.parse(gh([`repos/${owner}/${repo}/contents?ref=${ASSET_BRANCH}`])).map((i) => i.name);
   console.log(`   分支现有文件: ${after.join(', ')}`);
@@ -219,10 +254,14 @@ function verifyRaw() {
   // fetched fine, which used to crash this check. Ask curl for the code and ignore the
   // body, tolerate a non-zero exit, and treat the printed code as the verdict.
   for (const url of [`https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/latest.json`,
-                     `https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${assetName}`]) {
+                     `https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${assetName}`,
+                     ...(apkPath
+                       ? [`https://raw.githubusercontent.com/${owner}/${repo}/${ASSET_BRANCH}/${apkAssetName}`]
+                       : [])]) {
     let code = 'unknown';
     try {
-      code = execFileSync('curl', ['-s', '-D', '-', '-o', 'NUL', '-w', '%{http_code}', '--max-time', '20', '-L', url],
+      // HEAD, not GET: the APK is 20+ MB and a release check must not download it.
+      code = execFileSync('curl', ['-s', '-I', '-o', 'NUL', '-w', '%{http_code}', '--max-time', '20', '-L', url],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n').pop().trim();
     } catch (err) {
       code = String(err.stdout || '').trim().split('\n').pop().trim() || 'failed';
@@ -236,22 +275,24 @@ function verifyRaw() {
 if (process.argv.includes('--publish')) {
   console.log('\n→ 经 GitHub API 发布（api.github.com 可达，绕开 github.com）');
   ensureAssetBranch();
-  pruneOldInstallers(assetName);
+  pruneSuperseded([assetName, ...(apkPath ? [apkAssetName] : [])]);
   uploadFile(installer, assetName);
+  if (apkPath) uploadFile(apkPath, apkAssetName);
   uploadFile(manifestPath, 'latest.json');
   // Also (re)create the GitHub Release: human-facing page, tag, and the fallback endpoint.
+  const releaseAssets = [installer, manifestPath, ...(apkPath ? [apkPath] : [])];
   try {
     const notesFile = join(bundleDir, '.tmp-notes.md');
     writeFileSync(notesFile, notes + '\n');
     const args = [
       'release', 'create', tag,
-      installer, manifestPath,
+      ...releaseAssets,
       '--title', `MarkdownX ${tag}`,
       '--notes-file', notesFile,
       '--latest'
     ];
     try {
-      execFileSync(ghBin(), ['release', 'upload', tag, installer, manifestPath, '--clobber'], { stdio: 'pipe' });
+      execFileSync(ghBin(), ['release', 'upload', tag, ...releaseAssets, '--clobber'], { stdio: 'pipe' });
       console.log(`   已更新 GitHub Release ${tag} 的资产`);
     } catch {
       execFileSync(ghBin(), args, { stdio: 'pipe' });
@@ -266,6 +307,6 @@ if (process.argv.includes('--publish')) {
   verifyEndpoints();
   console.log('\n完成。raw 有几分钟缓存；客户端 20 秒后开始检查，失败会静默重试。');
 } else {
-  console.log('\n→ 发布：加 --publish 由脚本经 API 上传；或手动把两个文件放进 release-assets 分支');
-  console.log(`   node scripts/release-update.mjs --owner ${owner} --repo ${repo} --skip-build --publish`);
+  console.log('\n→ 发布：加 --publish 由脚本经 API 上传；或手动把产物放进 release-assets 分支');
+  console.log(`   node scripts/release-update.mjs --owner ${owner} --repo ${repo} --apk <apk> --skip-build --publish`);
 }

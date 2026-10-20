@@ -137,7 +137,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.6.0';
+const APP_VERSION = 'v2.6.1';
 const APP_BUILD_DATE = '2026-10-04';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -179,6 +179,16 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.6.1',
+    date: '2026-10-20',
+    items: [
+      '手机端打印可用：走 Android 系统打印服务（同一套打印样式表），可直接打印或「另存为 PDF」',
+      '手机端可从 GitHub 直接拉取更新：检查 latest.json → 下载 APK → 交给系统安装器（签名不符系统会拒绝）',
+      '发布流程把 APK 一并放进更新清单与 release-assets，桌面与手机共用同一个版本号',
+      '修复：手机端「PDF / 打印」按钮点了没反应（Android WebView 的 window.print 是空操作）'
+    ]
+  },
   {
     version: 'v2.6.0',
     date: '2026-10-18',
@@ -1546,19 +1556,38 @@ export const App: React.FC = () => {
   }, []);
 
   // Silent check a little after startup: never a popup, never in the reader's way.
-  // Skipped entirely on mobile - Android has no updater plugin to ask.
+  // Desktop asks the updater plugin; Android asks the native bridge (both live behind the
+  // same checkForUpdate). Skipped on iOS and in the browser harness: neither has a path to
+  // update through.
   useEffect(() => {
-    if (host === null || isMobilePlatform(host)) return;
+    if (host === null || host === 'ios' || host === 'web') return;
     const timer = window.setTimeout(() => { void runUpdateCheck(false); }, 20000);
     return () => window.clearTimeout(timer);
   }, [runUpdateCheck, host]);
 
   const startUpdateInstall = useCallback(async () => {
-    if (updateInfo.status !== 'available' || !updateInfo.update) return;
+    if (updateInfo.status !== 'available') return;
     setUpdateInstallError(null);
-    const { installUpdate } = await import('./utils/updater');
-    const result = await installUpdate(updateInfo.update, setUpdateProgress);
-    if (!result.ok) setUpdateInstallError(result.error);
+    const { installUpdate, installAndroidUpdate } = await import('./utils/updater');
+    let result: { ok: true } | { ok: false; error: string };
+    if (updateInfo.androidUrl) {
+      // Android: download + system installer, driven by the native bridge.
+      result = await installAndroidUpdate(
+        updateInfo.androidUrl,
+        updateInfo.version || '',
+        setUpdateProgress
+      );
+    } else if (updateInfo.update) {
+      result = await installUpdate(updateInfo.update, setUpdateProgress);
+    } else {
+      result = { ok: false, error: '没有可安装的更新包' };
+    }
+    if (!result.ok) {
+      // Drop the progress bar: a stalled "正在安装…" next to an error message reads as two
+      // different states at once.
+      setUpdateProgress(null);
+      setUpdateInstallError(result.error);
+    }
   }, [updateInfo]);
 
   /** Right-click menus are model-driven: classify target → buildMenu() → render → dispatch. */
@@ -3316,13 +3345,35 @@ export const App: React.FC = () => {
   };
 
   // 1. Independent Print handler (Ctrl + P) - Keeps system print dialog 100% active
-  const handlePrint = () => {
+  const handlePrint = async (): Promise<void> => {
     setActiveMenu(null);
     // A PDF must be printed at its OWN page size, one PDF page per sheet. Pouring the
     // live viewer through the A4 print stylesheet re-flows and re-paginates it, so the
     // PDF path renders each page to an image at true size instead (see PdfViewer).
     if (activeFile?.kind === 'pdf') {
+      if (isMobile) {
+        // Android has no print pipeline for the viewer: the iframe path below ends in
+        // `contentWindow.print()`, which is a silent no-op in an Android WebView, and the
+        // print stylesheet deliberately hides the viewer. A flattened copy is the same
+        // bytes any PDF reader or phone print app can print, so that is what this button
+        // produces there (the menu row is labelled accordingly on mobile).
+        await handleExportFlattenedPdf();
+        return;
+      }
       setPdfPrintToken((t) => t + 1);
+      return;
+    }
+    // Android: `window.print()` is a no-op in the Android WebView (no dialog, no error), so
+    // the desktop path below would do nothing at all there. The platform print service is
+    // the real facility, and it runs the same Chromium print pipeline - the print
+    // stylesheet below does the work. The WebView is NOT mutated for printing: the adapter
+    // snapshots it only after the user confirms in the system dialog.
+    if (isMobile) {
+      try {
+        await invoke('native_print');
+      } catch (e) {
+        setModalFeedback(`打印失败：${String((e as Error)?.message || e)}`);
+      }
       return;
     }
     // Print only after React has committed the menu-closed state and the browser has
@@ -4191,8 +4242,8 @@ ${texBody}
             </button>
             {activeMenu === 'export' && (
               <div className="typora-dropdown-menu wb-dropdown">
-                <div className="dropdown-item" onClick={() => { setActiveMenu(null); handlePrint(); }}>
-                  <span>PDF / 打印...</span><span className="shortcut">Ctrl+P</span>
+                <div className="dropdown-item" onClick={() => { setActiveMenu(null); void handlePrint(); }}>
+                  <span>{isMobile && activeFile?.kind === 'pdf' ? '导出 PDF（压平标注）...' : 'PDF / 打印...'}</span><span className="shortcut">Ctrl+P</span>
                 </div>
                 <div className="dropdown-divider" />
                 <div className="dropdown-item" onClick={() => { setActiveMenu(null); handleExportHtmlWithStyles(); }}>
@@ -4930,7 +4981,7 @@ ${texBody}
 
               <div className="wb-sheet-sec">导出</div>
               <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handlePrint(); }}>
-                <AppIcon name="print" size={17} /><span className="tl">PDF / 打印…</span>
+                <AppIcon name="print" size={17} /><span className="tl">{activeFile?.kind === 'pdf' ? '导出 PDF（压平标注）…' : '打印…'}</span>
               </div>
               <div className="wb-sheet-item" onClick={() => { setIsCmdSheetOpen(false); void handleExportHtmlWithStyles(); }}>
                 <AppIcon name="export" size={17} /><span className="tl">HTML（带完整样式）…</span>
@@ -5123,8 +5174,9 @@ ${texBody}
                   <p className="update-line">检查更新失败 ✗</p>
                   <p className="update-detail">{updateInfo.error}</p>
                   <p className="update-hint">
-                    请确认更新源已配置（<code>tauri.conf.json → plugins.updater.endpoints</code>）
-                    且网络可达；未配置时不影响正常使用。
+                    {isMobile
+                      ? '手机端从 GitHub 读取更新清单；网络不可达或该版本尚未上传 APK 时会走到这里，不影响当前使用。'
+                      : '请确认更新源已配置（tauri.conf.json → plugins.updater.endpoints）且网络可达；未配置时不影响正常使用。'}
                   </p>
                 </>
               )}
@@ -5155,7 +5207,9 @@ ${texBody}
                   )}
                   {updateInstallError && <p className="update-error">安装失败：{updateInstallError}</p>}
                   <p className="update-hint">
-                    更新包经过签名校验；安装程序会保持当前安装位置与文件关联。
+                    {updateInfo.androidUrl
+                      ? '下载完成后由系统安装器接管：它会先请你确认，并校验签名证书与已装版本一致；升级不影响你的文档和设置。'
+                      : '更新包经过签名校验；安装程序会保持当前安装位置与文件关联。'}
                   </p>
                 </>
               )}

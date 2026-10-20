@@ -12,7 +12,7 @@
     "createUpdaterArtifacts": false,
     "android": {
       "minSdkVersion": 24,
-      "versionCode": 2600000
+      "versionCode": 2600100
     },
     "fileAssociations": [
       {
