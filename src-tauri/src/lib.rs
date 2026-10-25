@@ -5,8 +5,10 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 #[cfg(desktop)]
 use std::collections::HashMap;
-#[cfg(desktop)]
-use std::path::PathBuf;
+// Deliberately NOT gated, unlike the rest of this block: the workspace-index commands
+// compile on every target, so `Path`/`PathBuf` must exist for Android too. They used to
+// sit inside the desktop block because only the watcher needed them.
+use std::path::{Path, PathBuf};
 #[cfg(desktop)]
 use std::sync::Mutex;
 #[cfg(desktop)]
@@ -118,6 +120,311 @@ fn read_dir_files(dir_path: String) -> Result<Vec<FileEntry>, String> {
         }
     });
     Ok(entries)
+}
+
+// ---------------------------------------------------------------------------
+// Workspace index: one walk, then one batched read
+// ---------------------------------------------------------------------------
+// The backlink / tag / unresolved-link panels need the whole workspace flattened into a
+// path list, then the text of every note in that list. Two commands, both pure blocking
+// `std::fs` work.
+//
+// Both are declared `#[tauri::command(async)]` while keeping a plain `fn` signature: a
+// command without that marker runs on the main thread, so a walk of a network share would
+// freeze the window for its entire duration. The marker is what moves the body onto the
+// sync thread pool; the generated argument parsing is unchanged.
+//
+// Unlike the watcher, the font list or the Android bridge above, nothing here has a
+// platform-specific twin: only `std::path`/`std::fs` are used, so one implementation
+// compiles for Windows and Android alike and there is no `#[cfg(...)]` pair to keep in
+// sync. Paths are always built by joining `PathBuf`s - never by pasting a `/` or `\` -
+// because the two targets disagree about the separator.
+
+#[derive(serde::Serialize)]
+pub struct ScannedFile {
+    pub path: String,
+    /// Unix seconds. 0 means "unknown" (the stat failed), not "epoch".
+    pub mtime: i64,
+    pub size: u64,
+}
+
+#[derive(serde::Serialize)]
+pub struct ReadTextResult {
+    pub path: String,
+    pub content: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Returned as a partial result instead of an error once reached, so a 100k-file share
+/// still yields a usable index rather than blank panels.
+const MAX_SCAN_FILES: usize = 20_000;
+const MAX_SCAN_DEPTH: usize = 32;
+
+/// Above this a file is reported as an error rather than read. 4 MiB because the index
+/// only needs links/headings/tags, and the whole result travels back over one IPC reply.
+const MAX_TEXT_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Notes and attachments the index cares about. Compared case-insensitively: `IMG.JPG`
+/// off a camera roll or a Windows share must match, or the preview shows a broken embed
+/// that the file browser happily lists.
+const INDEX_EXTENSIONS: [&str; 22] = [
+    // notes
+    "md", "markdown", "mdown", "mkd", "mdx", "txt", // attachments
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "pdf", "mp3", "mp4", "wav",
+    "webm", "ogg", "m4a", "mov",
+];
+
+/// Directories that never hold workspace content. `.git`, `.obsidian`, `.hg` and `.svn`
+/// are already caught by the dot-prefix rule below; they stay listed so the intent
+/// survives if that rule is ever loosened. The rest are build output that is merely
+/// expensive to walk: on a share with a checked-out project, `node_modules` alone can
+/// swallow the whole file budget.
+const SKIPPED_DIRS: [&str; 8] = [
+    ".git", ".obsidian", "node_modules", "dist", "target", ".hg", ".svn", "__pycache__",
+];
+
+fn is_indexable_file(path: &Path) -> bool {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        // `to_ascii_lowercase` rather than `to_lowercase`: file extensions are ASCII, and
+        // this runs once per entry on a potentially huge listing.
+        Some(ext) => INDEX_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()),
+        None => false,
+    }
+}
+
+fn is_skipped_dir(name: &str) -> bool {
+    // Anything dot-prefixed is tooling/VCS/per-user metadata by convention on every
+    // platform we ship. Walking it can dominate the scan (an `.obsidian` plugin cache is
+    // thousands of JSON files that would never be indexed anyway).
+    name.starts_with('.') || SKIPPED_DIRS.contains(&name)
+}
+
+fn push_scanned_file(
+    files: &mut Vec<ScannedFile>,
+    path: &Path,
+    meta: Option<std::fs::Metadata>,
+) {
+    files.push(ScannedFile {
+        path: path.to_string_lossy().to_string(),
+        // Metadata can vanish between the directory listing and the stat (deleted, or an
+        // SMB handle that just expired). 0 keeps the entry: the index treats the file as
+        // present-but-undated, which is far better than dropping a note whose links other
+        // files point at.
+        mtime: meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+        size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+    });
+}
+
+#[tauri::command(async)]
+fn scan_workspace_files(root: String) -> Result<Vec<ScannedFile>, String> {
+    scan_workspace_files_with_caps(&root, MAX_SCAN_FILES, MAX_SCAN_DEPTH)
+}
+
+/// The walk itself, with both caps as parameters.
+///
+/// Split out of the command purely so the caps are testable: a fixture with three files and
+/// `max_files = 1` proves the cap yields a PARTIAL list rather than an error or a silent
+/// truncation that looks like a complete index.
+fn scan_workspace_files_with_caps(
+    root: &str,
+    max_files: usize,
+    max_depth: usize,
+) -> Result<Vec<ScannedFile>, String> {
+    let root_path = PathBuf::from(root);
+    if !root_path.is_dir() {
+        // The only failure this command reports: the caller handed us something that is
+        // not a directory at all. Everything that merely went *partially* wrong below
+        // comes back as a short list plus a stderr note.
+        return Err(format!("Not a directory: {root}"));
+    }
+
+    let mut files: Vec<ScannedFile> = Vec::new();
+    // An explicit stack instead of recursion. Depth is capped at 32, but width is not,
+    // and Android's default thread stack is far smaller than the desktop's - a deep
+    // share should not turn a scan into a stack overflow.
+    let mut stack: Vec<(PathBuf, usize)> = vec![(root_path, 0)];
+    let mut hit_file_cap = false;
+    let mut hit_depth_cap = false;
+    let mut unreadable_dirs = 0usize;
+
+    while let Some((dir, depth)) = stack.pop() {
+        if files.len() >= max_files {
+            hit_file_cap = true;
+            break;
+        }
+        // One directory that refuses to list must cost only its own subtree. Permissions
+        // errors and dropped SMB sessions are routine on the shares this app is pointed
+        // at, so an `Err` here must never fail the whole scan.
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => {
+                unreadable_dirs += 1;
+                continue;
+            }
+        };
+
+        for entry in entries.flatten() {
+            if files.len() >= max_files {
+                hit_file_cap = true;
+                break;
+            }
+            // `file_type()` reports the link itself and does not stat the target, which
+            // is both cheaper and the only way to spot a directory symlink before we
+            // walk into it.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+
+            if file_type.is_symlink() {
+                // A symlinked directory is the one real cycle hazard: a junction on a
+                // mapped drive can point back at an ancestor, and the walk would then
+                // spend its whole file budget re-reading the same tree. Symlinked *files*
+                // are ordinary notes/attachments, so they stay - stat through the link so
+                // size and mtime describe the target.
+                if path.is_dir() {
+                    continue;
+                }
+                if is_indexable_file(&path) {
+                    push_scanned_file(&mut files, &path, path.metadata().ok());
+                }
+                continue;
+            }
+
+            if file_type.is_dir() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if is_skipped_dir(&name) {
+                    continue;
+                }
+                if depth + 1 > max_depth {
+                    hit_depth_cap = true;
+                    continue;
+                }
+                stack.push((path, depth + 1));
+            } else if file_type.is_file() && is_indexable_file(&path) {
+                // `DirEntry::metadata` reuses what the directory listing already returned
+                // where the platform provides it, and does not follow links - both matter
+                // when the walk itself is the slow part.
+                push_scanned_file(&mut files, &path, entry.metadata().ok());
+            }
+        }
+    }
+
+    // Sorted so a re-scan of an untouched workspace produces byte-identical output; the
+    // frontend diffs against its previous index to decide what to re-parse.
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // Partial results are deliberate (`Ok`, not `Err`): an incomplete index still powers
+    // the panels, whereas an error blanks them. The reason goes to stderr because the
+    // command's `Result` is reserved for a bad `root`.
+    if hit_file_cap {
+        eprintln!(
+            "[workspace-scan] stopped at the {max_files}-file cap; returning a partial index ({} files)",
+            files.len()
+        );
+    }
+    if hit_depth_cap {
+        eprintln!(
+            "[workspace-scan] directories deeper than {max_depth} levels were not walked"
+        );
+    }
+    if unreadable_dirs > 0 {
+        eprintln!("[workspace-scan] skipped {unreadable_dirs} unreadable directories");
+    }
+
+    Ok(files)
+}
+
+#[tauri::command(async)]
+fn read_text_files(paths: Vec<String>) -> Result<Vec<ReadTextResult>, String> {
+    let mut results = Vec::with_capacity(paths.len());
+    for path in paths {
+        results.push(read_one_text_file(path));
+    }
+    // Never `Err`: the caller builds an index from whatever succeeded, and turning one
+    // bad path into a failed batch would discard the other N-1 files for no reason.
+    Ok(results)
+}
+
+fn read_one_text_file(path: String) -> ReadTextResult {
+    // Owned copy on purpose: every branch below moves `path` into the reply, and borrowing
+    // it from a long-lived `Path` fights the borrow checker for no gain - one small
+    // allocation is nothing next to the file read that follows.
+    let file_path = PathBuf::from(&path);
+
+    if let Ok(meta) = std::fs::metadata(&file_path) {
+        if meta.is_dir() {
+            return ReadTextResult {
+                path,
+                content: None,
+                error: Some("Is a directory".to_string()),
+            };
+        }
+        if meta.len() > MAX_TEXT_FILE_BYTES {
+            // Rejected before opening it, so a multi-GB file renamed to `.md` cannot be
+            // pulled into memory on the IPC thread just to be discarded afterwards.
+            return ReadTextResult {
+                path,
+                content: None,
+                error: Some(format!(
+                    "File is {} bytes, over the {MAX_TEXT_FILE_BYTES}-byte indexing limit",
+                    meta.len()
+                )),
+            };
+        }
+    }
+
+    let bytes = match std::fs::read(&file_path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return ReadTextResult {
+                path,
+                content: None,
+                error: Some(err.to_string()),
+            }
+        }
+    };
+
+    // Re-checked after the read: the file may have grown between the stat above and here,
+    // or the stat may have failed while the read succeeded.
+    if bytes.len() as u64 > MAX_TEXT_FILE_BYTES {
+        // Deliberately an error instead of a truncated body: half a note would put
+        // backlinks on text that does not exist and headings on lines that were cut.
+        return ReadTextResult {
+            path,
+            content: None,
+            error: Some(format!(
+                "File is {} bytes, over the {MAX_TEXT_FILE_BYTES}-byte indexing limit",
+                bytes.len()
+            )),
+        };
+    }
+
+    match String::from_utf8(bytes) {
+        Ok(text) => ReadTextResult {
+            path,
+            content: Some(text),
+            error: None,
+        },
+        Err(err) => {
+            // Legacy notes here are frequently GBK, which is not UTF-8. Lossy decoding
+            // keeps the ASCII-ish parts (wikilinks, tag syntax, headings) searchable and
+            // makes the CJK noise instead of dropping the file; the error tells the caller
+            // the text is approximate rather than exact.
+            let text = String::from_utf8_lossy(err.as_bytes()).into_owned();
+            ReadTextResult {
+                path,
+                content: Some(text),
+                error: Some("Not valid UTF-8; decoded lossily".to_string()),
+            }
+        }
+    }
 }
 
 #[cfg(desktop)]
@@ -638,6 +945,8 @@ pub fn run() {
             get_host_platform,
             read_file_from_path,
             read_dir_files,
+            scan_workspace_files,
+            read_text_files,
             toggle_fullscreen,
             toggle_always_on_top,
             open_devtools,
@@ -691,5 +1000,162 @@ mod platform_tests {
         let mobile = name == "android" || name == "ios";
         let desktop = name == "windows" || name == "macos" || name == "linux";
         assert!(!(mobile && desktop), "platform {name} claims both");
+    }
+}
+
+#[cfg(test)]
+mod workspace_scan_tests {
+    use super::*;
+
+    /// No `tempfile` dependency: these fixtures only need a directory no other test
+    /// touches, and pid + tag is unique per run. Removed on creation so a crashed run
+    /// cannot poison the next one.
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "markdownx-scan-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn write_file(path: &Path, bytes: &[u8]) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create parent dir");
+        }
+        std::fs::write(path, bytes).expect("write fixture");
+    }
+
+    fn scan(root: &Path) -> Vec<ScannedFile> {
+        scan_workspace_files(root.to_string_lossy().to_string()).expect("scan should succeed")
+    }
+
+    #[test]
+    fn walk_keeps_notes_and_attachments_but_not_noise() {
+        let root = scratch_dir("walk");
+        write_file(&root.join("a.md"), b"# a");
+        write_file(&root.join("assets/IMG.JPG"), b"jpeg");
+        write_file(&root.join("deep/er/b.markdown"), b"# b");
+        // Junk that must not reach the index; `node_modules` and `.git` are the two the
+        // ignore rules exist for, `.trash` covers the dot-prefix rule.
+        write_file(&root.join(".git/HEAD"), b"ref: refs/heads/main");
+        write_file(&root.join("node_modules/pkg/readme.md"), b"# dep");
+        write_file(&root.join("deep/.obsidian/workspace.json"), b"{}");
+        write_file(&root.join("scratch.tmp"), b"tmp");
+
+        let files = scan(&root);
+        let got: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(got.len(), 3, "unexpected entries: {got:?}");
+        assert!(got.iter().any(|p| p.ends_with("a.md")));
+        // Uppercase extension must still match, or Windows camera-roll images vanish.
+        assert!(got.iter().any(|p| p.ends_with("IMG.JPG")));
+        assert!(got.iter().any(|p| p.ends_with("b.markdown")));
+        // Stable order for the frontend's diff against its previous index.
+        let mut sorted = got.clone();
+        sorted.sort_unstable();
+        assert_eq!(got, sorted, "paths should come back sorted");
+
+        let img = files.iter().find(|f| f.path.ends_with("IMG.JPG")).unwrap();
+        assert_eq!(img.size, 4);
+        assert!(img.mtime > 0, "mtime should be Unix seconds, got {}", img.mtime);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn walk_reports_a_bad_root_instead_of_an_empty_index() {
+        // Distinct from "empty workspace": the caller shows a different message for a path
+        // that is not a directory at all.
+        let root = scratch_dir("badroot");
+        let file = root.join("note.md");
+        write_file(&file, b"# n");
+        assert!(scan_workspace_files(file.to_string_lossy().to_string()).is_err());
+        let missing = root.join("nope");
+        assert!(scan_workspace_files(missing.to_string_lossy().to_string()).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn walk_stops_at_the_depth_cap() {
+        let root = scratch_dir("depth");
+        // The cap counts DIRECTORY levels below the root, and files are never depth-checked
+        // - their parent is. So a note in the directory at exactly MAX_SCAN_DEPTH is still
+        // listed, and one level lower is unreachable. Pinning both sides here because an
+        // off-by-one would silently hide a whole nested vault.
+        let mut within = root.join("within");
+        for _ in 1..MAX_SCAN_DEPTH {
+            within.push("d");
+        }
+        write_file(&within.join("found.md"), b"# found");
+        let mut beyond = root.join("beyond");
+        for _ in 0..MAX_SCAN_DEPTH {
+            beyond.push("d");
+        }
+        write_file(&beyond.join("lost.md"), b"# lost");
+
+        let files = scan(&root);
+        let got: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(got.iter().any(|p| p.ends_with("found.md")), "{got:?}");
+        assert!(!got.iter().any(|p| p.ends_with("lost.md")), "{got:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn walk_stops_at_the_file_cap_and_returns_a_partial_list() {
+        // The cap exists so a share with a checked-out project cannot make the first scan
+        // run for minutes. Its contract is "partial results, never an error": an error
+        // would blank the panels, and an oversized list would stall the IPC reply.
+        let root = scratch_dir("filecap");
+        write_file(&root.join("a.md"), b"# a");
+        write_file(&root.join("b.md"), b"# b");
+        write_file(&root.join("c.md"), b"# c");
+
+        let files = scan_workspace_files_with_caps(&root.to_string_lossy(), 2, MAX_SCAN_DEPTH)
+            .expect("a capped scan is still a successful scan");
+        assert_eq!(files.len(), 2, "cap must stop the walk at exactly max_files");
+        // What did make it through is still sorted, i.e. the frontend can build a usable
+        // (if incomplete) index from it and diff it against the previous one.
+        let mut sorted: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+        let original = sorted.clone();
+        sorted.sort_unstable();
+        assert_eq!(original, sorted);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_batch_reports_each_file_independently() {
+        let root = scratch_dir("read");
+        let good = root.join("good.md");
+        write_file(&good, "héllo".as_bytes());
+        let oversized = root.join("big.md");
+        write_file(&oversized, &vec![b'a'; MAX_TEXT_FILE_BYTES as usize + 1]);
+        let not_utf8 = root.join("latin1.md");
+        write_file(&not_utf8, &[0x23, 0x20, 0xFF, 0xFE]);
+        let missing = root.join("missing.md");
+
+        let paths: Vec<String> = [&good, &oversized, &not_utf8, &missing]
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let results = read_text_files(paths.clone()).expect("batch never fails");
+        assert_eq!(results.len(), paths.len());
+        // Echoed back verbatim so the caller can key its index by the path it asked for.
+        assert_eq!(results[0].path, paths[0]);
+
+        assert_eq!(results[0].content.as_deref(), Some("héllo"));
+        assert!(results[0].error.is_none());
+
+        // Over the limit: an error, not a truncated body.
+        assert!(results[1].content.is_none(), "oversized body must not be returned");
+        assert!(results[1].error.is_some());
+
+        // Invalid UTF-8 keeps lossy content AND flags it as approximate.
+        let lossy = results[2].content.as_deref().expect("lossy content kept");
+        assert!(lossy.starts_with("# "), "lossy text: {lossy:?}");
+        assert!(results[2].error.is_some());
+
+        assert!(results[3].content.is_none());
+        assert!(results[3].error.is_some());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

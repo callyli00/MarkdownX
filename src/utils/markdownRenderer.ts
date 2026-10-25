@@ -6,6 +6,14 @@ import fortran from 'highlight.js/lib/languages/fortran';
 import json from 'highlight.js/lib/languages/json';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { parseFrontmatter, buildPropertiesCard } from './properties';
+import {
+  parseWikiLink,
+  resolveWikiPage,
+  wikiDisplayText,
+  wikiHref,
+  type ParsedWikiLink,
+  type WikiLookup
+} from './wikiLink';
 
 hljs.registerLanguage('python', python);
 hljs.registerLanguage('cpp', cpp);
@@ -89,6 +97,39 @@ function escapeHtml(value: string): string {
 }
 
 interface TranslationPiece { o: number; e: number; s: number; S: number }
+
+/**
+ * Everything a `[[…]]` token needs that this module must NOT look up by itself.
+ *
+ * The renderer stays a pure function of (text, context): the workspace index and the bodies
+ * of embedded notes are handed in, never read from disk here. That is what keeps the main
+ * thread and the render Worker byte-identical (tools/render-equivalence-gate asserts it),
+ * and it is also why an unindexed workspace degrades to "every link unresolved" instead of
+ * blocking on I/O inside a keystroke.
+ */
+export interface WikiContext {
+  /** Absolute path of the document being rendered; '' when it has never been saved. */
+  docPath?: string;
+  /** Page-name -> file resolution table, built from the workspace index. */
+  lookup?: WikiLookup | null;
+  /** Absolute path -> raw Markdown of embedded notes, loaded by the host (depth 1 only). */
+  embeds?: Record<string, string>;
+}
+
+/** A note embed is block-level HTML: it is substituted AFTER marked, not inside it. */
+interface EmbedNote {
+  key: string;
+  path: string;
+  href: string;
+  label: string;
+}
+
+/**
+ * Nested embeds stop here. A embeds B and B embeds A is a real authoring mistake, and a
+ * renderer that recurses on it hangs the WebView rather than reporting anything.
+ */
+const MAX_EMBED_DEPTH = 1;
+
 
 /**
  * Exact offset translation from the reworked Markdown handed to marked back to
@@ -649,12 +690,150 @@ function labelToAnchorId(label: string): string {
   return `eq-${normalizeLabelKey(label).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 }
 
-function processMathAndCitations(rawMarkdown: string): {
+/**
+ * `[[Page]]` / `[[Page|alias]]` / `[[Page#Heading]]` / `[[#Heading]]`.
+ *
+ * A resolved link becomes a real anchor with a relative href, so the exported HTML keeps
+ * working without this app; an unresolved one becomes a span carrying the same class, so
+ * the panel can list it and the author sees the difference at a glance. Silently rendering
+ * an unresolved link as plain text would hide the breakage, which is the one thing a
+ * migration from Obsidian must not do.
+ */
+function renderWikiLink(link: ParsedWikiLink, ctx: WikiContext): string {
+  const label = escapeHtml(wikiDisplayText(link));
+  const docPath = ctx.docPath || '';
+
+  if (!link.page) {
+    // `[[#Heading]]` - a link inside the note itself. Always resolvable.
+    const href = wikiHref(docPath, docPath, link);
+    return `<a class="wikilink" href="${escapeHtml(href)}" data-wikilink="#${escapeHtml(link.heading || link.blockId)}">${label}</a>`;
+  }
+
+  const hit = ctx.lookup ? resolveWikiPage(ctx.lookup, link.page, docPath) : null;
+  if (!hit) {
+    return (
+      `<span class="wikilink wikilink-unresolved" data-wikilink="${escapeHtml(link.page)}"` +
+      ` title="未找到笔记：${escapeHtml(link.page)}">${label}</span>`
+    );
+  }
+  const href = wikiHref(docPath, hit.path, link);
+  const ambiguous = hit.ambiguous.length
+    ? ` data-wikilink-ambiguous="${escapeHtml(hit.ambiguous.join('|'))}"`
+    : '';
+  return `<a class="wikilink" href="${escapeHtml(href)}" data-wikilink="${escapeHtml(hit.path)}"${ambiguous}>${label}</a>`;
+}
+
+/**
+ * `![[…]]` - images render inline (with the width Obsidian writes as `|300`), other
+ * attachments become a chip that opens in the app, and notes become a sentinel that is
+ * replaced with the host-provided body after marked has run.
+ */
+function renderWikiEmbed(link: ParsedWikiLink, ctx: WikiContext, notes: EmbedNote[]): string {
+  const docPath = ctx.docPath || '';
+  const hit = link.page && ctx.lookup ? resolveWikiPage(ctx.lookup, link.page, docPath) : null;
+  const width = link.size ? ` width="${link.size}"` : '';
+
+  if (link.isImage) {
+    // An unresolved image still points where the author said it should: the attachment may
+    // simply not be indexed yet, and a visibly broken <img> beats a silently dropped one.
+    const src = hit ? hit.path : link.page;
+    const cls = hit ? 'embedded-image' : 'embedded-image embedded-image-unresolved';
+    return `<img class="${cls}" src="${escapeHtml(src)}"${width} alt="${escapeHtml(link.alias || '')}" />`;
+  }
+
+  if (!hit) {
+    return (
+      `<span class="wikilink wikilink-unresolved" data-wikilink="${escapeHtml(link.page)}"` +
+      ` title="未找到：${escapeHtml(link.page)}">!${escapeHtml(wikiDisplayText(link) || link.page)}</span>`
+    );
+  }
+
+  if (link.isAttachment) {
+    const href = wikiHref(docPath, hit.path, link);
+    return (
+      `<a class="wikilink wikilink-attachment" href="${escapeHtml(href)}"` +
+      ` data-wikilink="${escapeHtml(hit.path)}">${escapeHtml(wikiDisplayText(link) || link.page)}</a>`
+    );
+  }
+
+  const key = `@@EMBED_NOTE_${notes.length}@@`;
+  notes.push({
+    key,
+    path: hit.path,
+    href: wikiHref(docPath, hit.path, link),
+    label: wikiDisplayText(link) || link.page
+  });
+  return key;
+}
+
+/**
+ * Wiki links run AFTER masking and AFTER the math tokenizer, for the same reason the
+ * highlight/footnote passes do: a `[[x]]` inside a code fence, an inline code span or a
+ * formula is unreachable by construction here. They run BEFORE the tag pass because
+ * `[[Note#Heading]]` contains a `#` that the tag pass would otherwise claim.
+ */
+function applyWikiLinks(
+  text: string,
+  translation: SourceTranslation,
+  ctx: WikiContext,
+  notes: EmbedNote[]
+): string {
+  return trackedReplace(
+    text,
+    translation,
+    /(!?)\[\[([^[\]\n]{1,512})\]\]/g,
+    (match: string, bang: string, inner: string, offset: number, whole: string) => {
+      if (isInsideHtmlTag(whole, offset)) return match;
+      const link = parseWikiLink(inner, bang ? 'embed' : 'link');
+      if (!link) return match;
+      return bang ? renderWikiEmbed(link, ctx, notes) : renderWikiLink(link, ctx);
+    }
+  );
+}
+
+/**
+ * Inline `#tag`. The lookbehind is the whole rule: a `#` glued to a word character, an
+ * ampersand (`&#39;`), a slash (URL fragment) or a backslash (escape) is not a tag, which
+ * keeps `https://x/y#frag`, HTML entities and `\#literal` out. A heading marker is excluded
+ * by requiring a non-space right after the `#` (`# Title` never matches).
+ */
+function applyTags(text: string, translation: SourceTranslation): string {
+  return trackedReplace(
+    text,
+    translation,
+    /(?<![\w&#/\\])#([\p{L}\p{N}][\p{L}\p{N}_/-]*)/gu,
+    (match: string, tag: string, offset: number, whole: string) => {
+      if (/^\d+$/.test(tag)) return match; // a bare number is an issue reference, not a tag
+      if (isInsideHtmlTag(whole, offset)) return match;
+      return `<span class="md-tag" data-tag="${escapeHtml(tag)}">#${tag}</span>`;
+    }
+  );
+}
+
+/**
+ * Block ids: `^some-id` at the end of a block. It becomes a sentinel here and is turned
+ * into an `id="blk-…"` attribute on the block's first tag during the token loop, where the
+ * attribute injection already happens - one place that touches tags, not two.
+ *
+ * Requires a leading space and a letter start so `x ^2` (a stray superscript at line end)
+ * is not mistaken for an id.
+ */
+function applyBlockIds(text: string, translation: SourceTranslation): string {
+  return trackedReplace(
+    text,
+    translation,
+    /[ \t]+\^([A-Za-z][A-Za-z0-9_-]*)[ \t]*(?=\n|$)/g,
+    (_match: string, id: string) => `@@BLOCKID_${id}@@`
+  );
+}
+
+function processMathAndCitations(rawMarkdown: string, ctx: WikiContext = {}): {
   sanitizedMarkdown: string;
   tokens: TokenStore;
   diagramSources: string[];
   translation: SourceTranslation;
   tokenSourceSpans: Record<string, { start: number; end: number }>;
+  embedNotes: EmbedNote[];
 } {
   // Normalise line endings FIRST, before any accounting happens.
   //
@@ -906,6 +1085,17 @@ function processMathAndCitations(rawMarkdown: string): {
     () => ''
   );
 
+  // ---- Wiki links, tags, block ids ------------------------------------------------
+  //
+  // All three run inside the masked region, so a `[[x]]`, a `#tag` or a `^id` written in a
+  // code fence, an inline code span or a formula is unreachable by construction. Order is
+  // load-bearing: the wiki-link pass consumes the `#` of `[[Note#Heading]]` before the tag
+  // pass could claim it, and block ids go last so a `^id` inside a link target stays intact.
+  const embedNotes: EmbedNote[] = [];
+  sanitized = applyWikiLinks(sanitized, translation, ctx, embedNotes);
+  sanitized = applyBlockIds(sanitized, translation);
+  sanitized = applyTags(sanitized, translation);
+
   // ---- Footnotes (`[^label]`) --------------------------------------------------
   //
   // marked v12 has no footnote support, so this is built here, inside the masked region.
@@ -1006,7 +1196,7 @@ function processMathAndCitations(rawMarkdown: string): {
   for (const key of Object.keys(tokens)) anchor(key);
   diagramSources.forEach((_, index) => anchor(`${MERMAID_PREFIX}${index}${MERMAID_SUFFIX}`));
 
-  return { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans };
+  return { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans, embedNotes };
 }
 
 function detokenizeMath(
@@ -1072,10 +1262,16 @@ function detokenizeMath(
  * Passing '' therefore leaves every asset path exactly as written in the source
  * (see renderMarkdownPayload()).
  */
-async function renderCore(rawMarkdown: string, documentBasePath: string, resolveAssets: boolean = true): Promise<string> {
+async function renderCore(
+  rawMarkdown: string,
+  documentBasePath: string,
+  resolveAssets: boolean = true,
+  ctx: WikiContext = {},
+  depth: number = 0
+): Promise<string> {
   configureMarked(documentBasePath, resolveAssets);
-  const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans } =
-    processMathAndCitations(rawMarkdown);
+  const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans, embedNotes } =
+    processMathAndCitations(rawMarkdown, ctx);
 
   // Render each top-level block on its own, then stamp that block's TRUE source
   // span onto its first tag. Click-to-source mapping then reads an anchor
@@ -1089,24 +1285,79 @@ async function renderCore(rawMarkdown: string, documentBasePath: string, resolve
     const start = cursor;
     cursor += raw.length;
     let segment = String(marked.parser([token]));
+
+    // A block id is a sentinel still sitting in the rendered text at this point; it is
+    // consumed here so the attribute lands on the block's own tag - the same place the
+    // source anchors go, which keeps both attributes from ever interleaving badly.
+    const blockMatch = segment.match(/@@BLOCKID_([A-Za-z0-9_-]+)@@/);
+    if (blockMatch) segment = segment.replace(/@@BLOCKID_[A-Za-z0-9_-]+@@/, '');
+
+    const stamp = (attrs: string) =>
+      segment.replace(/^(\s*<[a-zA-Z][a-zA-Z0-9:-]*)/, `$1${attrs}`);
+
     if (raw) {
       const spanStart = translation.map(start);
       const spanEnd = translation.map(start + raw.length);
       if (spanEnd > spanStart) {
-        segment = segment.replace(
-          /^(\s*<[a-zA-Z][a-zA-Z0-9:-]*)/,
-          `$1 data-src-start="${spanStart}" data-src-end="${spanEnd}"`
-        );
+        segment = stamp(` data-src-start="${spanStart}" data-src-end="${spanEnd}"`);
       }
+    }
+    if (blockMatch) {
+      const id = escapeHtml(blockMatch[1]);
+      segment = stamp(` id="blk-${id}" data-block-id="${id}"`);
     }
     parts.push(segment);
   }
   const rawHtml = parts.join('');
 
-  const html = detokenizeMath(rawHtml, tokens, diagramSources, tokenSourceSpans);
+  let html = detokenizeMath(rawHtml, tokens, diagramSources, tokenSourceSpans);
+  if (embedNotes.length > 0) {
+    html = await injectEmbeddedNotes(html, embedNotes, ctx, depth);
+  }
   // Last step: raw HTML image sources can only be rewritten once the markup is
   // final, since the Markdown path resolves its own images earlier.
   return resolveRawHtmlImageSources(html, documentBasePath, resolveAssets);
+}
+
+/**
+ * Replace each `@@EMBED_NOTE_n@@` with the rendered body of the embedded note.
+ *
+ * Two details are deliberate:
+ *  * the body is rendered by this same function, with `embeds: {}` passed down - i.e.
+ *    nested embeds are NOT expanded, which makes an A<->B embedding cycle terminate;
+ *  * a note whose body the host did not load degrades to a link chip. The host caps how
+ *    much it loads (size and count), so "not loaded" is a normal state, not an error.
+ */
+async function injectEmbeddedNotes(
+  html: string,
+  notes: EmbedNote[],
+  ctx: WikiContext,
+  depth: number
+): Promise<string> {
+  let out = html;
+  for (const note of notes) {
+    // marked wraps a lone sentinel in <p>; block-level content may not live inside one.
+    out = out.replace(new RegExp(`<p(?:\\s[^>]*)?>\\s*${note.key}\\s*</p>`), note.key);
+
+    const bodyMd = ctx.embeds ? ctx.embeds[note.path] : undefined;
+    let block: string;
+    if (bodyMd === undefined || depth >= MAX_EMBED_DEPTH) {
+      block =
+        `<div class="embedded-note embedded-note-missing" data-embed="${escapeHtml(note.path)}">` +
+        `<div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a>` +
+        `<span class="embedded-note-note">内容未载入</span></div>` +
+        `</div>`;
+    } else {
+      const inner = await renderCore(bodyMd, '', false, { ...ctx, embeds: {} }, depth + 1);
+      block =
+        `<div class="embedded-note" data-embed="${escapeHtml(note.path)}">` +
+        `<div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a></div>` +
+        `<div class="embedded-note-body">${inner}</div>` +
+        `</div>`;
+    }
+    out = out.replace(note.key, () => block);
+  }
+  return out;
 }
 
 /**
@@ -1128,12 +1379,16 @@ export function finalizeAssetUrls(html: string, documentBasePath: string): strin
  * (resolveAssets = false) rather than an accident of convertFileSrc being missing
  * off-thread. tools/render-equivalence-gate proves the two paths agree.
  */
-export async function renderMarkdownPayload(rawMarkdown: string): Promise<string> {
-  return renderCore(rawMarkdown, '', false);
+export async function renderMarkdownPayload(rawMarkdown: string, ctx: WikiContext = {}): Promise<string> {
+  return renderCore(rawMarkdown, '', false, ctx);
 }
 
-export async function renderMarkdown(rawMarkdown: string, documentBasePath: string = ''): Promise<string> {
-  return finalizeAssetUrls(await renderCore(rawMarkdown, documentBasePath), documentBasePath);
+export async function renderMarkdown(
+  rawMarkdown: string,
+  documentBasePath: string = '',
+  ctx: WikiContext = {}
+): Promise<string> {
+  return finalizeAssetUrls(await renderCore(rawMarkdown, documentBasePath, true, ctx), documentBasePath);
 }
 
 interface MermaidApi {

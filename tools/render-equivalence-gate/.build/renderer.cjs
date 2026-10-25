@@ -5300,6 +5300,122 @@ function buildPropertiesCard(props) {
   return `<div class="props-card" data-props="${props.length}"${meta}>${rows}${addButton}</div>`;
 }
 
+// src/utils/wikiLink.ts
+var IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i;
+var PDF_EXT_RE = /\.pdf$/i;
+var ATTACHMENT_EXT_RE = /\.(?:png|jpe?g|gif|webp|svg|bmp|avif|ico|pdf|mp3|mp4|wav|webm|m4a|ogg|mov)$/i;
+var MAX_INNER = 512;
+function headingSlug(text) {
+  return encodeURIComponent(String(text || "").trim().toLowerCase().replace(/\s+/g, "-"));
+}
+function stripExtension(name) {
+  const slash = Math.max(name.lastIndexOf("/"), name.lastIndexOf("\\"));
+  const dot = name.lastIndexOf(".");
+  return dot > slash + 1 ? name.slice(0, dot) : name;
+}
+function parseWikiLink(inner, kind) {
+  const text = String(inner ?? "").trim();
+  if (!text || text.length > MAX_INNER) return null;
+  if (/[[\]\n]/.test(text)) return null;
+  const parts = text.split("|");
+  const target = parts[0].trim();
+  const rest = parts.slice(1).map((s) => s.trim());
+  let alias = "";
+  let size = null;
+  if (rest.length > 0) {
+    const last = rest[rest.length - 1];
+    if (kind === "embed" && /^\d{1,4}$/.test(last) && ATTACHMENT_EXT_RE.test(target)) {
+      size = Number(last);
+      alias = rest.slice(0, -1).join("|");
+    } else {
+      alias = rest.join("|");
+    }
+  }
+  const hashAt = target.indexOf("#");
+  const page = (hashAt === -1 ? target : target.slice(0, hashAt)).trim();
+  const headingRaw = hashAt === -1 ? "" : target.slice(hashAt + 1).trim();
+  if (!page && !headingRaw) return null;
+  if (/[<>"]/.test(page) || page.includes("://")) return null;
+  const isBlock = headingRaw.startsWith("^");
+  const blockId = isBlock ? headingRaw.slice(1).trim() : "";
+  const heading2 = isBlock ? "" : headingRaw;
+  if (blockId && !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(blockId)) return null;
+  return {
+    raw: "",
+    kind,
+    page,
+    heading: heading2,
+    blockId,
+    alias,
+    size,
+    isImage: IMAGE_EXT_RE.test(page),
+    isPdf: PDF_EXT_RE.test(page),
+    isAttachment: ATTACHMENT_EXT_RE.test(page)
+  };
+}
+function wikiDisplayText(link2) {
+  if (link2.alias) return link2.alias;
+  if (link2.page) return link2.heading ? link2.page : stripExtension(link2.page);
+  return link2.heading || link2.blockId;
+}
+function wikiKey(page) {
+  const cleaned = String(page || "").trim().split("\\").join("/").replace(/^\.\//, "");
+  return stripExtension(cleaned).toLowerCase();
+}
+function sameDir(a, b) {
+  const da = a.split("\\").join("/").replace(/\/[^/]*$/, "");
+  const db = b.split("\\").join("/").replace(/\/[^/]*$/, "");
+  return da === db;
+}
+function resolveWikiPage(lookup, page, fromPath) {
+  const key = wikiKey(page);
+  if (!key) return null;
+  const explicit = lookup.byPath[key] || lookup.byPath[key + ".md"];
+  if (explicit) return { path: explicit, ambiguous: [] };
+  const candidates = lookup.byName[key];
+  if (!candidates || candidates.length === 0) return null;
+  if (candidates.length === 1) return { path: candidates[0], ambiguous: [] };
+  const local = candidates.filter((c) => sameDir(c, fromPath));
+  const pool = local.length > 0 ? local : candidates;
+  const sorted = [...pool].sort((a, b) => a.length - b.length || a.localeCompare(b));
+  return { path: sorted[0], ambiguous: sorted.slice(1) };
+}
+function separatorOf(path) {
+  return path.includes("\\") && !path.includes("/") ? "\\" : "/";
+}
+function relativeFromDoc(fromDocPath, targetPath) {
+  const sep = separatorOf(fromDocPath);
+  const from = String(fromDocPath || "").split("\\").join("/");
+  const to = String(targetPath || "").split("\\").join("/");
+  if (!from || !to) return targetPath;
+  const fromParts = from.split("/");
+  fromParts.pop();
+  const toParts = to.split("/");
+  const fromRoot = fromParts[0] || "";
+  const toRoot = toParts[0] || "";
+  if (fromRoot !== toRoot) return targetPath;
+  let common = 0;
+  while (common < fromParts.length && common < toParts.length - 1 && fromParts[common] === toParts[common]) {
+    common++;
+  }
+  const ups = fromParts.length - common;
+  const rest = toParts.slice(common);
+  const parts = [];
+  for (let i = 0; i < ups; i++) parts.push("..");
+  parts.push(...rest);
+  const joined = parts.join("/");
+  return sep === "\\" ? joined.split("/").join("\\") : joined;
+}
+function wikiHref(fromDocPath, targetPath, link2) {
+  const same = fromDocPath && targetPath && fromDocPath.split("\\").join("/") === targetPath.split("\\").join("/");
+  let href = same ? "" : relativeFromDoc(fromDocPath, targetPath || "");
+  href = href.split("#").join("%23");
+  if (same) href = "";
+  if (link2.blockId) return `${href}#blk-${link2.blockId}`;
+  if (link2.heading) return `${href}#heading-${headingSlug(link2.heading)}`;
+  return href ? href : "#";
+}
+
 // src/utils/markdownRenderer.ts
 core_default.registerLanguage("python", python);
 core_default.registerLanguage("cpp", cpp);
@@ -5346,6 +5462,7 @@ function escapeMathText(value) {
 function escapeHtml(value) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+var MAX_EMBED_DEPTH = 1;
 var SourceTranslation = class {
   pieces;
   constructor(length) {
@@ -5764,7 +5881,80 @@ function normalizeLabelKey(label) {
 function labelToAnchorId(label) {
   return `eq-${normalizeLabelKey(label).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
-function processMathAndCitations(rawMarkdown) {
+function renderWikiLink(link2, ctx) {
+  const label = escapeHtml(wikiDisplayText(link2));
+  const docPath = ctx.docPath || "";
+  if (!link2.page) {
+    const href2 = wikiHref(docPath, docPath, link2);
+    return `<a class="wikilink" href="${escapeHtml(href2)}" data-wikilink="#${escapeHtml(link2.heading || link2.blockId)}">${label}</a>`;
+  }
+  const hit = ctx.lookup ? resolveWikiPage(ctx.lookup, link2.page, docPath) : null;
+  if (!hit) {
+    return `<span class="wikilink wikilink-unresolved" data-wikilink="${escapeHtml(link2.page)}" title="\u672A\u627E\u5230\u7B14\u8BB0\uFF1A${escapeHtml(link2.page)}">${label}</span>`;
+  }
+  const href = wikiHref(docPath, hit.path, link2);
+  const ambiguous = hit.ambiguous.length ? ` data-wikilink-ambiguous="${escapeHtml(hit.ambiguous.join("|"))}"` : "";
+  return `<a class="wikilink" href="${escapeHtml(href)}" data-wikilink="${escapeHtml(hit.path)}"${ambiguous}>${label}</a>`;
+}
+function renderWikiEmbed(link2, ctx, notes) {
+  const docPath = ctx.docPath || "";
+  const hit = link2.page && ctx.lookup ? resolveWikiPage(ctx.lookup, link2.page, docPath) : null;
+  const width = link2.size ? ` width="${link2.size}"` : "";
+  if (link2.isImage) {
+    const src = hit ? hit.path : link2.page;
+    const cls = hit ? "embedded-image" : "embedded-image embedded-image-unresolved";
+    return `<img class="${cls}" src="${escapeHtml(src)}"${width} alt="${escapeHtml(link2.alias || "")}" />`;
+  }
+  if (!hit) {
+    return `<span class="wikilink wikilink-unresolved" data-wikilink="${escapeHtml(link2.page)}" title="\u672A\u627E\u5230\uFF1A${escapeHtml(link2.page)}">!${escapeHtml(wikiDisplayText(link2) || link2.page)}</span>`;
+  }
+  if (link2.isAttachment) {
+    const href = wikiHref(docPath, hit.path, link2);
+    return `<a class="wikilink wikilink-attachment" href="${escapeHtml(href)}" data-wikilink="${escapeHtml(hit.path)}">${escapeHtml(wikiDisplayText(link2) || link2.page)}</a>`;
+  }
+  const key = `@@EMBED_NOTE_${notes.length}@@`;
+  notes.push({
+    key,
+    path: hit.path,
+    href: wikiHref(docPath, hit.path, link2),
+    label: wikiDisplayText(link2) || link2.page
+  });
+  return key;
+}
+function applyWikiLinks(text, translation, ctx, notes) {
+  return trackedReplace(
+    text,
+    translation,
+    /(!?)\[\[([^[\]\n]{1,512})\]\]/g,
+    (match, bang, inner, offset, whole) => {
+      if (isInsideHtmlTag(whole, offset)) return match;
+      const link2 = parseWikiLink(inner, bang ? "embed" : "link");
+      if (!link2) return match;
+      return bang ? renderWikiEmbed(link2, ctx, notes) : renderWikiLink(link2, ctx);
+    }
+  );
+}
+function applyTags(text, translation) {
+  return trackedReplace(
+    text,
+    translation,
+    /(?<![\w&#/\\])#([\p{L}\p{N}][\p{L}\p{N}_/-]*)/gu,
+    (match, tag2, offset, whole) => {
+      if (/^\d+$/.test(tag2)) return match;
+      if (isInsideHtmlTag(whole, offset)) return match;
+      return `<span class="md-tag" data-tag="${escapeHtml(tag2)}">#${tag2}</span>`;
+    }
+  );
+}
+function applyBlockIds(text, translation) {
+  return trackedReplace(
+    text,
+    translation,
+    /[ \t]+\^([A-Za-z][A-Za-z0-9_-]*)[ \t]*(?=\n|$)/g,
+    (_match, id) => `@@BLOCKID_${id}@@`
+  );
+}
+function processMathAndCitations(rawMarkdown, ctx = {}) {
   rawMarkdown = rawMarkdown.replace(/\r\n?/g, "\n");
   const translation = new SourceTranslation(rawMarkdown.length);
   const cleanMarkdown = trackedReplace(rawMarkdown, translation, /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, () => "");
@@ -5906,6 +6096,10 @@ function processMathAndCitations(rawMarkdown) {
     /(?<!\\)%%[\s\S]*?%%/g,
     () => ""
   );
+  const embedNotes = [];
+  sanitized = applyWikiLinks(sanitized, translation, ctx, embedNotes);
+  sanitized = applyBlockIds(sanitized, translation);
+  sanitized = applyTags(sanitized, translation);
   const footnoteDefs = /* @__PURE__ */ new Map();
   sanitized = trackedReplace(
     sanitized,
@@ -5966,7 +6160,7 @@ function processMathAndCitations(rawMarkdown) {
   };
   for (const key of Object.keys(tokens)) anchor(key);
   diagramSources.forEach((_, index) => anchor(`${MERMAID_PREFIX}${index}${MERMAID_SUFFIX}`));
-  return { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans };
+  return { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans, embedNotes };
 }
 function detokenizeMath(html2, tokens, diagramSources, tokenSourceSpans) {
   const srcAttr = (key) => {
@@ -5996,9 +6190,9 @@ function detokenizeMath(html2, tokens, diagramSources, tokenSourceSpans) {
   }
   return restoredHtml;
 }
-async function renderCore(rawMarkdown, documentBasePath, resolveAssets = true) {
+async function renderCore(rawMarkdown, documentBasePath, resolveAssets = true, ctx = {}, depth = 0) {
   configureMarked(documentBasePath, resolveAssets);
-  const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans } = processMathAndCitations(rawMarkdown);
+  const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans, embedNotes } = processMathAndCitations(rawMarkdown, ctx);
   const lexed = marked.lexer(sanitizedMarkdown);
   const parts = [];
   let cursor = 0;
@@ -6007,30 +6201,53 @@ async function renderCore(rawMarkdown, documentBasePath, resolveAssets = true) {
     const start = cursor;
     cursor += raw.length;
     let segment = String(marked.parser([token]));
+    const blockMatch = segment.match(/@@BLOCKID_([A-Za-z0-9_-]+)@@/);
+    if (blockMatch) segment = segment.replace(/@@BLOCKID_[A-Za-z0-9_-]+@@/, "");
+    const stamp = (attrs) => segment.replace(/^(\s*<[a-zA-Z][a-zA-Z0-9:-]*)/, `$1${attrs}`);
     if (raw) {
       const spanStart = translation.map(start);
       const spanEnd = translation.map(start + raw.length);
       if (spanEnd > spanStart) {
-        segment = segment.replace(
-          /^(\s*<[a-zA-Z][a-zA-Z0-9:-]*)/,
-          `$1 data-src-start="${spanStart}" data-src-end="${spanEnd}"`
-        );
+        segment = stamp(` data-src-start="${spanStart}" data-src-end="${spanEnd}"`);
       }
+    }
+    if (blockMatch) {
+      const id = escapeHtml(blockMatch[1]);
+      segment = stamp(` id="blk-${id}" data-block-id="${id}"`);
     }
     parts.push(segment);
   }
   const rawHtml = parts.join("");
-  const html2 = detokenizeMath(rawHtml, tokens, diagramSources, tokenSourceSpans);
+  let html2 = detokenizeMath(rawHtml, tokens, diagramSources, tokenSourceSpans);
+  if (embedNotes.length > 0) {
+    html2 = await injectEmbeddedNotes(html2, embedNotes, ctx, depth);
+  }
   return resolveRawHtmlImageSources(html2, documentBasePath, resolveAssets);
+}
+async function injectEmbeddedNotes(html2, notes, ctx, depth) {
+  let out = html2;
+  for (const note of notes) {
+    out = out.replace(new RegExp(`<p(?:\\s[^>]*)?>\\s*${note.key}\\s*</p>`), note.key);
+    const bodyMd = ctx.embeds ? ctx.embeds[note.path] : void 0;
+    let block2;
+    if (bodyMd === void 0 || depth >= MAX_EMBED_DEPTH) {
+      block2 = `<div class="embedded-note embedded-note-missing" data-embed="${escapeHtml(note.path)}"><div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a><span class="embedded-note-note">\u5185\u5BB9\u672A\u8F7D\u5165</span></div></div>`;
+    } else {
+      const inner = await renderCore(bodyMd, "", false, { ...ctx, embeds: {} }, depth + 1);
+      block2 = `<div class="embedded-note" data-embed="${escapeHtml(note.path)}"><div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a></div><div class="embedded-note-body">${inner}</div></div>`;
+    }
+    out = out.replace(note.key, () => block2);
+  }
+  return out;
 }
 function finalizeAssetUrls(html2, documentBasePath) {
   return resolveRawHtmlImageSources(html2, documentBasePath);
 }
-async function renderMarkdownPayload(rawMarkdown) {
-  return renderCore(rawMarkdown, "", false);
+async function renderMarkdownPayload(rawMarkdown, ctx = {}) {
+  return renderCore(rawMarkdown, "", false, ctx);
 }
-async function renderMarkdown(rawMarkdown, documentBasePath = "") {
-  return finalizeAssetUrls(await renderCore(rawMarkdown, documentBasePath), documentBasePath);
+async function renderMarkdown(rawMarkdown, documentBasePath = "", ctx = {}) {
+  return finalizeAssetUrls(await renderCore(rawMarkdown, documentBasePath, true, ctx), documentBasePath);
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

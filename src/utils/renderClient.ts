@@ -12,7 +12,7 @@
  * everyday path byte-identical to the pre-Worker build.
  */
 
-import { finalizeAssetUrls, renderMarkdownPayload } from './markdownRenderer';
+import { finalizeAssetUrls, renderMarkdownPayload, type WikiContext } from './markdownRenderer';
 
 /** Documents at least this large are worth handing to the Worker. */
 const WORKER_MIN_CHARS = 20000;
@@ -100,20 +100,28 @@ export function workerWillBeUsed(charCount: number): boolean {
 /**
  * Render a document, preferring the Worker for large inputs.
  * Never rejects for Worker-related reasons: it falls back instead.
+ *
+ * `wiki` is plain data (resolution table + embedded-note bodies). It travels to the Worker
+ * alongside the text so both paths compute the same HTML; nothing in the render path may
+ * read the filesystem, or the fallback would stop being a drop-in replacement.
  */
-export async function renderDocument(raw: string, documentBasePath: string): Promise<RenderOutcome> {
+export async function renderDocument(
+  raw: string,
+  documentBasePath: string,
+  wiki: WikiContext = {}
+): Promise<RenderOutcome> {
   const useWorker = !workerBroken && raw.length >= WORKER_MIN_CHARS;
   const active = useWorker ? ensureWorker() : null;
 
   if (!active) {
-    return { html: finalizeAssetUrls(await renderMarkdownPayload(raw), documentBasePath), engine: 'sync' };
+    return { html: finalizeAssetUrls(await renderMarkdownPayload(raw, wiki), documentBasePath), engine: 'sync' };
   }
 
   const id = (seq += 1);
   const viaWorker = new Promise<{ html: string; ms?: number }>((resolve, reject) => {
     pending.set(id, { resolve: (html, ms) => resolve({ html, ms }), reject, basePath: documentBasePath });
     try {
-      active.postMessage({ id, raw });
+      active.postMessage({ id, raw, ctx: wiki });
     } catch (err) {
       pending.delete(id);
       reject(err);
@@ -136,6 +144,6 @@ export async function renderDocument(raw: string, documentBasePath: string): Pro
   } catch (err) {
     // Degrade, never fail: the document still renders, only on the main thread.
     console.warn('[MarkdownX] worker render failed, using the main thread:', err);
-    return { html: finalizeAssetUrls(await renderMarkdownPayload(raw), documentBasePath), engine: 'sync' };
+    return { html: finalizeAssetUrls(await renderMarkdownPayload(raw, wiki), documentBasePath), engine: 'sync' };
   }
 }

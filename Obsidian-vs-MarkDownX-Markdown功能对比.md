@@ -1,0 +1,332 @@
+# Obsidian 的 Markdown 能力 vs MarkDownX 的 Markdown 能力
+
+> 对比对象：**Obsidian**（客户端 1.x，闭源 Electron 应用）与 **MarkDownX v2.6.1**（本仓库，Tauri v2 + React 18，Apache-2.0）。
+> 对比日期：2026-10-25。MarkDownX 侧经过两轮独立源码审计（主体审计 + 交叉复核），关键结论均可用 `文件:行号` 复核。
+>
+> **证据等级声明（重要）**
+> - **MarkDownX 侧**：全部有源码行号，见 §12.1。
+> - **Obsidian 侧**：本次运行环境**无外网**（`web_search` 缺凭据、`web_fetch` 对所有域名返回"非公网 IP"），**成功抓取官方文档数 = 0**。故 Obsidian 侧为知识整理，逐条标注 `[官方文档-记忆]` / `[通用认知]` / `[存疑]`，发布前应以 `help.obsidian.md` 复核（重点项见 §9）。
+>
+> **⚠️ 时效说明（2026-10-25 追加）**：本文写成后，已按 §8 的组合用法落地 A + B 两档能力——
+> `[[wikilink]]`（别名 / 标题 / 块锚）、`![[嵌入]]`（图片含宽度、笔记、附件）、`^块id`、
+> `#标签` 渲染，以及工作区索引支撑的**反链 / 标签 / 未解析链接**面板。
+> 因此 §2.3「Obsidian 专有语法（MarkDownX 全缺）」**已部分过期**，现状以 [`WIKI_LINKS.md`](WIKI_LINKS.md) 为准。
+> 仍未实现的仍是：关系图谱、Canvas、Bases/Dataview、模板变量、重命名自动改链。
+
+---
+
+## 0. 一句话结论
+
+两者**都叫 Markdown，但回答的是两个不同问题**：
+
+- Obsidian 把 Markdown 当作**笔记网络的索引结构**——真正卖的是 `[[双链]]` + 反链 + 标签 + 图谱 + 插件生态，语法只是承载关系的载体。
+- MarkDownX 把 Markdown 当作**论文/讲义的排版源**——真正卖的是公式编号与 `\eqref` 交叉引用、A4 打印级排版参数、以及 HTML / Word / LaTeX 三条学术导出链路。
+
+语法重叠约 80%，**交集之外几乎没有替代关系**：Obsidian 缺"编号—引用—出版"这条链，MarkDownX 缺"链接—反链—检索"这条链。
+
+---
+
+## 1. 定位与技术底座
+
+| 维度 | Obsidian | MarkDownX v2.6.1 |
+|---|---|---|
+| 定位 | 本地优先的双链笔记 / 知识库 | 计算力学·材料·算法推导类文档的写作与排版工具 (`README.md:3`) |
+| 运行时 | Electron `[通用认知]` | Tauri v2 + Rust 壳 + React 18 + Vite (`package.json:18-32`) |
+| Markdown 解析 | 自有闭源解析器（CodeMirror 6 编辑 + 独立阅读视图渲染）`[通用认知]` | `marked@12` + **4 个 renderer 覆写**、**无自定义 tokenizer**；`gfm:true, breaks:false, pedantic:false` (`src/utils/markdownRenderer.ts:395-500`) |
+| 渲染线程 | 主线程 `[通用认知]` | 主线程 + **Web Worker**：`≥20000` 字符走 Worker，失败/超时 30s 回落同步；两条路径由渲染护栏做逐字节等价断言 (`src/utils/renderClient.ts:18, 104, 136-140`) |
+| 数学 | MathJax v3 内置 `[通用认知]` | MathJax 3 本地随包（离线可用），tex-svg / tex-chtml 可切；`enableMenu:false`；autoload 扩到 physics/mathtools/mhchem 等，`\bm`→`\boldsymbol` (`index.html:35-95`) |
+| 代码高亮 | CodeMirror 语言覆盖较广 `[通用认知]` | highlight.js，**仅精确注册 python / cpp / fortran / json 四门**，其余走 `highlightAuto` 猜测 (`markdownRenderer.ts:10-13, 431-436`) |
+| 文档单位 | **库（vault）**：含 `.obsidian/` 配置与索引 | **文件夹 + 文件**：`handleSelectWorkspace` 打开目录，无库级索引 (`App.tsx:2453`) |
+| 扩展方式 | 社区插件 API + 主题 + CSS snippets | **无插件机制**：一体化，改功能 = 改源码（Apache-2.0 可 fork） |
+| 授权 | 闭源；个人免费，Sync/Publish 付费；商用条款见 §9 `[存疑]` | Apache-2.0（`README.md` v2.2.2） |
+
+---
+
+## 2. 语法支持矩阵
+
+图例：✅ 完整　◐ 部分/有差异　❌ 不支持
+
+### 2.1 基础语法（CommonMark / GFM）
+
+| 语法 | Obsidian | MarkDownX | 备注与证据 |
+|---|---|---|---|
+| 标题 `#`…`######` | ✅ | ✅ | `id="heading-<slug>"`，重名自动 `-2` 后缀 (`markdownRenderer.ts:401-411`) |
+| 粗体 / 斜体 / 粗斜体 | ✅ | ✅ | marked 原生 |
+| 删除线 `~~x~~` | ✅ | ✅ | `gfm:true` |
+| 有序/无序/嵌套列表 | ✅ | ✅ | marked 原生 |
+| 引用块 `>` | ✅ | ✅ | 同时被 callout 机制接管 (`:460-493`) |
+| 行内代码 / 围栏代码 | ✅ | ◐ | 语言覆盖窄；语言名无别名归一（写 ```py 会退化为自动识别）；带复制按钮与语言胶囊 (`:425-451`) |
+| 表格（管道表） | ✅ 对齐可用；**无合并单元格** `[通用认知]` | ✅ 对齐可用；**同样无合并单元格**；三线表样式 (`App.css`) | 两家打平，均受 GFM 管道表上限约束 |
+| 水平线 / 转义 / 原始 HTML | ✅ | ✅ | 原始 HTML 透传，并对其中 `<img src>` 做路径改写 (`markdownRenderer.ts:351-363`)；无 XSS 净化（本地可信文档模型） |
+| 链接 `[t](url)` | ✅ | ✅ | 三分类：外部→系统浏览器；`#锚点`→预览内滚动；相对 `.md`→**应用内打开**（未保存时不猜路径）(`src/utils/linkTarget.ts:20-38`, `App.tsx:2143-2166`) |
+| 图片 `![](p)` | ✅ | ◐ | 相对路径经 `convertFileSrc` 变 `asset://` (`:321-343, 413-423`)；**无尺寸语法**（Obsidian 可 `![[img.png\|300]]`）；不重写 `srcset` |
+| 任务列表 `- [ ]` / `- [x]` | ✅ **复选框可点击写回** `[通用认知]` | ◐ 渲染正确、样式于 v2.4.9 补齐，但**复选框不可点击**（无写回逻辑） | 待办只能回源码改 |
+| 脚注 `[^1]` | ✅ 汇聚到文末脚注区 `[通用认知]` | ◐ **就地**改写为编号段落 + `↩` 回链，**不汇聚文末**；按首次引用顺序编号；未引用定义/未定义引用原样保留；重复引用只给第一个 id (`:909-972`) | marked v12 无脚注能力，此处为自研 |
+| 硬换行 | 行尾两空格 / `\` `[存疑]` | `breaks:false`，仅行尾两空格/`\` (`:497`) | |
+
+### 2.2 扩展语法（两家共有）
+
+| 语法 | Obsidian | MarkDownX | 备注与证据 |
+|---|---|---|---|
+| 数学 `$…$` / `$$…$$` | ✅ | ✅ | 见 §3 |
+| `==高亮==` | ✅ | ◐ 侧翼规则：`a == b` 不高亮、`a==b` 与 `a==b==c` 也不高亮（保守）；不跨行；**打印时降级为下划线** (`:974-986`, `App.css:3839`) | 与 Obsidian 的宽松规则略有差异 |
+| `%%注释%%` | ✅ 源码可见、阅读视图隐藏 | ✅ 源码级删除（预览/导出/打印自动一致）；未闭合 `%%` 原样保留；围栏/公式内 `%%` 不动 (`:902-907`) | |
+| Callout `> [!type]±` | ✅ 约 20 类型各有配色/图标 `[官方文档-记忆]` | ◐ **8 个色族**（note/tip/warning/caution/important + 自有 theorem/definition/assumption），Obsidian 其余类型全部**别名映射**到既有色族；`+`/`-` 用 `<details open>` 实现（无 JS，内容留 DOM，打印强制展开）；标题须与 `[!type]` 同行 (`:371-393, 460-493`, `App.css:3841-3865`) | 视觉一致换类型粒度；未见嵌套 callout 专门处理 |
+| YAML 属性 / frontmatter | ✅ 属性面板，类型含 Date&time `[官方文档-记忆]` | ◐ 渲染为**属性卡**；6 类型 text/number/checkbox/date/list/tags（**无 datetime**）；值按纯文本、不渲染 Markdown (`src/utils/properties.ts:14, 167-199`) | |
+| 属性编辑写回 | ✅ 面板内直接编辑 | ✅ 可改值改类型、可增删；保守写回：只重建 frontmatter 块内的目标行，注释与未知键保留、EOL 跟随文档；但**"逐字节不变"是过度表述**——整块按文档 EOL 重建，值可能被重新加引号 (`src/utils/propertyEdit.ts:31-33, 67-68`) | |
+
+### 2.3 Obsidian 专有语法（MarkDownX 全缺）
+
+| 语法 / 能力 | Obsidian | MarkDownX | 影响 |
+|---|---|---|---|
+| `[[笔记]]`、`[[笔记\|别名]]`、`[[笔记#标题]]`、`[[#本页标题]]` | ✅ 核心 | ❌ **原样显示为文字**（全 `src/` 无 `\[\[` 处理） | Obsidian 文档搬入即"链路断裂"，只能人工改写成 `[文字](./other.md)` |
+| `![[嵌入]]`（整篇/标题/块/图片/PDF 指定页/音视频） | ✅ `[官方文档-记忆]` | ❌ `renderer.image` 只认标准 `![]()` | 嵌入式"组合文档"这一整类写法无法迁移 |
+| 块引用 `^block-id` + `[[note#^id]]` | ✅ | ❌ `^id` 变普通文字 | |
+| `#标签` / 嵌套 `#a/b` | ✅ 含标签面板与计数 | ❌ 无 tag 扫描 pass；仅 frontmatter 的 `tags` 在属性卡里渲染成 chip (`properties.ts:174`) | 失去跨文档聚合检索 |
+| `aliases` 别名 | ✅ 参与链接补全 | ❌ 仅当普通 YAML 列表显示，不参与任何解析 | |
+| 反链 / 出链 / 关系图谱 / 局部图 | ✅ 核心插件 | ❌ 无索引层 | 这是 Obsidian 的核心价值，MarkDownX 无对应物 |
+| Canvas（`.canvas`） | ✅ 核心插件 | ❌ 无该文件类型，只分流 PDF / 文本 (`App.tsx:2861`) | |
+| Templates（`{{title}}` `{{date:FORMAT}}`） | ✅ 核心插件 `[官方文档-记忆]` | ❌ 无变量替换 | |
+| Daily notes / Bases / Dataview | ✅ 核心插件 / 社区插件 `[存疑：Bases 版本]` | ❌ 无查询执行层，代码块只按语言高亮 | |
+| 多库（vault） | ✅ | ◐ 单一"工作区"目录，无一库多根、无库级配置 | |
+
+> MarkDownX 对多文件世界的理解止于"文件夹树 + 相对路径"：**没有"文档即节点"这一层**。
+
+### 2.4 MarkDownX 独有（Obsidian 侧无等价能力）
+
+| 能力 | MarkDownX | Obsidian | 证据 |
+|---|---|---|---|
+| `\label` 触发**公式自动编号**（并按序避让手写 `\tag` 已占号） | ✅ | ❌ 需手写或插件 `[存疑]` | `markdownRenderer.ts:732-749` |
+| `\eqref{}` / `\ref{}` → 可点链接；未解析显示 `(?)` + tooltip（不伪造编号） | ✅ | ❌/不可靠 `[存疑]` | `:810-824` |
+| 编号公式右对齐 tag 列（导出 HTML 同样带样式） | ✅ | — | `App.tsx:3472-3497` |
+| 兼容 `\(…\)` / `\[…\]` 原生 LaTeX 定界符 | ✅ | ❌ 只认 `$`/`$$` `[通用认知]` | `:706-718, 826-862` |
+| 兼容出版社 HTML 公式容器（`<span class="math math-inline">` 裸 TeX、Pandoc `math inline`） | ✅ 归一化后进同一 token 管线 | ❌ | `:771-801` |
+| 预览双击任意块 → **源码精确偏移**（词级定位 16/16，含 CRLF 归一与公式 span 还原比对） | ✅ | 无（可装插件） | `App.tsx:905-1293, 2567-2575` |
+| 排版面板（字体族/字号 12–26/行高 1.4–2.5/段距/首行缩进/版心 760–1280 与 100%/对齐）全部持久化 | ✅ | 靠主题 CSS | `App.tsx:2035-2047` |
+| 打印级语义：`@page A4`、强制黑白、隐藏外壳、公式/编号强制色、`page-break-inside:avoid`、高亮→下划线、折叠 callout 展开 | ✅ | 有 PDF 导出，缺同类语义规则 `[存疑]` | `App.css:1106-1236, 3839, 3863-3865` |
+| 学术导出链路（HTML/Word/LaTeX） | ✅ 见 §5 | ❌ 仅 PDF（+ Publish） | `App.tsx:3398-3666` |
+| 内置 PDF 查看器 + 批注 + 结构编辑 + 压平副本 | ✅ | ❌ 仅嵌入显示 | `src/pdf/*` |
+| 手机端（Android，含系统打印与 APK 内更新） | ✅ v2.4.8+ | ✅ iOS/Android | |
+
+---
+
+## 3. 数学公式：差距最大的一栏
+
+两家都用 MathJax v3，渲染结果接近；**真正的差距在"编号—引用—定位"这条链上**。
+
+| 能力 | Obsidian | MarkDownX |
+|---|---|---|
+| `$…$` / `$$…$$` | ✅ | ✅ |
+| `\(…\)` / `\[…\]` | ❌ `[通用认知]` | ✅ (`:706-718, 826-862`) |
+| 手写 `\tag{3}` | ✅ 渲染 | ✅ 渲染，并**登记该号**，自动编号跳过它；**只识别第一个 `\tag`**；MathJax 自身 `tags` 未开启 (`:733-742`) |
+| 自动编号 | ❌ | ✅ **但只对带 `\label` 的公式触发**；既无 tag 又无 label 不编号；序号按文档出现顺序，跨文档不连续 (`:743-749`) |
+| `\eqref{lbl}` → `(3)` 可点链接 | ❌ 社区长期反馈失效 `[存疑]` | ✅ (`:820-822`) |
+| `\ref{lbl}` → `3` 可点链接 | ❌ `[存疑]` | ✅ (`:823`) |
+| 未定义标签 | 原样/报错 | ✅ `(?)` + "未找到标签"提示，不伪造编号 (`:815-818`) |
+| `eq:a` 与 `a` 视为同一标签 | — | ✅ (`:642-650`) |
+| 编号在导出物里保留 | — | ✅ HTML 导出保留 `.math-equation-row` + `.math-equation-tag` (`App.tsx:3472-3497`) |
+
+**容错层（"吃过坏输入"的痕迹，Obsidian 侧无等价的公开机制 `[存疑]`）**：
+
+1. **`<` 转义**：`\sum_{l<m}` 的裸 `<` 被 HTML 解析器当标签开头，公式被截断，MathJax 又与后文另一个 `$$` 错配 → 只转 `<`，不转 `>` (`:79-81, 494-541`)。
+2. **`$$` 配对必须落在词法边界** `(?<!\S)\$\$`：合并/OCR 文本里两个行内公式相贴会产生假 `$$`，与几百行外真 `$$` 配对后吞掉中间全部标题（实测一本 12 章书第 5–10 章目录全死）(`:706-718`，回归测试 `__tests__/mathTokenization.test.ts:81-127`)。
+3. **出版社容器归一化**：`<span class="math math-inline">` 里的裸 TeX 本不会被任何定界符匹配，整段图注会露出 LaTeX → 先重写成标准定界符 (`:771-801`)。
+4. **CRLF 归一**：marked 的 `raw` 是 LF、源文件是 CRLF，逐 token 累加每行少算 1 字符——实测差值 1109 恰等于 CRLF 对数，表现为"双击跳源码越往后偏得越多"(`:659-668`)。
+5. **属性空间守卫**：数学不得落在 HTML 属性里（`isInsideHtmlTag`, `:522-541`），否则注入的 `<span class="` 会把 `<img>` 撕碎，MathJax 抛 `replaceChild of null`。
+
+---
+
+## 4. 编辑体验
+
+| 维度 | Obsidian | MarkDownX |
+|---|---|---|
+| 编辑模型 | **三视图**：Live Preview（内联即时渲染，光标行显源码）/ Source mode / Reading view `[官方文档-记忆]` | **二态**：`源码`（纯 `<textarea>`，无行号、无 Markdown 语法着色）+ `排版`（只读 `dangerouslySetInnerHTML`），`Ctrl+/` 互切 (`App.tsx:2792-2794, 4875-4917`) |
+| 是否"真所见即所得" | 接近（光标行回源码，非 Typora 式完全隐藏） | **否**：预览不可编辑；靠"双击预览块 → 源码精确落点"把两态黏起来（这是它相对 Typora 最有价值的差异点） |
+| 输入增强 | 自动配对、列表续行、Tab 缩进、自动补全 `[通用认知]` | **均无**：`handleKeyDown` 只处理组合键，无字符级拦截 (`App.tsx:2719-2825`) |
+| 撤销/重做 | 自有历史 `[通用认知]` | 委托 textarea 原生撤销栈（`execCommand('undo')`）(`:2488-2497`) |
+| 专注模式 | 可聚焦当前段 `[通用认知]` | **整篇 `opacity:.35`** + `:hover`/`h1`/`h2` 例外，与光标位置无关 (`App.css:2078-2087`)——README 声称的"高亮当前段落"未实现 |
+| 打字机模式 | ✅ | ◐ **仅源码态**，按 `lineIndex * 28` 估算滚动（硬编码行高）(`App.tsx:4884-4893`) |
+| 多标签 / 分屏 | ✅ 标签 + 分屏窗格 `[通用认知]` | 多标签 ✅；**无分屏** |
+| 大纲 | ✅ 核心插件 | ✅ **可逐节点折叠的层级树**，CRLF 安全、跳过围栏代码、Setext 跳过、稳定 key + 每文档命名空间 (`src/utils/outline.ts:34-88`) |
+| 查找替换 | ✅ **全库**，`path:` `tag:` `section:` `task:`、正则 `/…/`、整词、大小写 `[官方文档-记忆]` | ◐ **仅当前文档、仅纯文本**：无正则/整词/大小写开关、无预览内命中高亮；计数用 `gi` 正则、替换用区分大小写的 `indexOf`，口径不一致 (`App.tsx:2667-2703`) |
+| 附件管理 | ✅ 粘贴图片自动入附件目录、可配路径 `[通用认知]` | ❌ 拖入文件只会"打开文档"，不插入链接、不粘贴入库 (`App.tsx:3876-3900`) |
+| 主题 | 社区主题 + CSS snippet | 4 套内置：跟随系统 / 纯白学术 / 夜间极客 / 羊皮纸原木 (`App.tsx:534-560`) |
+| 大文件 | 单文件极大时体验下降 `[通用认知]` | ≥2 万字符走 Worker；针对 10 万字符、395 标题的合并书做过专项修复与实测 (`README.md` v2.4.4–v2.4.7) |
+| 外部改动 | 自动重载 `[通用认知]` | ✅ `autoWatchExternalChanges` + 冲突提示 (`App.tsx:1371`) |
+
+---
+
+## 5. 导出与发布：方向完全相反的一栏
+
+| 目标格式 | Obsidian | MarkDownX | 实现性质（诚实说明） |
+|---|---|---|---|
+| **PDF** | ✅ 内置 Export to PDF（Chromium 打印管线）`[官方文档-记忆]` | ✅ 顶栏左键直接打印；`@media print` 做 A4 分页、强制黑白、隐藏外壳、公式/编号强制色、表格与 callout 不跨页 | ◐ **没有 Markdown→PDF 排版引擎**，"出版级"实为浏览器打印；pdf-lib 只服务 PDF 文件的批注/压平/拆合 |
+| **HTML（带样式）** | ❌ 无内置（社区插件） | ✅ 单文件，内联当前主题/字体/版心 CSS | ◐ 三个坑：① MathJax 走 **CDN**（`App.tsx:3432`），离线无公式；② 图片已是 `asset://`，换机可能失效；③ **不内联 mermaid.js**，导出的图只剩 fallback 源码 |
+| **HTML（纯净）** | ❌ | ✅ 无 CSS | ◐ 无 MathJax 脚本 → 公式显示裸 `$$` |
+| **Word .doc/.docx** | ❌（Pandoc 类插件） | ✅ 菜单写 `Word (.docx)…`，默认存 `.doc` | ◐ 实为 **HTML + MSO 条件注释**（`App.tsx:3614-3666`）；无 MathJax → 公式以 `$$…$$` 文本落地；mermaid 只剩空容器；存 `.docx` 会被 Word 判格式不符 |
+| **LaTeX .tex** | ❌（Pandoc 类插件） | ✅ | ◐ **行级正则转换**（`App.tsx:3577-3605`）：`#`→`\section`、`**b**`→`\textbf`、`*i*`→`\textit`、围栏→`verbatim`。**列表、表格、图片、链接、引用块、callout、`==高亮==`、`%%注释%%` 都不转换**（`==`/`%%` 会作为字面字符写进 `.tex`）；行间公式与 `\tag/\label/\eqref` 原样透传（对 LaTeX 恰好正确） |
+| **frontmatter 贯通** | —（无对应链路） | ◐ **半贯通**：`title` → HTML/Word/LaTeX；`author/date` **只进 LaTeX**（`properties.ts:140-150`；HTML/Word 只消费 `title`） | README 说"用于 HTML 与 Word 的文档标题"，与源码不符 |
+| **托管发布** | ✅ Publish（付费） | ❌ | 替代玩法：导出 HTML 自行分发 |
+
+> 结论：**导出广度 MarkDownX 完胜，导出成熟度 Obsidian 更稳**。MarkDownX 的四条出口里，只有 PDF/打印是"生产级"；HTML/Word/LaTeX 更接近"能拿到文件、仍需人工收尾"。
+
+---
+
+## 6. 生态与可扩展性
+
+| 维度 | Obsidian | MarkDownX |
+|---|---|---|
+| 插件 | 社区插件 2000+ 量级、主题与 CSS snippet 生态 `[通用认知]` | **零扩展点**：无插件 API、无脚本钩子 |
+| 二次开发 | 只能写插件（受 API 边界约束） | Apache-2.0 可整仓 fork；内部模块化良好（`markdownRenderer` / `properties` / `outline` / `linkTarget` / `pdf/*` 独立且带单测） |
+| 自动化 | URI 协议、社区 CLI/Sync `[通用认知]` | 无 CLI；文件关联 `.md/.mdx/.pdf` |
+| 测试与护栏 | 不适用（闭源） | Vitest 24 个测试文件；渲染护栏 `tools/render-equivalence-gate`（golden 逐字符 + 换行等价）；**无 CI，护栏需手动跑**（`MAINTENANCE.md:537`） |
+
+---
+
+## 7. 各自明确的短板
+
+### 7.1 MarkDownX 相对 Obsidian 的短板（按影响排序）
+
+1. **没有双链 / 反链 / 标签 / 图谱 / Canvas / Bases**——不是"弱"，是"没有这一层"。
+2. **`[[…]]`、`![[…]]`、`^id`、`#tag` 被当普通文字静默降级**，Obsidian 文档迁入即断链。
+3. **检索只有当前文档、纯文本**：无跨文件、无正则、无 `tag:`/`path:` 语法；替换大小写口径还自相矛盾。
+4. **编辑只有纯 textarea**：无 Live Preview、无自动配对/列表续行、无语法着色；预览只读。
+5. **无附件管理**：不粘贴图片入库、拖入不插入链接、无图片尺寸语法。
+6. **代码高亮只 4 门语言**，其余靠自动猜测（可能标错）。
+7. **HTML/Word/LaTeX 三个出口都需人工收尾**（CDN 公式、asset 图片、mermaid 丢失、正则近似）。
+8. **无插件生态**，想要的功能只能等作者或自己改源码；**无 CI**，护栏靠手动。
+
+### 7.2 Obsidian 相对 MarkDownX 的短板
+
+1. **无公式自动编号与交叉引用**：写"式 (12)"只能手打，插入一条公式就要全文重编号 `[存疑：插件是否已补足]`。
+2. **无 LaTeX / Word / HTML 原生导出**，投稿流程要接 Pandoc 类插件或外部工具。
+3. **不是排版工具**：没有字号/行高/段距/首行缩进/版心这类出版参数，只能写主题 CSS。
+4. **表格不能合并单元格**、单元格内不能放块级内容 `[通用认知]`。
+5. **闭源 + 商用条款需确认**，企业内二次开发受限 `[存疑]`。
+6. 10 万字符级单文件编辑体验不如专用编辑器 `[通用认知]`。
+
+---
+
+## 8. 选型建议
+
+| 你的主要工作 | 选它 | 理由 |
+|---|---|---|
+| 论文 / 讲义 / 推导（多公式、要编号、要交叉引用、要投出去） | **MarkDownX** | 编号—引用—打印/导出成闭环；Obsidian 这条链是断的 |
+| 长期知识库、读书笔记、Zettelkasten、项目/研究管理 | **Obsidian** | 双链/反链/标签/图谱/Bases 构成检索层 |
+| 团队共享文档站点 | Obsidian（Publish/Sync），或都不用、改静态站方案 | MarkDownX 无托管 |
+| 需要"改一行代码就换行为"的内部工具 | **MarkDownX** | Apache-2.0 可 fork；Obsidian 只能写插件 |
+
+### 组合用法（推荐给写论文的人）
+
+**Obsidian 管素材与笔记 → MarkDownX 定稿排版**。迁入前做一次"语法体检"：
+
+| 会坏的东西 | 迁入 MarkDownX 后 | 建议动作 |
+|---|---|---|
+| `[[笔记#标题]]` | 原样文字 | 改写成 `[标题](./笔记.md#锚点)`（相对 `.md` 会在应用内打开 + 锚点滚动） |
+| `![[图.png]]` | 原样文字 | 改成 `![](./assets/图.png)` |
+| `![[笔记]]` 整篇嵌入 | 原样文字 | 手工拼合或走合并脚本 |
+| `^block-id` | 普通文字 | 删除，或改写为标题锚点 |
+| `#标签` | 普通文字 | 迁到 frontmatter `tags:`（属性卡支持 tags 类型） |
+| ```` ```dataview ```` 代码块 | 显示为代码块 | 导出成静态表格再粘贴 |
+| 属性里的 datetime | 降级为 text | 改写成 `YYYY-MM-DD` |
+
+反过来（MarkDownX → Obsidian）要接受：**公式编号与 `\eqref` 链接失效**（需手写编号或装插件）；callout 里 `theorem/definition/assumption` 这些 MarkDownX 自有类型在 Obsidian 没有对应样式，会退化为默认 callout。
+
+---
+
+## 9. 待核实项
+
+**Obsidian 侧（本次无外网）**
+1. 是否有官方或事实标准的公式自动编号方案；`\eqref` 在阅读视图/实时预览下的真实行为。`[存疑]`
+2. 商用授权现状（是否仍要求 Commercial license）。`[存疑]`
+3. Bases 的引入版本与能力边界。`[存疑]`
+4. 表格是否确实没有任何 colspan/rowspan 官方扩展。`[存疑]`
+5. 是否支持 `\(…\)` / `\[…\]`（可经设置或插件开启？）。`[存疑]`
+
+**MarkDownX 侧（源码静态推导，建议实测）**
+6. **`$…$` 写在 YAML 值里可能撕裂属性卡**：数学 pass（`:851`）早于 frontmatter pass（`:880`），值里的公式先被换成哨兵，最后 `detokenizeMath`（`:1012-1067`）在最终 HTML 上把哨兵换回来——正好发生在 `data-prop-value="…"` 属性内部（`properties.ts:185`），而 `isInsideHtmlTag` 只防预处理阶段。现有 `frontmatter.test.ts` 只覆盖 `==` 与 `[^1]`。风险面小，但与"属性值不渲染 Markdown"的设计声明冲突。
+7. 导出 HTML 的 `asset://` 图片是否需要"改写成相对路径/base64"的开关。
+8. `handleReplaceOne` 大小写口径不一致（`indexOf` vs `gi` 计数）是否已知。
+9. 属性写回"逐字节不变"的表述应收敛为"只改目标行、注释与未知键保留"。
+
+---
+
+## 10. README 与源码不一致之处（供作者参考）
+
+| README 的说法 | 源码实际 | 位置 |
+|---|---|---|
+| LaTeX 导出"自动解析章节结构、粗体、代码与**行间公式**" | 行间公式只是原样透传；列表/表格/图片/链接/脚注不转换 | `README.md:1068` vs `App.tsx:3577-3605` |
+| Word 导出"利用标准 MSO-XML 原生协议**打包**" | HTML 文档 + MSO 条件注释，默认存 `.doc`；非 OOXML | `README.md:1067` vs `App.tsx:3614-3666` |
+| HTML 导出"单文件**自包含**" | MathJax 走 CDN；图片是 `asset://`；mermaid.js 不内联 | `README.md:1048` vs `App.tsx:3432` |
+| `title/author/date` 用于"HTML 与 Word 的文档标题" | 只有 `title` 进 HTML/Word `<title>`；`author/date` 只进 LaTeX | `README.md:78` vs `App.tsx:3415, 3550, 3628` |
+| 专注模式"高亮聚焦当前光标所在段落" | 整篇 `opacity:.35` + `:hover`/标题例外，与光标无关 | `README.md:985` vs `App.css:2078-2087` |
+| "纯正 Typora 沉浸式排版" | 只读排版视图 ⇄ 纯 textarea 二态切换，非就地编辑 | `README.md:14` vs `App.tsx:4875-4917` |
+| 公式自动编号（通用表述） | **仅当公式带 `\label`** 才自动编号；MathJax `tags` 未开启 | `README.md:15` vs `markdownRenderer.ts:743-749` |
+| 属性写回"逐字节保持原样" | frontmatter 块按文档 EOL 整块重建，值可能被重新加引号 | `README.md:76-77` vs `propertyEdit.ts:31-33, 67-68` |
+| 代码高亮"针对 Fortran、C++、Python、JSON 等深度调优" | 仅这 4 门注册，其余走 `highlightAuto` 猜测 | `README.md:30` vs `markdownRenderer.ts:10-13, 431-436` |
+| 测试规模（196 项/23 文件 vs 25 文件/214 用例 vs 204 项） | 磁盘上实为 24 个测试文件；三处口径互相矛盾 | `README.md:67`、`MAINTENANCE.md:1388, 1524` |
+
+---
+
+## 11. 对比速览（一张表）
+
+| 能力域 | Obsidian | MarkDownX | 谁赢 |
+|---|---|---|---|
+| 基础 Markdown / GFM | ✅ | ✅ | 平 |
+| 数学渲染 | ✅ | ✅ | 平 |
+| 公式编号与交叉引用 | ❌ | ✅ 原生 AST 级 | **MarkDownX** |
+| 坏输入容错（出版社 HTML / 合并书 / CRLF） | 未知 | ✅ 五层防御 + 事故复盘 + 回归测试 | **MarkDownX** |
+| Callout / 脚注 / 属性 / 高亮 / 注释 | ✅ 类型更全 | ◐ 收敛但可控（脚注不汇聚、复选框不可点） | Obsidian（略） |
+| 文档互联（双链/嵌入/块引用/标签） | ✅ | ❌ | **Obsidian** |
+| 反链 / 图谱 / Bases / Canvas | ✅ | ❌ | **Obsidian** |
+| 全库检索与替换 | ✅ 语法丰富 | ◐ 仅当前文档纯文本 | **Obsidian** |
+| 输入增强（配对/续行/补全） | ✅ | ❌ | **Obsidian** |
+| 附件与图片管理 | ✅ | ❌ | **Obsidian** |
+| 排版参数控制 | ◐ 靠 CSS | ✅ 全套面板 + 持久化 | **MarkDownX** |
+| 导出广度（PDF/HTML/Word/LaTeX） | ◐ 仅 PDF(+Publish) | ✅ 四条出口 | **MarkDownX** |
+| 导出成熟度 | ✅ 稳 | ◐ 需人工收尾 | Obsidian |
+| 编辑所见即所得 | ✅ Live Preview | ◐ 只读预览 + 源码 | Obsidian |
+| 大文件 / 启动性能 | ◐ | ✅ Tauri + Worker + 专项优化 | MarkDownX |
+| 可扩展性 | ✅ 2000+ 插件 | ❌ 零扩展点（但可 fork） | **Obsidian** |
+| 许可与可控性 | 闭源 | Apache-2.0 | MarkDownX（对开发者） |
+
+---
+
+## 12. 附录
+
+### 12.1 MarkDownX 侧证据索引
+
+| 结论 | 位置 |
+|---|---|
+| marked 配置与 4 个 renderer 覆写 | `src/utils/markdownRenderer.ts:395-500` |
+| 渲染管线 17 步顺序（CRLF→mermaid 抬升→掩码→数学→属性→注释→脚注→高亮→解掩码→parser→detokenize） | `markdownRenderer.ts:659-1109` |
+| Worker 渲染（≥20000 字符）与同步回落 | `src/utils/renderClient.ts:18, 104, 136-140` |
+| 标题 id（含重复后缀） | `markdownRenderer.ts:401-411` |
+| 图片 asset URL 解析、无尺寸语法 | `:321-343, 413-423` |
+| 代码高亮四语言 + `highlightAuto` 兜底 | `:10-13, 425-451` |
+| Callout 类型表 / 别名 / `<details>` 折叠 | `:371-393, 460-493`；`App.css:3841-3865` |
+| 公式定界符与 `$$` 边界 | `:706-718` |
+| `\tag` / `\label` / 自动编号避让 | `:732-749` |
+| `\eqref` / `\ref` 与 `(?)` 未解析提示 | `:809-824` |
+| 出版社 HTML 公式容器归一化 | `:771-801` |
+| 行内数学与属性空间守卫 | `:522-541, 826-862` |
+| 脚注自研（编号/回链/不汇聚） | `:909-972` |
+| `==高亮==` 侧翼规则、`%%注释%%` | `:902-907, 974-986` |
+| 属性卡渲染 / 解析 / 类型 | `src/utils/properties.ts:14, 48-90, 167-199` |
+| 属性写回 | `src/utils/propertyEdit.ts:31-33, 67-68` |
+| 链接目标分类 | `src/utils/linkTarget.ts:20-38` |
+| 大纲提取与折叠 | `src/utils/outline.ts:34-88` |
+| 预览只读 + 双击精确落点 | `src/App.tsx:905-1293, 2567-2575, 4875-4917` |
+| 查找替换（单文档/纯文本/口径不一致） | `src/App.tsx:2667-2703` |
+| 排版面板与持久化 | `src/App.tsx:2035-2047` |
+| 打印出口 | `src/App.tsx:3348-3396`；`App.css:1106-1236` |
+| HTML 导出（CDN MathJax、主题 CSS、不含 mermaid.js） | `src/App.tsx:3398-3561` |
+| LaTeX 导出（行级正则） | `src/App.tsx:3563-3611` |
+| Word 导出（MSO-HTML，`title` only） | `src/App.tsx:3613-3666` |
+| PDF 查看/批注/压平 | `src/pdf/*`；`src/pdf/flatten.ts:31` |
+| 无 CI，护栏手动跑 | `MAINTENANCE.md:537` |
+
+### 12.2 Obsidian 侧信源状态
+
+本次**成功抓取官方文档数 = 0**：`web_search` 缺 `DEEPSEEK_API_KEY`；`web_fetch` 对 `help.obsidian.md`、`obsidian.md`、`docs.obsidian.md`、`raw.githubusercontent.com`、乃至 `example.com` 均返回 `non-public IP address`（全局 egress 被拦）。
+复核建议优先抓 `github.com/obsidianmd/obsidian-help` 的英文 md 源文件（比 SPA 帮助站更稳、可 diff），重点核对：Callout 类型全枚举、属性类型枚举、Search 运算符子集、Export to PDF 页面行为、商用许可条款、任务复选框交互。

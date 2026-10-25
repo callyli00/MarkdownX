@@ -16,11 +16,17 @@
  *    host falls back to the synchronous path when it sees one.
  */
 
-import { renderMarkdownPayload } from './markdownRenderer';
+import { renderMarkdownPayload, type WikiContext } from './markdownRenderer';
 
 interface RenderRequest {
   id: number;
   raw: string;
+  /**
+   * Wiki context: the resolution table, the document path and any embedded-note bodies.
+   * It is structured-clonable data on purpose - the worker must never read a file, or the
+   * two render paths would stop agreeing (see the gate in tools/render-equivalence-gate).
+   */
+  ctx?: WikiContext;
 }
 
 interface RenderResponse {
@@ -38,7 +44,7 @@ ctx.onmessage = async (event: MessageEvent<RenderRequest>) => {
   if (!data || typeof data.id !== 'number' || typeof data.raw !== 'string') return;
   const started = Date.now();
   try {
-    const html = await renderMarkdownPayload(data.raw);
+    const html = await renderMarkdownPayload(data.raw, data.ctx || {});
     const message: RenderResponse = { id: data.id, html, ms: Date.now() - started };
     ctx.postMessage(message);
   } catch (err) {

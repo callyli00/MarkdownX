@@ -10,6 +10,18 @@ import { classifyLink, resolveRelativePath, anchorCandidates } from './utils/lin
 import { setProperty, removeProperty } from './utils/propertyEdit';
 import { extractOutline, visibleOutlineRows, countLines, type OutlineItem } from './utils/outline';
 import { renderDocument } from './utils/renderClient';
+import { scanWikiLinks, resolveWikiPage, type WikiLookup } from './utils/wikiLink';
+import {
+  scanDocument,
+  buildIndex,
+  backlinksOf,
+  allTags,
+  docsWithTag,
+  normalizePath,
+  type WorkspaceIndex,
+  type IndexedDoc
+} from './utils/workspaceIndex';
+import { scanWorkspaceFiles, readTextFiles } from './platform/workspaceScan';
 // Types only: the updater functions are imported dynamically at their call sites, so the
 // updater plugin stays out of the startup chunk (and never loads at all on mobile, where
 // the plugin does not exist). Same pattern as the pdf-lib modules.
@@ -137,8 +149,8 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.6.1';
-const APP_BUILD_DATE = '2026-10-04';
+const APP_VERSION = 'v2.7.0';
+const APP_BUILD_DATE = '2026-10-25';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 
@@ -179,6 +191,17 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.7.0',
+    date: '2026-10-25',
+    items: [
+      '知识链接层：[[笔记]] / [[笔记|别名]] / [[笔记#标题]] / [[笔记#^块id]] 双链，点击在应用内跳转',
+      '嵌入：![[图.png|300]] 带宽度内联图片、![[笔记]] 内联整篇、![[说明.pdf]] 附件芯片',
+      '块引用 ^块id 与 #标签 渲染；断链显式标红（未解析链接），不再静默降级成普通文字',
+      '侧栏新增「反链 / 标签 / 未解析」面板，由工作区索引驱动，保存即增量更新',
+      '导出 HTML 里的 wikilink 是可直接点击的相对路径；打印时链接与标签去掉装饰只留文字'
+    ]
+  },
   {
     version: 'v2.6.1',
     date: '2026-10-20',
@@ -1885,7 +1908,7 @@ export const App: React.FC = () => {
     openContextMenu(x, y, { surface: 'sidebar-file', path });
   };
 
-  const [sidebarPanel, setSidebarPanel] = useState<'workspace' | 'search'>('workspace');
+  const [sidebarPanel, setSidebarPanel] = useState<'workspace' | 'search' | 'links'>('workspace');
   const [outlineRegionOpen, setOutlineRegionOpen] = useState<boolean>(true);
   const [isFocusMode, setIsFocusMode] = useState<boolean>(false);
   const [isTypewriterMode, setIsTypewriterMode] = useState<boolean>(false);
@@ -2067,6 +2090,115 @@ export const App: React.FC = () => {
     return index !== -1 ? fullPath.substring(0, index) : '';
   };
 
+  // ---- Workspace wiki index (backlinks / tags / unresolved links) -------------------
+  //
+  // The index is read from DISK, never from the open tabs: a backlink has to describe what
+  // is actually there, including notes the user never opened. It is also deliberately not
+  // a render dependency - the renderer receives a plain resolution table, so a missing or
+  // stale index degrades to "every link unresolved" instead of blocking a keystroke.
+  const [wikiIndex, setWikiIndex] = useState<WorkspaceIndex | null>(null);
+  const [wikiBuilding, setWikiBuilding] = useState(false);
+  const [linkTab, setLinkTab] = useState<'backlinks' | 'tags' | 'unresolved'>('backlinks');
+  const embedCacheRef = useRef<Map<string, string>>(new Map());
+  const wikiBuildSeqRef = useRef(0);
+
+  /** Notes only: attachments are indexed by name for embeds, but never parsed. */
+  const NOTE_EXT_RE = /\.(?:md|markdown|mdown|mkd|mdx|txt)$/i;
+
+  const rebuildWikiIndex = useCallback(async (root: string | null) => {
+    if (!root) {
+      setWikiIndex(null);
+      return;
+    }
+    // A sequence number, not a boolean: opening a second workspace while the first scan is
+    // still running must not commit the older (now wrong) index.
+    const seq = ++wikiBuildSeqRef.current;
+    setWikiBuilding(true);
+    try {
+      const files = await scanWorkspaceFiles(root);
+      const notes = files.filter((f) => NOTE_EXT_RE.test(f.path));
+      const docs = [];
+      const BATCH = 200;
+      for (let i = 0; i < notes.length; i += BATCH) {
+        const slice = notes.slice(i, i + BATCH);
+        const read = await readTextFiles(slice.map((f) => f.path));
+        for (const item of read) {
+          if (typeof item.content !== 'string') continue;
+          docs.push(scanDocument(item.path, item.content));
+        }
+        if (wikiBuildSeqRef.current !== seq) return;
+      }
+      if (wikiBuildSeqRef.current !== seq) return;
+      // Attachments enter the index as empty documents. Without them every `![[pic.png]]`
+      // would look unresolved - the resolution table is built from `docs`, and a missing
+      // entry is indistinguishable from a missing file. They carry no links, tags or
+      // headings, so they cost one record each and change nothing else.
+      const attachments: IndexedDoc[] = files
+        .filter((f) => !NOTE_EXT_RE.test(f.path))
+        .map((f) => ({
+          path: f.path,
+          name: f.path.split(/[\\/]/).pop() || f.path,
+          links: [],
+          tags: [],
+          headings: []
+        }));
+      setWikiIndex(buildIndex([...docs, ...attachments]));
+      embedCacheRef.current.clear();
+    } catch (err) {
+      // A workspace we cannot read is a normal state (permissions, network share down,
+      // Android SAF path): report it as "no index" and let every link render unresolved.
+      console.warn('[MarkdownX] workspace index unavailable:', err);
+      if (wikiBuildSeqRef.current === seq) setWikiIndex(null);
+    } finally {
+      if (wikiBuildSeqRef.current === seq) setWikiBuilding(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void rebuildWikiIndex(workspaceDir);
+  }, [workspaceDir, rebuildWikiIndex]);
+
+  /** Embedded note bodies are I/O, so they are fetched here and handed to the renderer. */
+  const MAX_EMBEDS_PER_DOC = 8;
+  const MAX_EMBED_CHARS = 256 * 1024;
+
+  const buildWikiContext = useCallback(
+    async (content: string, path: string | null) => {
+      const lookup: WikiLookup | null = wikiIndex ? wikiIndex.lookup : null;
+      const docPath = path || '';
+      if (!lookup || !docPath) return { docPath, lookup, embeds: {} as Record<string, string> };
+
+      const wanted = new Set<string>();
+      for (const link of scanWikiLinks(content)) {
+        if (link.kind !== 'embed' || link.isAttachment || !link.page) continue;
+        const hit = resolveWikiPage(lookup, link.page, docPath);
+        if (hit) wanted.add(hit.path);
+        if (wanted.size >= MAX_EMBEDS_PER_DOC) break;
+      }
+
+      const embeds: Record<string, string> = {};
+      const missing: string[] = [];
+      for (const target of wanted) {
+        const cached = embedCacheRef.current.get(target);
+        if (cached !== undefined) embeds[target] = cached;
+        else missing.push(target);
+      }
+      if (missing.length > 0) {
+        const read = await readTextFiles(missing);
+        for (const item of read) {
+          if (typeof item.content !== 'string') continue;
+          const body = item.content.length > MAX_EMBED_CHARS
+            ? `${item.content.slice(0, MAX_EMBED_CHARS)}\n\n> ⚠️ 嵌入内容超过 ${Math.round(MAX_EMBED_CHARS / 1024)} KB，已截断显示。`
+            : item.content;
+          embedCacheRef.current.set(item.path, body);
+          embeds[item.path] = body;
+        }
+      }
+      return { docPath, lookup, embeds };
+    },
+    [wikiIndex]
+  );
+
   const updatePreview = useCallback(async (content: string, currentPath: string | null) => {
     try {
       const basePath = getBasePath(currentPath);
@@ -2075,7 +2207,9 @@ export const App: React.FC = () => {
       // handled inside renderDocument, which degrades to this very main-thread parse -
       // a document can therefore never fail to render because of the Worker.
       latestRenderRef.current = content;
-      const { html } = await renderDocument(content, basePath);
+      const wiki = await buildWikiContext(content, currentPath);
+      if (latestRenderRef.current !== content) return;
+      const { html } = await renderDocument(content, basePath, wiki);
       // Worker latency makes out-of-order completion possible: commit only the newest.
       if (latestRenderRef.current !== content) return;
       renderedForContentRef.current = content;
@@ -2084,7 +2218,16 @@ export const App: React.FC = () => {
       console.error('Markdown rendering error:', error);
       setRenderedHtml(`<div style="color: #ef4444; padding: 20px;">Rendering Error: ${String(error)}</div>`);
     }
-  }, []);
+  }, [buildWikiContext]);
+
+  // The index arrives asynchronously and can change after a save: re-render the open
+  // document once it does, or links would stay "unresolved" until the next keystroke.
+  useEffect(() => {
+    if (!activeFile) return;
+    updatePreview(activeFile.content, activeFile.path);
+    // Intentionally keyed on the index only: a tab/typing change already re-renders, this
+    // effect exists purely to catch "index finished building after the page was drawn".
+  }, [wikiIndex]);
 
   // Update preview on tab change
   useEffect(() => {
@@ -2168,8 +2311,32 @@ export const App: React.FC = () => {
     return false;
   };
 
-  /** One entry point for preview clicks: links first, then the property editor. */
+  /**
+   * Wiki-link clicks.
+   *
+   * The index already resolved the target to an ABSOLUTE path and stamped it on the
+   * element, so this opens that path directly instead of re-resolving the relative href -
+   * with duplicate note names the two could disagree, and the index is the authority.
+   * An unresolved link carries no href; the click is swallowed so nothing navigates (the
+   * tooltip already says which note is missing).
+   */
+  const handleWikiLink = (event: React.MouseEvent<HTMLElement>): boolean => {
+    const el = (event.target as HTMLElement).closest('[data-wikilink]') as HTMLElement | null;
+    if (!el) return false;
+    const target = el.getAttribute('data-wikilink') || '';
+    event.preventDefault();
+    if (!target || target.startsWith('#')) {
+      // Same-page `[[#Heading]]`: let the ordinary anchor path scroll to it.
+      return false;
+    }
+    if (el.tagName.toLowerCase() !== 'a') return true; // unresolved: nothing to open
+    void openFileByPath(target);
+    return true;
+  };
+
+  /** One entry point for preview clicks: wiki links, then links, then the property editor. */
   const handlePreviewClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (handleWikiLink(event)) return;
     if (handlePreviewLink(event)) return;
     handlePropsClick(event);
   };
@@ -3019,6 +3186,26 @@ export const App: React.FC = () => {
     }
   };
 
+  /**
+   * A save changes what the workspace index should say about this note, so the note is
+   * re-scanned and folded back in. Full rescan is not needed: buildIndex() folds an array
+   * of per-document scans in one pass, so this costs one parse plus one merge - cheap
+   * enough to run on every Ctrl+S even for a large folder.
+   */
+  const noteSavedToIndex = useCallback(
+    (targetPath: string, content: string) => {
+      embedCacheRef.current.delete(targetPath);
+      setWikiIndex((prev) => {
+        if (!prev) return prev;
+        const docs = { ...prev.docs, [targetPath]: scanDocument(targetPath, content) };
+        return buildIndex(Object.values(docs));
+      });
+      // Links that just became resolvable must stop rendering as broken right away.
+      void updatePreview(content, targetPath);
+    },
+    [updatePreview]
+  );
+
   const handleSaveFile = async () => {
     setActiveMenu(null);
     if (!activeFile) return;
@@ -3042,6 +3229,7 @@ export const App: React.FC = () => {
         setOpenFiles((prev) =>
           prev.map((f) => (f.id === activeFileId ? { ...f, path: targetPath, name: fileName, isModified: false } : f))
         );
+        noteSavedToIndex(targetPath, activeFile.content);
       }
     } catch (error) {
       console.error('File save error:', error);
@@ -3069,6 +3257,7 @@ export const App: React.FC = () => {
         setOpenFiles((prev) =>
           prev.map((f) => (f.id === activeFileId ? { ...f, path: targetPath, name: fileName, isModified: false } : f))
         );
+        noteSavedToIndex(targetPath, activeFile.content);
       }
     } catch (error) {
       console.error('File save-as error:', error);
@@ -3938,6 +4127,17 @@ ${texBody}
                 <span>{sidebarPanel === 'search' ? '文档查找与替换...' : '搜索 / 替换  (Ctrl+Shift+F)'}</span>
               </div>
 
+              <div className="sb-searchbar" onClick={() => setSidebarPanel(sidebarPanel === 'links' ? 'workspace' : 'links')}>
+                <AppIcon name="book" size={14} />
+                <span>
+                  {sidebarPanel === 'links'
+                    ? '返回工作区'
+                    : wikiBuilding
+                      ? '正在索引工作区…'
+                      : '反链 / 标签 / 未解析链接'}
+                </span>
+              </div>
+
               <div className="sb-scroll">
                 {sidebarPanel === 'search' ? (
                   <div className="search-view">
@@ -3978,6 +4178,77 @@ ${texBody}
 
                     <button className="sb-back-link" onClick={() => setSidebarPanel('workspace')}>
                       ← 返回工作区
+                    </button>
+                  </div>
+                ) : sidebarPanel === 'links' ? (
+                  <div className="links-view">
+                    <div className="sidebar-pane-title">知识链接 · LINKS</div>
+                    <div className="links-tabs">
+                      <button className={`links-tab ${linkTab === 'backlinks' ? 'active' : ''}`} onClick={() => setLinkTab('backlinks')}>反链</button>
+                      <button className={`links-tab ${linkTab === 'tags' ? 'active' : ''}`} onClick={() => setLinkTab('tags')}>标签</button>
+                      <button className={`links-tab ${linkTab === 'unresolved' ? 'active' : ''}`} onClick={() => setLinkTab('unresolved')}>未解析</button>
+                    </div>
+
+                    {wikiBuilding && <div className="sidebar-empty-hint">正在扫描工作区…</div>}
+                    {!wikiIndex && !wikiBuilding && (
+                      <div className="sidebar-empty-hint">打开一个文件夹后才有索引（反链与标签需要它）</div>
+                    )}
+
+                    {wikiIndex && linkTab === 'backlinks' && (
+                      <div className="links-list">
+                        {(activeFile?.path ? backlinksOf(wikiIndex, activeFile.path) : []).length === 0 ? (
+                          <div className="sidebar-empty-hint">没有笔记链接到本文</div>
+                        ) : (
+                          (activeFile?.path ? backlinksOf(wikiIndex, activeFile.path) : []).map((ref, index) => (
+                            <button key={`${ref.from}-${index}`} className="links-row" onClick={() => void openFileByPath(ref.from)}>
+                              <span className="links-row-title">{ref.from.split(/[\\/]/).pop()}</span>
+                              <span className="links-row-context">{ref.context}</span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+
+                    {wikiIndex && linkTab === 'tags' && (
+                      <div className="links-list">
+                        {allTags(wikiIndex).length === 0 ? (
+                          <div className="sidebar-empty-hint">工作区里还没有 #标签</div>
+                        ) : (
+                          allTags(wikiIndex).slice(0, 200).map((entry) => (
+                            <div key={entry.tag} className="links-row links-row-static">
+                              <span className="md-tag-pill">#{entry.tag}</span>
+                              <span className="links-row-count">{entry.count}</span>
+                              <span className="links-row-docs">
+                                {docsWithTag(wikiIndex, entry.tag).slice(0, 5).map((docPath) => (
+                                  <button key={docPath} className="links-doc-chip" onClick={() => void openFileByPath(docPath)}>
+                                    {docPath.split(/[\\/]/).pop()}
+                                  </button>
+                                ))}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+
+                    {wikiIndex && linkTab === 'unresolved' && (
+                      <div className="links-list">
+                        {(() => {
+                          const list = activeFile?.path ? wikiIndex.unresolved[normalizePath(activeFile.path)] || [] : [];
+                          if (list.length === 0) return <div className="sidebar-empty-hint">本文没有断裂的链接</div>;
+                          return list.map((link, index) => (
+                            <div key={`${link.page}-${index}`} className="links-row links-row-static">
+                              <span className="links-row-title links-row-broken">
+                                {link.kind === 'embed' ? '!' : ''}[[{link.page || link.heading}]]
+                              </span>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    )}
+
+                    <button className="sb-back-link" onClick={() => void rebuildWikiIndex(workspaceDir)}>
+                      ↻ 重建索引
                     </button>
                   </div>
                 ) : (
