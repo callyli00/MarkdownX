@@ -42,6 +42,24 @@ fn get_cli_args() -> Vec<String> {
     std::env::args().skip(1).collect()
 }
 
+/// What a path handed to the app actually is: a workspace FOLDER, a document, or nothing.
+///
+/// The app accepts either on the command line (and on drop). Passing a folder opens it as
+/// the workspace - the root the sidebar tree, the wiki index and the backlink panels all
+/// build on. Before this the only way in was the OS folder picker, a native dialog that no
+/// script (and therefore no automated smoke test) can answer.
+#[tauri::command]
+fn path_kind(path: String) -> String {
+    let candidate = PathBuf::from(&path);
+    if candidate.is_dir() {
+        "dir".to_string()
+    } else if candidate.is_file() {
+        "file".to_string()
+    } else {
+        "missing".to_string()
+    }
+}
+
 /// The platform this binary was compiled for. The frontend gates desktop-only
 /// affordances (workspace folder tree, auto-update, always-on-top) on this instead of
 /// guessing from a user agent.
@@ -942,6 +960,7 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             get_cli_args,
+            path_kind,
             get_host_platform,
             read_file_from_path,
             read_dir_files,

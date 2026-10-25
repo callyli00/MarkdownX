@@ -3112,7 +3112,35 @@ export const App: React.FC = () => {
     !arg.startsWith('-') &&
     !/\.(exe|dll|msi|sys|bat|cmd|com|scr|zip|7z|rar)$/i.test(arg);
 
-  // Listen for CLI arguments on initial startup (double-clicking an associated .md file)
+  /**
+   * Open whatever was handed to the app: a folder becomes the workspace (sidebar tree, wiki
+   * index, backlink panels), a document opens as a tab.
+   *
+   * Folders are accepted because the OS folder picker is the only other way in, and it is a
+   * native modal no CLI, script or automated test can answer. `path_kind` is asked rather
+   * than guessed from the extension: Windows folder names legitimately contain dots
+   * ("C:\vault\notes.v2"), and a missing path must not silently open an empty tab.
+   */
+  const openPathOrWorkspace = useCallback(
+    async (targetPath: string): Promise<boolean> => {
+      const kind = await invoke<string>('path_kind', { path: targetPath }).catch(() => 'missing');
+      if (kind === 'dir') {
+        await loadWorkspaceFiles(targetPath);
+        setIsSidebarOpen(true);
+        setSidebarPanel('workspace');
+        return true;
+      }
+      if (kind === 'file') {
+        await openFileByPath(targetPath);
+        return true;
+      }
+      return false;
+    },
+    [loadWorkspaceFiles, openFileByPath]
+  );
+
+  // Listen for CLI arguments on initial startup (double-clicking an associated .md file,
+  // or launching with a workspace folder).
   useEffect(() => {
     let handled = false;
     const checkInitialCliArgs = async () => {
@@ -3122,10 +3150,7 @@ export const App: React.FC = () => {
         const args = await invoke<string[]>('get_cli_args');
         if (args && args.length > 0) {
           for (const arg of args) {
-            if (isOpenableDocumentArg(arg)) {
-              await openFileByPath(arg);
-              break;
-            }
+            if (isOpenableDocumentArg(arg) && (await openPathOrWorkspace(arg))) break;
           }
         }
       } catch (err) {
@@ -3134,7 +3159,7 @@ export const App: React.FC = () => {
     };
 
     checkInitialCliArgs();
-  }, [openFileByPath]);
+  }, [openPathOrWorkspace]);
 
   // Listen for file open requests forwarded from subsequent instances (single-instance plugin)
   useEffect(() => {
@@ -3145,10 +3170,7 @@ export const App: React.FC = () => {
           const args = event.payload;
           if (args && args.length > 0) {
             for (const arg of args) {
-              if (isOpenableDocumentArg(arg)) {
-                await openFileByPath(arg);
-                break;
-              }
+              if (isOpenableDocumentArg(arg) && (await openPathOrWorkspace(arg))) break;
             }
           }
         });
@@ -3162,7 +3184,7 @@ export const App: React.FC = () => {
     return () => {
       if (unlisten) unlisten();
     };
-  }, [openFileByPath]);
+  }, [openPathOrWorkspace]);
 
   const handleOpenFile = async (specificPath?: string) => {
     setActiveMenu(null);
@@ -3895,7 +3917,8 @@ ${texBody}
             setIsDragging(false);
             const droppedPaths = event.payload.paths;
             if (droppedPaths && droppedPaths.length > 0) {
-              handleOpenFile(droppedPaths[0]);
+              // A dropped FOLDER becomes the workspace; a dropped document opens as a tab.
+              void openPathOrWorkspace(droppedPaths[0]);
             }
           } else if (event.payload.type === 'leave') {
             setIsDragging(false);

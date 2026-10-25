@@ -180,6 +180,14 @@ describe('scanWikiLinks / scanTags', () => {
     expect(links[1].kind).toBe('embed');
   });
 
+  it('ignores links and tags written as inline code examples', () => {
+    // Found by the v2.7.0 smoke test: a note that DOCUMENTS the syntax was showing up as a
+    // third backlink target for the very note it was documenting.
+    const src = '示例 `[[B]]` 与 `#tag`，真正的 [[C]] 与 #real';
+    expect(scanWikiLinks(src).map((l) => l.page)).toEqual(['C']);
+    expect(scanTags(src)).toEqual(['real']);
+  });
+
   it('collects tags but not headings, URLs, entities or escapes', () => {
     const tags = scanTags([
       '# Heading',

@@ -236,9 +236,9 @@ export function wikiHref(fromDocPath: string, targetPath: string, link: ParsedWi
 }
 
 /**
- * Neutralise fenced code (and only fenced code) while keeping every byte offset:
- * fenced regions are replaced by spaces of identical length. Used by the scanners so a
- * `[[link]]` inside a code sample never becomes an index edge.
+ * Neutralise code - fenced blocks AND inline code spans - while keeping every byte offset:
+ * masked regions are replaced by spaces of identical length. Used by the scanners so a
+ * `[[link]]` or a `#tag` written as an example never becomes an index edge.
  */
 export function maskFencedCode(content: string): string {
   const lines = String(content ?? '').split('\n');
@@ -252,7 +252,12 @@ export function maskFencedCode(content: string): string {
         out.push(' '.repeat(line.length));
         continue;
       }
-      out.push(line);
+      // Inline code spans on this line only. `[[x]]` inside backticks is an EXAMPLE of
+      // the syntax, not a link: missing this produced phantom backlinks (found by the
+      // v2.7.0 smoke test - a note documenting `[[b]]` in a code span became b's third
+      // referencing page). A backtick span cannot cross a newline in CommonMark, so this
+      // pass stays line-local and can never swallow a fenced block.
+      out.push(line.replace(/(`+)([^\n]*?)\1/g, (m) => ' '.repeat(m.length)));
       continue;
     }
     const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);

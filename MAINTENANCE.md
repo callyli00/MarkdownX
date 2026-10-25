@@ -1554,3 +1554,35 @@ missing field `signature`
 
 **验证（v2.7.0 本机产物）**：安装包 13,443,210 B（SHA-256 前缀 `7e1f3767`）、`.sig` 440 B；
 `latest.json` 的 `windows-x86_64.signature` 非空，`notes` 即 README 的 v2.7.0 一节。
+
+### 13.13 真机冒烟怎么做（CDP 驱动真实 WebView，2026-10-25 实测）
+
+桌面端也能自动化冒烟，不必靠人眼点：给 WebView2 开远程调试，然后用 CDP 在页面上求值。
+
+```powershell
+# 启动（把 fixture 目录作为参数 → 直接进入工作区状态）
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9333'
+.\src-tauri\target\release\markdown-x.exe C:\tmp\smoke\vault
+# 另一个进程：GET http://127.0.0.1:9333/json 取 webSocketDebuggerUrl，再发 Runtime.evaluate
+```
+
+**三条必须知道的实测结论**：
+
+1. **`.click()` 不会触发 React 处理器**。在这个 WebView 里 `el.click()` 的合成事件进不到
+   React 的委托监听（页面上什么都没发生，也没有报错）。要驱动界面，取元素上的
+   `__reactProps$…` 并直接调它的 `onClick()`：
+   `const k = Object.keys(el).find(k => k.startsWith('__reactProps')); el[k].onClick(evt)`。
+2. **`window.__TAURI_INTERNALS__.invoke` 不可替换**（`writable:false, configurable:false`），
+   所以"把对话框命令打桩成固定目录"这条路走不通。改用**文件夹命令行参数**（§13.13 的做法），
+   这也是 `path_kind` 命令存在的原因。
+3. **打印样式可以断言**：`Emulation.setEmulatedMedia({media:'print'})` 之后读 `getComputedStyle`，
+   验证 `.wikilink` 无下划线、`.md-tag` 背景透明。
+
+**v2.7.0 冒烟结果（18/18）**：文件夹参数建索引、双链解析成 `b.md` / `b.md#heading-…`、
+断链 unresolved、标签芯片（含嵌套）、块 id、嵌入图片经 `asset.localhost` 真实加载、
+反链 2 条、未解析面板列出 `[[不存在]]`、标签面板 2 个、点击 `[[b]]` 打开目标文档、
+打印媒体下链接/标签去装饰、页面无未捕获异常。
+
+**冒烟抓到的真 bug**：行内代码里的 `[[b]]` 被当成真链接（一篇讲语法的笔记成了被讲对象的
+第三条反链）。扫描器已改为同时屏蔽围栏代码与行内代码（等长空格替换，偏移不变），
+回归测试见 `src/utils/__tests__/wikiLink.test.ts`。
