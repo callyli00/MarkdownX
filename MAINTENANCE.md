@@ -285,7 +285,7 @@ Kotlin 类仍经一个**不暴露任何命令**的 Tauri 插件包装注册，�
 
 ---
 
-## 3. 版本号同步（6 处，缺一处就"版本不符"）
+## 3. 版本号同步（7 处，缺一处就"版本不符"）
 
 | 文件 | 字段 |
 |---|---|
@@ -293,6 +293,7 @@ Kotlin 类仍经一个**不暴露任何命令**的 Tauri 插件包装注册，�
 | `package-lock.json` | 根 `version` **和** `packages[""].version`（两处） |
 | `src-tauri/Cargo.toml` | `version` |
 | `src-tauri/tauri.conf.json` | `version` |
+| `src-tauri/tauri.android.conf.json` | `bundle.android.versionCode`（公式 `major*10^6 + minor*10^5 + patch*10^3`，2.7.0 → `2700000`；**它不会跟着 `version` 自动变**，而 Android 只认 versionCode 判新旧，漏改就等于手机端收不到更新） |
 | `src/App.tsx` | `const APP_VERSION` **和** `RELEASE_NOTES` 头部条目 |
 | `README.md` | 标题 `# MarkdownX (vX.Y.Z)` **和** 新增 `### [vX.Y.Z] - 日期` 一节 |
 
@@ -1527,3 +1528,29 @@ missing field `signature`
 **教训**：跨平台共用一个清单时，"某一项只有另一个平台会读"是**伪假设** ——
 序列化格式的必填字段对所有读者生效。改共享格式前，先看消费者**类型定义**怎么写的，
 别只看它**取用逻辑**取不取。
+
+### 13.12 v2.7.0 出包：在本地目录构建时缺的两个文件（2026-10-25）
+
+**背景**：UNC 工作区里 `vite build` 连配置都加载不了（`failed to load config from \…`，esbuild 解析不到包入口），
+所以 2.7.0 的包在本地目录出：把源码/配置/`src-tauri` 拷到本地 + `npm ci --offline`
+（本机 npm 缓存 763 MB，**30 秒装回 234 个包**，全程不需要外网）。
+
+**两次失败都不是代码问题**：
+
+1. `failed to resolve bundle > windows > nsis > installerHooks ./installer-hooks.nsh`
+   —— 拷贝清单漏了 `src-tauri/installer-hooks.nsh`。它是 `tauri.conf.json` 里**相对 `src-tauri`** 的路径；
+   缺它时 Rust 已经编译完，失败点在"打包"这一步（增量重试只需打包时间，不必从头编译十几分钟）。
+2. `ENOENT: <本地目录>\README.md` —— 发布脚本从 README 最新的 `### [vX.Y.Z]` 一节取更新说明（单一来源），
+   拷贝目录里必须有 `README.md`，否则清单写不出来。
+
+**本地构建目录的最小清单**：
+`package.json`、`package-lock.json`、`tsconfig.json`、`tsconfig.node.json`、`vite.config.ts`、`index.html`、
+`README.md`、`src/`、`scripts/`，以及
+`src-tauri/{Cargo.toml,Cargo.lock,build.rs,tauri.conf.json,tauri.android.conf.json,installer-hooks.nsh,src,capabilities,icons,gen/android}`。
+
+**安卓侧可以直接在本地目录出包**：`gen/android` 仅 404 KB 可直接拷；`app/build.gradle.kts` 里
+`ndkVersion = "30.0.16248370"` 与本机 `NDK_HOME` 完全一致；Gradle 9.6.1 的分发包已缓存
+（`~/.gradle/wrapper/dists`），`npm run tauri android build -- --apk` 无需外网。
+
+**验证（v2.7.0 本机产物）**：安装包 13,443,210 B（SHA-256 前缀 `7e1f3767`）、`.sig` 440 B；
+`latest.json` 的 `windows-x86_64.signature` 非空，`notes` 即 README 的 v2.7.0 一节。
