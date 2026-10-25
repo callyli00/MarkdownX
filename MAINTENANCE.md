@@ -1586,3 +1586,32 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9333'
 **冒烟抓到的真 bug**：行内代码里的 `[[b]]` 被当成真链接（一篇讲语法的笔记成了被讲对象的
 第三条反链）。扫描器已改为同时屏蔽围栏代码与行内代码（等长空格替换，偏移不变），
 回归测试见 `src/utils/__tests__/wikiLink.test.ts`。
+
+### 13.14 上行只有 ~100 KB/s 时怎么发版（v2.7.0 实测的降级布局）
+
+`release-update.mjs --publish` 的常规布局是：**安装包 + APK + latest.json 全部进 `release-assets` 分支**
+（raw 端点不依赖 github.com，这是当初选它的理由）。但 2026-10-25 这台机器的上行只有
+**~100–200 KB/s**，26 MB 的分支强推反复卡死（git 报 `failed to push some refs`，curl 停在
+`HTTP/1.1 100 Continue` 之后不动；实测 1 MB 上传 17 s、5 MB 可用、13 MB 勉强、23 MB 基本不上去）。
+
+**这次采用的降级布局**（客户端完全无感）：
+
+| 端点 | 内容 |
+|---|---|
+| `release-assets` 分支（raw） | **只有 `latest.json`**（几 KB，秒级推上去） |
+| GitHub Release `v2.7.0` | `MarkdownX_2.7.0_x64-setup.exe` + `latest.json`（+ APK，能上传时） |
+| `latest.json` 里的 `url` | 指向 `https://github.com/.../releases/download/v2.7.0/<file>` |
+
+判别与验收：
+
+```bash
+curl -s https://raw.githubusercontent.com/callyli00/MarkDownX/release-assets/latest.json | grep -o '"version":"[^"]*"'
+curl -sIL https://github.com/callyli00/MarkDownX/releases/download/v2.7.0/MarkDownX_2.7.0_x64-setup.exe | grep -i content-length
+# raw 分支上不再有安装包，所以脚本 verifyRaw() 的"分支安装包 content-length"这一条不适用
+```
+
+**上传实测口径**（避免误判为"卡死"）：Windows 的 `Get-Process curl | OtherTransferCount` 恒为 0，
+别用它判断在传；用 `--trace-ascii` 会**显著拖慢**上传（本次实测从 ~185 KB/s 掉到 ~5 KB/s），
+要看进度就短时间开、或者干脆看 GitHub 那边的资产列表。
+
+上行恢复到正常水平后，仍按 §4 的常规流程发（脚本会把二进制重新放回 `release-assets`）。
