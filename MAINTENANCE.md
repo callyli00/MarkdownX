@@ -1615,3 +1615,10 @@ curl -sIL https://github.com/callyli00/MarkDownX/releases/download/v2.7.0/MarkDo
 要看进度就短时间开、或者干脆看 GitHub 那边的资产列表。
 
 上行恢复到正常水平后，仍按 §4 的常规流程发（脚本会把二进制重新放回 `release-assets`）。
+
+**v2.7.0 的最终落地（2026-10-25 21:30）**：APK 由人在浏览器里拖进 Release 资产后补齐。
+补 Android 那一条不再需要手工改 JSON —— 用 `node tools/finish-android-release.mjs`：
+它会先校验 APK 资产确实存在（大小与本地一致才继续），再重建两平台清单、覆盖 Release 的
+`latest.json`、强推 `release-assets`（仅 6 KB），最后实测两个端点。
+>`--dry-run` 只重建不推送。安装包的 `.sig` 在 `bundle/nsis/` 下、APK 的 `.sig` 在 `bundle/` 下，
+>脚本两处都会找（第一版只找 `bundle/`，直接报"缺少签名文件"）。

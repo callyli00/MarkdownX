@@ -61,9 +61,12 @@ if (!assets.includes(installerName)) {
 const manifestPath = join(bundle, 'latest.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 const base = `https://github.com/${OWNER}/${REPO}/releases/download/${tag}/`;
+// The installer's signature lives beside the installer in `nsis/`, the APK's beside the APK
+// in `bundle/` - look in both rather than hard-coding one layout.
 const readSig = (file) => {
-  const sigPath = join(bundle, `${file}.sig`);
-  if (!existsSync(sigPath)) throw new Error(`缺少签名文件 ${sigPath}（没有它客户端会拒绝安装）`);
+  const candidates = [join(bundle, `${file}.sig`), join(bundle, 'nsis', `${file}.sig`)];
+  const sigPath = candidates.find((p) => existsSync(p));
+  if (!sigPath) throw new Error(`缺少签名文件（找过 ${candidates.join(' / ')}）`);
   return readFileSync(sigPath, 'utf8').trim();
 };
 
