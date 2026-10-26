@@ -1627,3 +1627,55 @@ curl -sIL https://github.com/callyli00/MarkDownX/releases/download/v2.7.0/MarkDo
 `latest.json`、强推 `release-assets`（仅 6 KB），最后实测两个端点。
 >`--dry-run` 只重建不推送。安装包的 `.sig` 在 `bundle/nsis/` 下、APK 的 `.sig` 在 `bundle/` 下，
 >脚本两处都会找（第一版只找 `bundle/`，直接报"缺少签名文件"）。
+
+### 13.15 v2.8.0 发版实记（2026-10-26）：上行恢复后 APK 也能走 `gh`，但有三个坑
+
+**结论先说**：这次 `gh release upload` **两个二进制都一次过**（13.4 MB / 23.6 MB，各约 2–4 分钟），
+所以 §13.14 的"降级布局"不是常态，只是链路差时的兜底；§13.14 的收尾脚本照样要用（清单仍是两平台 + raw 只放 JSON）。
+
+**坑 1：本地构建目录里的 `src/` 是合并复制的，会留旧文件。**
+`cp -r src /c/tmp/mdx-build/` 是**合并**语义：仓库里已经删掉/移位的文件（例如曾经放在
+`src/mentions.ts`、后来移到 `src/utils/mentions.ts`）会留在构建目录里，`tsc` 立刻报
+`TS2307: Cannot find module './wikiLink'`。正确做法：
+
+```bash
+rm -rf /c/tmp/mdx-build/src && cp -r src /c/tmp/mdx-build/src
+# tools/ 与 scripts/ 同理（tauri 的 beforeBuildCommand 与 postinstall 都依赖它们）
+```
+
+**坑 2：`markdown-x.exe` 还在跑，Rust 链接阶段会 `os error 5 拒绝访问`。**
+编译输出写入前要删旧 exe，被占用就删不掉。冒烟脚本留下的进程必须先 `taskkill //F //IM markdown-x.exe`。
+
+**坑 3：这台机器没有 Android Studio 的 `jbr`，`JAVA_HOME` 要指向 `%LOCALAPPDATA%\Java\jdk-21.0.12.1+1`。**
+§13.8 里写的 `C:/Program Files/Android/Android Studio/jbr` 在本机不存在，gradlew 直接
+`ERROR: JAVA_HOME is set to an invalid directory`。可用值：
+
+```bash
+export JAVA_HOME="C:/Users/<user>/AppData/Local/Java/jdk-21.0.12.1+1"   # 或 PATH 里 java 的 home
+```
+
+**更新签名私钥**：`~/.tauri/markdownx-updater.key`（本机 `Z:` 也有备份）。CLI 对
+`TAURI_SIGNING_PRIVATE_KEY_PATH` 在这个 shell 里不认，直接把**文件内容**塞进
+`TAURI_SIGNING_PRIVATE_KEY` 才生效：
+
+```bash
+KEY=$(cat ~/.tauri/markdownx-updater.key)
+TAURI_SIGNING_PRIVATE_KEY="$KEY" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+  node node_modules/@tauri-apps/cli/tauri.js build
+```
+
+**APK 的 `.sig`**（gradle 旁路构建不会自动产出）：用同一个私钥手工签，`--app-version` 要与清单版本一致：
+
+```bash
+node node_modules/@tauri-apps/cli/tauri.js signer sign \
+  src-tauri/target/release/bundle/MarkdownX_2.8.0_universal-release.apk \
+  --private-key-path ~/.tauri/markdownx-updater.key --app-version 2.8.0
+```
+
+**清单里 `notes`/`pub_date` 要手改**：`finish-android-release.mjs` 只重写 `version` 与 `platforms`，
+`notes` 沿用 `bundle/latest.json` 里的旧内容（本次第一遍发出去的就是 v2.7.0 的更新说明）。
+改完再跑一次收尾脚本即可（6 KB 上传秒过）。
+
+**CDN 缓存会骗人**：`gh api .../releases/tags/<tag>` 报的资产 `digest` 已经是新文件的哈希，
+但 `releases/download/.../latest.json` 仍返回旧的 6222 字节版本，约 **2–3 分钟**后才换成新的。
+验收别只看第一次 `curl`，等一会儿或带随机 query 再取一次。
