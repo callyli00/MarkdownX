@@ -6,6 +6,7 @@ import fortran from 'highlight.js/lib/languages/fortran';
 import json from 'highlight.js/lib/languages/json';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { parseFrontmatter, buildPropertiesCard } from './properties';
+import { extractBlock, extractSection } from './embedBlock';
 import {
   parseWikiLink,
   resolveWikiPage,
@@ -147,6 +148,11 @@ interface EmbedNote {
   path: string;
   href: string;
   label: string;
+  /**
+   * `#` 之后的锚点：`^id` 表示只嵌入那一个区块，其它文本表示只嵌入那个章节。
+   * 不填 = 整篇（历史行为）。片段由 embedBlock.ts 切，取不到就渲染「未找到」壳。
+   */
+  anchor?: string;
 }
 
 /**
@@ -942,11 +948,14 @@ function renderWikiEmbed(link: ParsedWikiLink, ctx: WikiContext, notes: EmbedNot
   }
 
   const key = `@@EMBED_NOTE_${notes.length}@@`;
+  // `![[note#^id]]` / `![[note#标题]]`：锚点必须一路带到注入阶段，否则只能烘整篇。
+  const anchor = link.blockId ? `^${link.blockId}` : link.heading;
   notes.push({
     key,
     path: hit.path,
     href: wikiHref(docPath, hit.path, link),
-    label: wikiDisplayText(link) || link.page
+    label: wikiDisplayText(link) || link.page,
+    anchor: anchor || undefined
   });
   return key;
 }
@@ -1555,6 +1564,21 @@ async function renderCore(
 }
 
 /**
+ * 按锚点从整篇正文里切出要嵌入的片段：`^id` 走区块、其它文本走章节。
+ * 纯计算，交给 embedBlock.ts；这里只负责「锚点 -> 哪一支」这个判断。
+ */
+function extractAnchor(content: string, anchor: string): string | null {
+  return anchor.startsWith('^')
+    ? extractBlock(content, anchor.slice(1))
+    : extractSection(content, anchor);
+}
+
+/** 片段取不到时的说明文案：说清缺的是区块还是章节，别让人以为知识库坏了。 */
+function missingAnchorText(anchor: string): string {
+  return anchor.startsWith('^') ? `未找到区块 ${anchor}` : `未找到章节 ${anchor}`;
+}
+
+/**
  * Replace each `@@EMBED_NOTE_n@@` with the rendered body of the embedded note.
  *
  * Two details are deliberate:
@@ -1562,6 +1586,9 @@ async function renderCore(
  *    nested embeds are NOT expanded, which makes an A<->B embedding cycle terminate;
  *  * a note whose body the host did not load degrades to a link chip. The host caps how
  *    much it loads (size and count), so "not loaded" is a normal state, not an error.
+ *
+ * 带锚点（`#^blockid` / `#标题`）时只渲染切出来的那一小段；切不到渲染「未找到」壳，
+ * 绝不退回整篇。片段提取本身在 embedBlock.ts，这里只做分支。
  */
 async function injectEmbeddedNotes(
   html: string,
@@ -1575,21 +1602,42 @@ async function injectEmbeddedNotes(
     // marked wraps a lone sentinel in <p>; block-level content may not live inside one.
     out = out.replace(new RegExp(`<p(?:\\s[^>]*)?>\\s*${note.key}\\s*</p>`), note.key);
 
+    const anchor = note.anchor || '';
+    // 表头要能看出嵌入的是整篇 / 某个区块 / 某个章节：`![[note#^id]]` 若还顶着「note」，
+    // 读者会以为整篇进来了，而这正是本次要修的观感问题。
+    const label = anchor ? `${note.label}#${anchor}` : note.label;
+    // 锚点也写进属性，样式与后续调试都不必再解析一遍 source。
+    const anchorAttr = anchor ? ` data-embed-anchor="${escapeHtml(anchor)}"` : '';
+    const headerStart =
+      `<div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(label)}</a>`;
+
     const bodyMd = ctx.embeds ? ctx.embeds[note.path] : undefined;
     let block: string;
     if (bodyMd === undefined || depth >= MAX_EMBED_DEPTH) {
       block =
-        `<div class="embedded-note embedded-note-missing" data-embed="${escapeHtml(note.path)}">` +
-        `<div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a>` +
+        `<div class="embedded-note embedded-note-missing" data-embed="${escapeHtml(note.path)}"${anchorAttr}>` +
+        headerStart +
         `<span class="embedded-note-note">内容未载入</span></div>` +
         `</div>`;
     } else {
-      const inner = await renderCore(bodyMd, '', false, { ...ctx, embeds: {} }, depth + 1, renderOptions);
-      block =
-        `<div class="embedded-note" data-embed="${escapeHtml(note.path)}">` +
-        `<div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a></div>` +
-        `<div class="embedded-note-body">${inner}</div>` +
-        `</div>`;
+      // 锚点片段先切出来。切不到 ≠ 内容未载入：整篇在、只是没有这个锚点。
+      const fragment = anchor ? extractAnchor(bodyMd, anchor) : bodyMd;
+      if (fragment === null) {
+        // 静默退化成整篇是这里最坏的选择：作者写错锚点却看不出来。明确说缺什么。
+        block =
+          `<div class="embedded-note embedded-note-missing" data-embed="${escapeHtml(note.path)}"${anchorAttr}>` +
+          headerStart +
+          `<span class="embedded-note-note">${escapeHtml(missingAnchorText(anchor))}</span></div>` +
+          `</div>`;
+      } else {
+        const inner = await renderCore(fragment, '', false, { ...ctx, embeds: {} }, depth + 1, renderOptions);
+        block =
+          `<div class="embedded-note" data-embed="${escapeHtml(note.path)}"${anchorAttr}>` +
+          headerStart +
+          `</div>` +
+          `<div class="embedded-note-body">${inner}</div>` +
+          `</div>`;
+      }
     }
     out = out.replace(note.key, () => block);
   }

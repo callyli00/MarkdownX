@@ -29,6 +29,8 @@
 | `![[图.png]]` / `![[图.png\|300]]` | 内联图片，`\|300` 是宽度（此前 MarkDownX 完全没有尺寸语法） |
 | `![[图.png\|图注\|300]]` | 带 alt 的图片 |
 | `![[某篇笔记]]` | 内联该笔记的渲染结果（**深度 1**，见 §4） |
+| `![[某篇笔记#^块id]]` | 只内联那一个块（块 = 连续非空行；标记 `^块id` 不计入成品） |
+| `![[某篇笔记#小节标题]]` | 只内联该章节：到下一个同级或更高级标题为止，不含标题行本身 |
 | `![[说明.pdf]]` | 附件芯片，点击在应用内打开 |
 
 ### 1.3 块引用与标签
@@ -92,6 +94,8 @@ TS:   buildIndex(docs)                 一遍建表：反链、标签计数、�
 
 - **反链**：谁链接到当前文档，带行号与原文片段，点击打开来源。
 - **标签**：全工作区标签按文档数排序，点文档芯片直接打开。
+- **提及**：正文里写了本篇名字、却没加 `[[ ]]` 的地方（带行号与片段），点击打开来源。
+  围栏/行内代码与已有的 `[[链接]]` 都不计入——已链接的属于反链，不重复算。
 - **未解析**：当前文档里断掉的链接（含缺失附件），迁移前用它做一次体检。
 
 ---
@@ -155,6 +159,8 @@ TS:   buildIndex(docs)                 一遍建表：反链、标签计数、�
 | `src/utils/__tests__/workspaceIndex.test.ts` | 36 项 |
 | `src/utils/linkSuggest.ts`、`__tests__/linkSuggest.test.ts` | `[[` 补全与别名归一（纯函数） |
 | `src/utils/renameLinks.ts`、`__tests__/renameLinks.test.ts` | 重命名改链计划（纯函数） |
+| `src/utils/embedBlock.ts`、`__tests__/embedBlock.test.ts` | 区块/章节片段提取（纯函数，23 项） |
+| `src/utils/mentions.ts`、`__tests__/mentions.test.ts` | 未链接提及扫描（纯函数，19 项） |
 | `src-tauri/src/lib.rs`（`rename_path`） | 改名 + 拒绝覆盖 |
 
 ## 别名（aliases）
@@ -216,6 +222,8 @@ aliases:
 node tools/local-check/smoke-p1.mjs   # 检索/替换/复选框写回（12 项）
 node tools/local-check/smoke-p2.mjs   # 补全/标题补全/建笔记（18 项）
 node tools/local-check/smoke-p3.mjs   # 重命名 + 改链 + 撞名拒绝（17 项）
+node tools/local-check/smoke-p4.mjs   # 未链接提及面板（10 项）
+node tools/local-check/smoke-p5.mjs   # 区块级 / 章节级嵌入（10 项）
 ```
 
 两者共用 `tools/local-check/cdp-harness.mjs`（受信任输入：`Input.dispatchMouseEvent` / `Input.insertText`；`el.click()` 在 React 18 委托下不会触发 onClick）。运行前把 `tools/local-check/fixtures/vault` 复制成 `C:/tmp/vault2`，并以 `markdown-x.exe "C:/tmp/vault2"` 启动。

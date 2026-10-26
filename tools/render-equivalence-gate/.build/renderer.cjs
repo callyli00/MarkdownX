@@ -5415,6 +5415,106 @@ function wikiHref(fromDocPath, targetPath, link2) {
   if (link2.heading) return `${href}#heading-${headingSlug(link2.heading)}`;
   return href ? href : "#";
 }
+function maskFencedCode(content) {
+  const lines = String(content ?? "").split("\n");
+  const out = [];
+  let fence = null;
+  for (const line of lines) {
+    const open = line.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence === null) {
+      if (open) {
+        fence = open[1];
+        out.push(" ".repeat(line.length));
+        continue;
+      }
+      out.push(line.replace(/(`+)([^\n]*?)\1/g, (m) => " ".repeat(m.length)));
+      continue;
+    }
+    const close = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+    if (close && close[1][0] === fence[0] && close[1].length >= fence.length) {
+      fence = null;
+    }
+    out.push(" ".repeat(line.length));
+  }
+  return out.join("\n");
+}
+
+// src/utils/embedBlock.ts
+var BLOCK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+var BLOCK_MARKER_RE = /(?:^|[ \t])\^([A-Za-z0-9][A-Za-z0-9_-]*)[ \t]*$/;
+var HEADING_RE = /^( {0,3})(#{1,6})([ \t]+)(.*)$/;
+function isBlank(line) {
+  return line.trim() === "";
+}
+function lineViews(content) {
+  const text = typeof content === "string" ? content : "";
+  return {
+    source: text.split(/\r?\n/),
+    masked: maskFencedCode(text).split(/\r?\n/)
+  };
+}
+function trimBlankLines(lines) {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && isBlank(lines[start])) start++;
+  while (end > start && isBlank(lines[end - 1])) end--;
+  return lines.slice(start, end);
+}
+function normalizeHeading(text) {
+  return String(text ?? "").trim().toLowerCase();
+}
+function extractBlock(content, id) {
+  const wanted = String(id ?? "").trim();
+  if (!BLOCK_ID_RE.test(wanted)) return null;
+  const { source, masked } = lineViews(content);
+  const needle = wanted.toLowerCase();
+  let hit = -1;
+  for (let i = 0; i < masked.length; i++) {
+    const m = BLOCK_MARKER_RE.exec(masked[i]);
+    if (!m) continue;
+    if (m[1].toLowerCase() === needle) {
+      hit = i;
+      break;
+    }
+  }
+  if (hit === -1) return null;
+  let start = hit;
+  while (start > 0 && !isBlank(source[start - 1])) start--;
+  let end = hit;
+  while (end + 1 < source.length && !isBlank(source[end + 1])) end++;
+  const lines = source.slice(start, end + 1);
+  lines[hit - start] = lines[hit - start].replace(BLOCK_MARKER_RE, "");
+  return trimBlankLines(lines).join("\n");
+}
+function collectHeadings(source, masked) {
+  const out = [];
+  const total = Math.min(source.length, masked.length);
+  for (let i = 0; i < total; i++) {
+    const m = HEADING_RE.exec(masked[i]);
+    if (!m) continue;
+    const prefixLength = m[1].length + m[2].length + m[3].length;
+    const text = normalizeHeading(source[i].slice(prefixLength));
+    if (!text) continue;
+    out.push({ line: i, level: m[2].length, text });
+  }
+  return out;
+}
+function extractSection(content, headingText) {
+  const wanted = normalizeHeading(headingText);
+  if (!wanted) return null;
+  const { source, masked } = lineViews(content);
+  const headings = collectHeadings(source, masked);
+  const hit = headings.find((heading2) => heading2.text === wanted);
+  if (!hit) return null;
+  let end = source.length;
+  for (const heading2 of headings) {
+    if (heading2.line > hit.line && heading2.level <= hit.level) {
+      end = heading2.line;
+      break;
+    }
+  }
+  return trimBlankLines(source.slice(hit.line + 1, end)).join("\n");
+}
 
 // src/utils/markdownRenderer.ts
 core_default.registerLanguage("python", python);
@@ -6002,11 +6102,13 @@ function renderWikiEmbed(link2, ctx, notes) {
     return `<a class="wikilink wikilink-attachment" href="${escapeHtml(href)}" data-wikilink="${escapeHtml(hit.path)}">${escapeHtml(wikiDisplayText(link2) || link2.page)}</a>`;
   }
   const key = `@@EMBED_NOTE_${notes.length}@@`;
+  const anchor = link2.blockId ? `^${link2.blockId}` : link2.heading;
   notes.push({
     key,
     path: hit.path,
     href: wikiHref(docPath, hit.path, link2),
-    label: wikiDisplayText(link2) || link2.page
+    label: wikiDisplayText(link2) || link2.page,
+    anchor: anchor || void 0
   });
   return key;
 }
@@ -6338,17 +6440,32 @@ async function renderCore(rawMarkdown, documentBasePath, resolveAssets = true, c
   }
   return resolveRawHtmlImageSources(html2, documentBasePath, resolveAssets);
 }
+function extractAnchor(content, anchor) {
+  return anchor.startsWith("^") ? extractBlock(content, anchor.slice(1)) : extractSection(content, anchor);
+}
+function missingAnchorText(anchor) {
+  return anchor.startsWith("^") ? `\u672A\u627E\u5230\u533A\u5757 ${anchor}` : `\u672A\u627E\u5230\u7AE0\u8282 ${anchor}`;
+}
 async function injectEmbeddedNotes(html2, notes, ctx, depth, renderOptions = {}) {
   let out = html2;
   for (const note of notes) {
     out = out.replace(new RegExp(`<p(?:\\s[^>]*)?>\\s*${note.key}\\s*</p>`), note.key);
+    const anchor = note.anchor || "";
+    const label = anchor ? `${note.label}#${anchor}` : note.label;
+    const anchorAttr = anchor ? ` data-embed-anchor="${escapeHtml(anchor)}"` : "";
+    const headerStart = `<div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(label)}</a>`;
     const bodyMd = ctx.embeds ? ctx.embeds[note.path] : void 0;
     let block2;
     if (bodyMd === void 0 || depth >= MAX_EMBED_DEPTH) {
-      block2 = `<div class="embedded-note embedded-note-missing" data-embed="${escapeHtml(note.path)}"><div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a><span class="embedded-note-note">\u5185\u5BB9\u672A\u8F7D\u5165</span></div></div>`;
+      block2 = `<div class="embedded-note embedded-note-missing" data-embed="${escapeHtml(note.path)}"${anchorAttr}>` + headerStart + `<span class="embedded-note-note">\u5185\u5BB9\u672A\u8F7D\u5165</span></div></div>`;
     } else {
-      const inner = await renderCore(bodyMd, "", false, { ...ctx, embeds: {} }, depth + 1, renderOptions);
-      block2 = `<div class="embedded-note" data-embed="${escapeHtml(note.path)}"><div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a></div><div class="embedded-note-body">${inner}</div></div>`;
+      const fragment = anchor ? extractAnchor(bodyMd, anchor) : bodyMd;
+      if (fragment === null) {
+        block2 = `<div class="embedded-note embedded-note-missing" data-embed="${escapeHtml(note.path)}"${anchorAttr}>` + headerStart + `<span class="embedded-note-note">${escapeHtml(missingAnchorText(anchor))}</span></div></div>`;
+      } else {
+        const inner = await renderCore(fragment, "", false, { ...ctx, embeds: {} }, depth + 1, renderOptions);
+        block2 = `<div class="embedded-note" data-embed="${escapeHtml(note.path)}"${anchorAttr}>` + headerStart + `</div><div class="embedded-note-body">${inner}</div></div>`;
+      }
     }
     out = out.replace(note.key, () => block2);
   }
