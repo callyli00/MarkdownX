@@ -162,7 +162,7 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.7.0';
+const APP_VERSION = 'v2.8.0';
 const APP_BUILD_DATE = '2026-10-25';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
@@ -204,6 +204,20 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.8.0',
+    date: '2026-10-26',
+    items: [
+      '全库检索/替换：tag: path: file: section: task: 运算符 + 正侧、短语与排除词，命中可一键替换（未保存的标签会提醒你）',
+      '[[ 自动补全：笔记名 / 别名 / 标题 / 块 id，接受后直接写成 [[目标]]；点未解析链接可一键建笔记',
+      '重命名笔记自动改链：右键文件树重命名，全库指向它的 [[链接]] 一次性改写（别名、锚点、![[嵌入]] 都保留）',
+      '嵌入更细：![[笔记#^块id]] 只嵌那一个块、![[笔记#标题]] 只嵌该章节，锚点写错会明确提示而不是烘整篇',
+      '未链接提及面板：正文里写了笔记名却没加双链的地方，带行号与上下文列出来',
+      '预览改为增量更新：只替换改动的那一块，公式不再全篇重排（长文档打字明显更跟手）',
+      '粘贴截图直接入库：写入笔记旁 assets/ 并插入 Markdown 图片引用，不再被静默丢弃',
+      '命令面板 Ctrl+Shift+P：新建/保存/搜索/导出/主题/重命名等 16 条命令，支持中文子串与英文关键词'
+    ]
+  },
   {
     version: 'v2.7.0',
     date: '2026-10-25',
