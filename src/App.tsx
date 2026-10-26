@@ -29,6 +29,7 @@ import {
   type SearchDoc,
   type VaultSearchResult
 } from './utils/vaultSearch';
+import { detectTrigger, suggestLinks, notePathFor, type SuggestItem } from './utils/linkSuggest';
 // Types only: the updater functions are imported dynamically at their call sites, so the
 // updater plugin stays out of the startup chunk (and never loads at all on mobile, where
 // the plugin does not exist). Same pattern as the pdf-lib modules.
@@ -2370,8 +2371,8 @@ export const App: React.FC = () => {
    * The index already resolved the target to an ABSOLUTE path and stamped it on the
    * element, so this opens that path directly instead of re-resolving the relative href -
    * with duplicate note names the two could disagree, and the index is the authority.
-   * An unresolved link carries no href; the click is swallowed so nothing navigates (the
-   * tooltip already says which note is missing).
+   * An unresolved link carries no href, so the click creates that note instead of navigating
+   * (the tooltip says which note is missing; the click is the fix).
    */
   const handleWikiLink = (event: React.MouseEvent<HTMLElement>): boolean => {
     const el = (event.target as HTMLElement).closest('[data-wikilink]') as HTMLElement | null;
@@ -2382,7 +2383,11 @@ export const App: React.FC = () => {
       // Same-page `[[#Heading]]`: let the ordinary anchor path scroll to it.
       return false;
     }
-    if (el.tagName.toLowerCase() !== 'a') return true; // unresolved: nothing to open
+    if (el.tagName.toLowerCase() !== 'a') {
+      // Not an anchor: the index could not resolve it. Clicking is how the user creates it.
+      void createNoteFromLink(target);
+      return true;
+    }
     void openFileByPath(target);
     return true;
   };
@@ -2453,6 +2458,83 @@ export const App: React.FC = () => {
     // file as LF on the first checkbox click.
     handleContentChange(lines.join(content.includes('\r\n') ? '\r\n' : '\n'));
     return true;
+  };
+
+  // ---- `[[` completion ---------------------------------------------------------------
+  //
+  // Ranking lives in utils/linkSuggest.ts; this is only the "where is the caret, and what does
+  // accepting mean" half. The popup sits at the bottom-left of the editor pane instead of at the
+  // caret: a textarea exposes no caret rectangle, and a mirror-div measurement that drifts by a
+  // few pixels looks worse than a stable corner. Accepting replaces `[[typed` with `[[insert]]`
+  // by plain string slicing, so there is no execCommand and no per-platform selection code.
+  const [linkSuggest, setLinkSuggest] = useState<{
+    items: SuggestItem[];
+    active: number;
+    /** Index of the `[[` in the textarea value. */
+    start: number;
+    /** Caret position when the popup was (re)computed; everything up to here is replaced. */
+    end: number;
+  } | null>(null);
+
+  /** Recompute (or close) the popup after the text or the caret moved. */
+  const syncLinkSuggest = (value: string, caret: number) => {
+    const trigger = detectTrigger(value, caret);
+    if (!trigger) {
+      if (linkSuggest) setLinkSuggest(null);
+      return;
+    }
+    const items = suggestLinks(wikiIndex, trigger.typed, activeFile?.path ?? null, 12);
+    if (items.length === 0) {
+      if (linkSuggest) setLinkSuggest(null);
+      return;
+    }
+    setLinkSuggest({ items, active: 0, start: trigger.start, end: caret });
+  };
+
+  /** Insert the highlighted suggestion and put the caret after `]]`. */
+  const acceptLinkSuggest = (item: SuggestItem) => {
+    if (!linkSuggest || !activeFile) return;
+    const { start, end } = linkSuggest;
+    const insertion = `[[${item.insert}]]`;
+    const content = activeFile.content;
+    const caret = start + insertion.length;
+    handleContentChange(content.slice(0, start) + insertion + content.slice(end));
+    setLinkSuggest(null);
+    // The textarea receives the new value on the next paint; move the caret after it does.
+    requestAnimationFrame(() => {
+      const area = textareaRef.current;
+      if (!area) return;
+      area.focus();
+      area.setSelectionRange(caret, caret);
+    });
+  };
+
+  /**
+   * Create the note behind an unresolved `[[page]]`.
+   *
+   * Seeded with a level-1 heading of the same name: an empty file renders as a blank paper and
+   * looks like the click did nothing. Placement is `notePathFor`'s decision (next to the current
+   * document when it lives inside the workspace, otherwise at the root). An existing file is
+   * opened, never truncated - the index can be stale, and the file on disk always wins.
+   */
+  const createNoteFromLink = async (page: string) => {
+    const target = notePathFor(workspaceDir, activeFile?.path ?? null, page);
+    if (!target) {
+      setModalFeedback('✗ 先打开一个工作区文件夹，才能从链接新建笔记');
+      return;
+    }
+    try {
+      const kind = await invoke<string>('path_kind', { path: target }).catch(() => 'missing');
+      if (kind === 'missing') {
+        await writeTextFile(target, `# ${page.trim()}\n`);
+        setModalFeedback(`✓ 已新建笔记：${page}`);
+        void rebuildWikiIndex(workspaceDir);
+      }
+      await openFileByPath(target);
+    } catch (err) {
+      console.error('[MarkdownX] create note from link failed:', err);
+      setModalFeedback(`✗ 新建笔记失败：${String(err)}`);
+    }
   };
 
   // Right-click policy. WebView2 (the Chromium engine under the app) shows its
@@ -5521,6 +5603,27 @@ ${texBody}
                 onChange={(e) => {
                   if (caretFlash) setCaretFlash(null);
                   handleContentChange(e.target.value);
+                  syncLinkSuggest(e.target.value, e.target.selectionStart);
+                }}
+                onKeyDown={(e) => {
+                  if (!linkSuggest) return;
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setLinkSuggest((cur) =>
+                      cur ? { ...cur, active: (cur.active + 1) % cur.items.length } : cur
+                    );
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setLinkSuggest((cur) =>
+                      cur ? { ...cur, active: (cur.active - 1 + cur.items.length) % cur.items.length } : cur
+                    );
+                  } else if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    acceptLinkSuggest(linkSuggest.items[linkSuggest.active]);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setLinkSuggest(null);
+                  }
                 }}
                 onKeyUp={() => {
                   if (isTypewriterMode && textareaRef.current) {
@@ -5537,6 +5640,30 @@ ${texBody}
                 spellCheck={false}
                 autoFocus
               />
+              {linkSuggest && (
+                <div className="wiki-suggest" role="listbox" aria-label="链接补全">
+                  {linkSuggest.items.map((item, index) => (
+                    <div
+                      key={`${item.kind}:${item.insert}:${index}`}
+                      role="option"
+                      aria-selected={index === linkSuggest.active}
+                      className={`wiki-suggest-row ${index === linkSuggest.active ? 'active' : ''}`}
+                      onMouseDown={(event) => {
+                        // mousedown, not click: the textarea would blur first and the caret
+                        // position we need for the insertion would be gone.
+                        event.preventDefault();
+                        acceptLinkSuggest(item);
+                      }}
+                    >
+                      <span className="wiki-suggest-label">{item.label}</span>
+                      <span className="wiki-suggest-kind">
+                        {item.kind === 'page' ? '笔记' : item.kind === 'heading' ? '标题' : '块'}
+                      </span>
+                      {item.hint ? <span className="wiki-suggest-hint">{item.hint}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             /* Pure Typora Centered Article View */

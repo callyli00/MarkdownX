@@ -4355,3 +4355,80 @@ body.theme-dark .props-card { background: rgba(255, 255, 255, 0.04); }
 .task-list-item {
   cursor: pointer;
 }
+
+/* `[[` completion popup. Anchored to the editor pane, not the caret: a textarea gives no caret
+   rectangle, and a drifting mirror-div measurement is worse than a stable corner. */
+.wiki-suggest {
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  z-index: 60;
+  min-width: 280px;
+  max-width: 460px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+}
+
+.wiki-suggest-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1f2937;
+}
+
+.wiki-suggest-row.active {
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.wiki-suggest-label {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiki-suggest-kind {
+  flex: none;
+  font-size: 11px;
+  color: #6b7280;
+  border: 1px solid rgba(107, 114, 128, 0.35);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.wiki-suggest-hint {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: #9ca3af;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dark theme: the app toggles a class on the root element. */
+.dark .wiki-suggest,
+[data-theme="dark"] .wiki-suggest {
+  background: #1f2937;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.dark .wiki-suggest-row,
+[data-theme="dark"] .wiki-suggest-row {
+  color: #e5e7eb;
+}
+
+.dark .wiki-suggest-row.active,
+[data-theme="dark"] .wiki-suggest-row.active {
+  background: rgba(96, 165, 250, 0.22);
+}

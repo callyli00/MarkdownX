@@ -153,3 +153,55 @@ TS:   buildIndex(docs)                 一遍建表：反链、标签计数、�
 | `src/utils/__tests__/wikiLink.test.ts` | 25 项 |
 | `src/utils/__tests__/wikiRender.test.ts` | 19 项 |
 | `src/utils/__tests__/workspaceIndex.test.ts` | 36 项 |
+
+## 别名（aliases）
+
+frontmatter 里的 `aliases` / `alias` 参与链接解析，`[[阿尔法]]` 能找到 `alpha.md`：
+
+```
+---
+aliases: [阿尔法, alpha]      # 行内列表
+# 或
+aliases:
+  - 阿尔法
+  - alpha
+---
+```
+
+- 只读第一个 `---` 到下一个 `---`（或 `...`）之间的块：正文里出现 `aliases:` 不会凭空造出别名。
+- 与笔记同名的别名会被忽略（否则同一个键下多出一个指向同一文件的候选）。
+- 两个笔记共用一个别名时按普通重名处理：`byName` 里两个候选，解析时同目录优先，面板显示"打开哪一个"。
+
+## `[[` 补全
+
+源码模式（Ctrl+/）里输入 `[[` 即弹出候选，数据来自工作区索引（纯函数在 `src/utils/linkSuggest.ts`）：
+
+| 输入 | 候选 |
+|---|---|
+| `[[alp` | 笔记名 / 别名前缀匹配，精确名优先 |
+| `[[alpha#` | alpha.md 的标题（按标题文字过滤） |
+| `[[alpha#^` | alpha.md 的块 id（`^id`，行尾写成 `文字 ^id`） |
+| `[[#引言` | **当前笔记**的标题 |
+
+- 键位：↑/↓ 选择，Enter/Tab 接受，Esc 关闭。接受后把 `[[已输入` 替换成 `[[目标]]`（纯字符串切片，没有 execCommand）。
+- 同名笔记（`a/note.md` 与 `b/note.md`）不插入裸名，而是插入**仓库相对路径**（`a/note`）——否则"接受建议"就等于"链到别的文件"。
+- 弹窗贴在编辑区左下角而不是光标旁：textarea 拿不到光标矩形，用镜像元素测量会漂移，稳定的一角比抖动的位置更好用。
+- 插入文本里的路径统一用 `/`（这是文档内容，不是文件系统路径），Windows 写的仓在安卓上也读得对。
+
+## 未解析链接 → 一键建笔记
+
+预览里点 `.wikilink-unresolved`（带"未找到笔记"提示的那段）直接创建该笔记：
+
+- 位置：**当前文档所在目录**（若它在工作区内），否则工作区根目录。
+- 文件名经 `sanitizeNoteName` 清洗（Windows 的 `\/:*?"<>|` 换成 `-`，合并连字符，去掉首尾点和空格，全空则 `未命名`）。
+- 内容写入 `# 标题` 作为种子，然后立刻打开并重建索引。
+- 目标文件已存在时只打开、不覆盖——索引可能是旧的，磁盘上的文件优先。
+
+## 真机冒烟
+
+```bash
+node tools/local-check/smoke-p1.mjs   # 检索/替换/复选框写回（12 项）
+node tools/local-check/smoke-p2.mjs   # 补全/标题补全/建笔记（18 项）
+```
+
+两者共用 `tools/local-check/cdp-harness.mjs`（受信任输入：`Input.dispatchMouseEvent` / `Input.insertText`；`el.click()` 在 React 18 委托下不会触发 onClick）。运行前把 `tools/local-check/fixtures/vault` 复制成 `C:/tmp/vault2`，并以 `markdown-x.exe "C:/tmp/vault2"` 启动。

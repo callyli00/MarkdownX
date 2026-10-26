@@ -56,6 +56,25 @@ export interface LinkPosition {
   context: string;
 }
 
+/**
+ * One `^block-id`, the anchor `[[Note#^id]]` points at.
+ *
+ * Obsidian writes it at the END of a block's last line (`文字 ^abc123`) or alone on a line. Only
+ * the marker and its line are recorded: block-id links scroll to the block, they never quote it,
+ * so the offset is enough for the renderer to place `id="blk-…"`.
+ */
+export interface BlockRef {
+  /** The identifier without the `^` (letters, digits and dashes only). */
+  id: string;
+  /** 1-based line number of the line carrying the marker. */
+  line: number;
+  /** Leading text of that line (marker removed, trimmed, clipped), for the picker. */
+  text: string;
+}
+
+/** Longest block-id caption the picker shows. */
+const BLOCK_CAPTION_MAX = 80;
+
 export interface IndexedDoc {
   /** Absolute path, exactly as the document was scanned (separators are not rewritten). */
   path: string;
@@ -66,6 +85,13 @@ export interface IndexedDoc {
   headings: HeadingRef[];
   /** Optional, see `LinkPosition`. Always present on results of `scanDocument`. */
   linkPositions?: LinkPosition[];
+  /**
+   * Frontmatter aliases (`aliases: [a, b]`), as written. Optional so hand-built documents (tests,
+   * the render Worker's fixture set) stay valid; `buildWikiLookup` treats a missing list as empty.
+   */
+  aliases?: string[];
+  /** Optional, same reasoning as `aliases`. Always present on results of `scanDocument`. */
+  blocks?: BlockRef[];
 }
 
 export interface BacklinkRef {
@@ -210,6 +236,96 @@ function locateLinks(masked: string, links: ParsedWikiLink[]): LinkPosition[] {
   return out;
 }
 
+/**
+ * Frontmatter `aliases` (also `alias`, the singular form Obsidian accepts).
+ *
+ * Hand-parsed on purpose: the app has no YAML dependency, vault frontmatter is written by humans,
+ * and a wrong-but-quiet alias list is worse than none. Only the block between the first `---`
+ * line and the next `---` / `...` line is read, so `aliases:` appearing in prose or in a fenced
+ * sample cannot invent links.
+ *
+ * Accepts the three shapes that actually show up in vaults:
+ *   aliases: [阿尔法, alpha]        aliases: 阿尔法, alpha        aliases: + one "- name" per line
+ */
+export function parseAliases(content: string): string[] {
+  const text = typeof content === 'string' ? content : '';
+  const open = /^---[ \t]*\r?\n/.exec(text);
+  if (!open) return [];
+  const rest = text.slice(open[0].length);
+  const close = /^(?:---|\.\.\.)[ \t]*\r?$/m.exec(rest);
+  if (!close) return [];
+  const body = rest.slice(0, close.index);
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string) => {
+    let value = raw.trim().replace(/^\[/, '').replace(/\]$/, '').trim();
+    // Quoted aliases are common (`- "C++ 笔记"`); the quotes are syntax, not part of the name.
+    if (
+      (value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length > 1)
+    ) {
+      value = value.slice(1, -1).trim();
+    }
+    if (!value) return;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(value);
+  };
+
+  let collecting = false;
+  for (const rawLine of body.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+    const listItem = /^\s*[-*]\s+(.*)$/.exec(line);
+    if (collecting && listItem) {
+      push(listItem[1]);
+      continue;
+    }
+    if (collecting && line.trim() !== '') collecting = false; // dedented: the list ended
+    const field = /^\s*(?:aliases|alias)\s*:\s*(.*)$/i.exec(line);
+    if (!field) continue;
+    const value = field[1].trim();
+    if (!value) {
+      collecting = true; // `aliases:` with the values on the following `- ` lines
+      continue;
+    }
+    for (const part of value.split(',')) push(part);
+  }
+  return out;
+}
+
+/**
+ * `^block-id` markers, the anchors `[[Note#^id]]` resolves against.
+ *
+ * Scans the fence-masked text (a `^id` inside a code sample is an example, not an anchor) but
+ * reads the CAPTION from the source line: masking blanks the content that makes a picker row
+ * recognisable. Both strings are length-identical, so the two line arrays line up.
+ */
+export function scanBlockIds(content: string): BlockRef[] {
+  const text = typeof content === 'string' ? content : '';
+  if (!text) return [];
+  const maskedLines = maskFencedCode(text).split(/\r?\n/);
+  const sourceLines = text.split(/\r?\n/);
+  const out: BlockRef[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < maskedLines.length; i++) {
+    const m = /(?:^|\s)\^([A-Za-z0-9][A-Za-z0-9-]*)[ \t]*$/.exec(maskedLines[i]);
+    if (!m) continue;
+    const id = m[1];
+    const key = id.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const caption = (sourceLines[i] ?? '').replace(/\s*\^[A-Za-z0-9][A-Za-z0-9-]*[ \t]*$/, '').trim();
+    out.push({
+      id,
+      line: i + 1,
+      text: caption.length > BLOCK_CAPTION_MAX ? caption.slice(0, BLOCK_CAPTION_MAX) : caption
+    });
+  }
+  return out;
+}
+
 /** Scan one document. Pure: the full scan and any incremental re-scan share this. */
 export function scanDocument(path: string, content: string): IndexedDoc {
   const docPath = typeof path === 'string' ? path : '';
@@ -225,7 +341,9 @@ export function scanDocument(path: string, content: string): IndexedDoc {
     links,
     tags: scanTags(text),
     headings: extractHeadings(masked),
-    linkPositions: locateLinks(masked, links)
+    linkPositions: locateLinks(masked, links),
+    aliases: parseAliases(text),
+    blocks: scanBlockIds(text)
   };
 }
 
@@ -321,6 +439,12 @@ export function buildWikiLookup(docs: IndexedDoc[]): WikiLookup {
     const name = typeof doc.name === 'string' && doc.name ? doc.name : basenameOf(abs);
     const nameKey = wikiKey(name);
     if (nameKey) addNameCandidate(byNameSets, nameKey, abs);
+    // Aliases resolve exactly like names (`[[阿尔法]]` finds alpha.md). An alias equal to the
+    // document's own name is skipped: it would only add a duplicate candidate to the same key.
+    for (const alias of Array.isArray(doc.aliases) ? doc.aliases : []) {
+      const aliasKey = wikiKey(typeof alias === 'string' ? alias : '');
+      if (aliasKey && aliasKey !== nameKey) addNameCandidate(byNameSets, aliasKey, abs);
+    }
   }
   const root = commonDirectorySegments(paths);
 

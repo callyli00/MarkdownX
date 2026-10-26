@@ -1,128 +1,14 @@
 // P1 / P6 真机冒烟（CDP）：全库检索、命中跳转、任务复选框写回、全库替换。
 //
-// 前提：应用已带远程调试启动，并且工作区就是夹具仓库：
+// 前提：应用已带远程调试启动，并且工作区就是夹具仓库的副本：
 //   set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9334
-//   markdown-x.exe "C:\tmp\smoke-vault"
+//   markdown-x.exe "C:\tmp\vault2"
 // 运行：node tools/local-check/smoke-p1.mjs
 //
-// 这里全部用 CDP 的 Input.dispatchMouseEvent / Input.insertText 发**受信任**输入，
-// 不用 el.click() —— React 18 的事件委托下 el.click() 触发的合成点击不会走 onClick
-// （v2.7.0 冒烟时踩过这个坑）。
-const PORT = process.env.MDX_CDP_PORT || '9334';
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// 脚手架在 cdp-harness.mjs（受信任输入、断言汇总），两个冒烟脚本共用。
+import { connect, sleep, check, click, typeInto, waitFor, countOf, textOf, report } from './cdp-harness.mjs';
 
-async function findPage() {
-  for (let i = 0; i < 80; i += 1) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${PORT}/json/list`);
-      const targets = await response.json();
-      const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
-      if (page) return page;
-    } catch {
-      // 应用还没起来
-    }
-    await sleep(500);
-  }
-  throw new Error(`CDP 未就绪（端口 ${PORT}）`);
-}
-
-class Cdp {
-  constructor(socket) {
-    this.socket = socket;
-    this.nextId = 0;
-    this.pending = new Map();
-    socket.addEventListener('message', (event) => {
-      const message = JSON.parse(event.data);
-      const entry = message.id ? this.pending.get(message.id) : null;
-      if (!entry) return;
-      this.pending.delete(message.id);
-      if (message.error) entry.reject(new Error(message.error.message));
-      else entry.resolve(message.result);
-    });
-  }
-
-  static async attach(url) {
-    const socket = new WebSocket(url);
-    await new Promise((resolve, reject) => {
-      socket.addEventListener('open', resolve, { once: true });
-      socket.addEventListener('error', () => reject(new Error('WebSocket 连接失败')), { once: true });
-    });
-    return new Cdp(socket);
-  }
-
-  send(method, params = {}) {
-    const id = ++this.nextId;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.socket.send(JSON.stringify({ id, method, params }));
-      setTimeout(() => {
-        if (this.pending.delete(id)) reject(new Error(`${method} 超时`));
-      }, 15000);
-    });
-  }
-
-  async eval(expression) {
-    const result = await this.send('Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-      userGesture: true
-    });
-    if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.exception?.description || '页面内异常');
-    }
-    return result.result.value;
-  }
-}
-
-const results = [];
-function check(name, ok, detail) {
-  results.push({ name, ok: !!ok, detail });
-  console.log(`${ok ? '✓' : '✗'} ${name}${detail === undefined ? '' : ` — ${detail}`}`);
-}
-
-async function center(cdp, selector) {
-  const box = await cdp.eval(
-    `(() => { const el = document.querySelector(${JSON.stringify(selector)});` +
-      `if (!el) return null; const r = el.getBoundingClientRect();` +
-      `if (!r.width || !r.height) return null; return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`
-  );
-  if (!box) throw new Error(`找不到可点击元素：${selector}`);
-  return box;
-}
-
-async function click(cdp, selector) {
-  const { x, y } = await center(cdp, selector);
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
-  await sleep(150);
-}
-
-async function typeInto(cdp, selector, text) {
-  await cdp.eval(`document.querySelector(${JSON.stringify(selector)}).focus()`);
-  // 清空再输入：React 受控 input 需要真实 input 事件才会更新 state
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2, windowsVirtualKeyCode: 65 });
-  await cdp.send('Input.insertText', { text });
-  await sleep(250);
-}
-
-const countOf = (cdp, selector) => cdp.eval(`document.querySelectorAll(${JSON.stringify(selector)}).length`);
-const textOf = (cdp, selector) => cdp.eval(`document.querySelector(${JSON.stringify(selector)})?.innerText ?? null`);
-
-async function waitFor(cdp, expression, timeoutMs = 6000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await cdp.eval(expression)) return true;
-    await sleep(120);
-  }
-  return false;
-}
-
-const page = await findPage();
-const cdp = await Cdp.attach(page.webSocketDebuggerUrl);
-await cdp.send('Runtime.enable');
+const cdp = await connect();
 
 check('应用已渲染', await waitFor(cdp, `!!document.querySelector('.sb-searchbar')`));
 check('工作区已打开（命令行参数）', await waitFor(cdp, `!!document.querySelector('.file-tree-item, .sb-doc-item, .sidebar-doc-item, .sb-tree-row')`, 12000));
@@ -176,10 +62,4 @@ await click(cdp, '.replace-action-btn.danger');
 const notice = await waitFor(cdp, `(document.querySelector('.search-view .sidebar-empty-hint')?.innerText ?? '').includes('已替换')`, 8000);
 check('替换完成并给出提示', notice, `${await textOf(cdp, '.search-view .sidebar-empty-hint')}`);
 
-const failed = results.filter((r) => !r.ok);
-console.log(`\n${results.length - failed.length}/${results.length} 项通过`);
-cdp.socket.close();
-if (failed.length > 0) {
-  console.log(`失败项：${failed.map((f) => f.name).join('、')}`);
-  process.exitCode = 1;
-}
+report(cdp);
