@@ -3,7 +3,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
+import { readTextFile, writeTextFile, writeFile, mkdir, exists as fsExists } from '@tauri-apps/plugin-fs';
 import { triggerMathJax, typesetMathNodes, renderMermaidDiagrams } from './utils/markdownRenderer';
 import { readProperties, propertyValue, stripFrontmatter, latexMetadata, type PropertyKind } from './utils/properties';
 import { classifyLink, resolveRelativePath, anchorCandidates } from './utils/linkTarget';
@@ -24,6 +24,7 @@ import {
 import { scanWorkspaceFiles, readTextFiles } from './platform/workspaceScan';
 import { findUnlinkedMentions } from './utils/mentions';
 import { isFullReplace, isNoopPatch, planPatch } from './utils/domPatch';
+import { imageMarkdown, insertTextAtSelection, pastedImageFileName } from './utils/pastedImage';
 import {
   parseVaultQuery,
   searchVault,
@@ -1414,6 +1415,8 @@ export const App: React.FC = () => {
   });
   const [autoWatchSetting, setAutoWatchSetting] = useState<boolean>(() => initialPrefs.current.autoWatchExternalChanges !== false);
   const [externalReloadNotice, setExternalReloadNotice] = useState<string | null>(null);
+  // Transient feedback for clipboard pastes (image saved / paste refused). Auto-clears.
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
   const [pdfOpenError, setPdfOpenError] = useState<string | null>(null);
   // PDF viewing state lives here (not inside PdfViewer) because the controls are
   // spread across the app chrome: tool icons in the top bar, zoom in the status bar.
@@ -2457,6 +2460,74 @@ export const App: React.FC = () => {
     handleContentChange(removeProperty(activeFile.content, propEditor.key));
     setPropEditor(null);
   };
+
+  /**
+   * Paste an image from the clipboard: write the bytes next to the note, insert a plain Markdown
+   * reference at the caret.
+   *
+   * A textarea drops image clipboard data silently, which is why this exists at all. Text and
+   * HTML pastes are left to the browser untouched - this only takes over when the clipboard
+   * actually carries an image file.
+   */
+  const handleEditorPaste = useCallback(
+    async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(event.clipboardData?.files ?? []);
+      const image = files.find((file) => String(file.type || '').startsWith('image/'));
+      if (!image) return;
+      event.preventDefault();
+
+      const notify = (text: string) => {
+        setPasteNotice(text);
+        window.setTimeout(() => setPasteNotice((current) => (current === text ? null : current)), 4000);
+      };
+
+      const docPath = activeFile?.path;
+      if (!docPath) {
+        notify('⚠️ 先把文档保存到磁盘，粘贴的图片才有地方放');
+        return;
+      }
+      const seed = Array.from(crypto.getRandomValues(new Uint8Array(4)))
+        .map((byte) => byte.toString(16).padStart(2, '0'))
+        .join('');
+      const name = pastedImageFileName(image.type, new Date(), seed);
+      if (!name) {
+        notify(`⚠️ 不支持粘贴 ${image.type || '这种'} 格式`);
+        return;
+      }
+
+      // Strip the file name, whichever separator the path uses (Windows hands us `\`).
+      const cut = Math.max(docPath.lastIndexOf('/'), docPath.lastIndexOf('\\'));
+      const dir = cut > 0 ? docPath.slice(0, cut) : docPath;
+      try {
+        const bytes = new Uint8Array(await image.arrayBuffer());
+        // Next to the note, in an `assets/` sidecar - the same shape Obsidian's default setting
+        // produces, so the vault stays portable in both directions. writeFile() does not create
+        // directories, so the sidecar is made first (recursive; a no-op when it already exists).
+        const assetsDir = `${dir}/assets`;
+        if (!(await fsExists(assetsDir))) await mkdir(assetsDir, { recursive: true });
+        await writeFile(`${assetsDir}/${name}`, bytes);
+        const snippet = imageMarkdown(`assets/${name}`);
+        const textarea = textareaRef.current;
+        const start = textarea?.selectionStart ?? (activeFile?.content.length ?? 0);
+        const end = textarea?.selectionEnd ?? start;
+        const { content, caret } = insertTextAtSelection(activeFile?.content ?? '', start, end, snippet);
+        setOpenFiles((prev) =>
+          prev.map((f) => (f.id === activeFileId ? { ...f, content, isModified: true } : f))
+        );
+        window.setTimeout(() => {
+          const ta = textareaRef.current;
+          if (!ta) return;
+          ta.focus();
+          ta.setSelectionRange(caret, caret);
+        }, 0);
+        notify(`✓ 图片已存入 assets/${name}`);
+      } catch (err) {
+        console.error('[MarkdownX] paste image failed:', err);
+        notify(`✗ 图片没写进去：${String(err)}`);
+      }
+    },
+    [activeFile, activeFileId]
+  );
 
   const handleContentChange = (newContent: string) => {
     setOpenFiles((prev) =>
@@ -5535,6 +5606,13 @@ ${texBody}
         </div>
       )}
 
+      {/* Clipboard paste feedback (image saved next to the note, or refused) */}
+      {pasteNotice && (
+        <div className="external-reload-toast" onClick={() => setPasteNotice(null)} title="点击关闭" style={{ cursor: 'pointer' }}>
+          {pasteNotice}
+        </div>
+      )}
+
       {/* PDF open failure notice (bad file, encrypted, unreadable ...) */}
       {pdfOpenError && (
         <div className="external-reload-toast" onClick={() => setPdfOpenError(null)} title="点击关闭" style={{ cursor: 'pointer' }}>
@@ -5843,6 +5921,7 @@ ${texBody}
                   handleContentChange(e.target.value);
                   syncLinkSuggest(e.target.value, e.target.selectionStart);
                 }}
+                onPaste={(e) => void handleEditorPaste(e)}
                 onKeyDown={(e) => {
                   if (!linkSuggest) return;
                   if (e.key === 'ArrowDown') {
