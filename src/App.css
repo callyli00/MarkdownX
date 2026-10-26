@@ -4246,3 +4246,112 @@ body.theme-dark .props-card { background: rgba(255, 255, 255, 0.04); }
     break-inside: avoid;
   }
 }
+
+/* ---- Vault-wide search (P1) -------------------------------------------------------
+   The panel is the same one that holds the in-document search; the scope switch sits
+   above the input and the hit list only exists in vault mode. The list is capped at 200
+   rows by the search module, so it can afford to be a plain column of buttons. */
+.search-scope-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.search-scope-btn {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-strong, #d1d5db);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted, #6b7280);
+  cursor: pointer;
+}
+
+.search-scope-btn:hover {
+  color: var(--text-main, #1f2937);
+  border-color: var(--color-primary, #0969da);
+}
+
+.search-scope-btn.active {
+  color: var(--color-primary, #0969da);
+  border-color: var(--color-primary, #0969da);
+  background: rgba(9, 105, 218, 0.08);
+  font-weight: 600;
+}
+
+.vault-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+.vault-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-main, #1f2937);
+}
+
+.vault-hit:hover {
+  background: var(--bg-hover, rgba(9, 105, 218, 0.08));
+}
+
+.vault-hit-head {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vault-hit-line {
+  color: var(--text-muted, #6b7280);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.vault-hit-context {
+  font-size: 11.5px;
+  color: var(--text-muted, #6b7280);
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replace-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.replace-action-btn.danger {
+  color: #b42318;
+  border-color: #b42318;
+}
+
+.replace-action-btn.danger:hover {
+  background: rgba(180, 35, 24, 0.08);
+}
+
+/* Task checkboxes are drawn by the renderer but written by the host: the input swallows
+   no pointer events so the click lands on .task-list-item, whose delegated handler knows
+   which source line to toggle. Without this the disabled checkbox eats the click and the
+   preview looks interactive while nothing happens. */
+.task-list-item input[type="checkbox"] {
+  pointer-events: none;
+}
+
+.task-list-item {
+  cursor: pointer;
+}

@@ -5665,7 +5665,6 @@ var CALLOUT_CANONICAL = /* @__PURE__ */ new Set([
   "note",
   "tip",
   "warning",
-  "caution",
   "important",
   "theorem",
   "definition",
@@ -5684,6 +5683,7 @@ var CALLOUT_ALIASES = {
   check: "tip",
   done: "tip",
   example: "tip",
+  caution: "warning",
   attention: "warning",
   error: "important",
   danger: "important",
@@ -5727,6 +5727,81 @@ var CALLOUT_TITLES = {
   cite: "\u5F15\u7528 (Cite)",
   attention: "\u6CE8\u610F (Attention)"
 };
+var TASK_HOOK_MARK = "@@TASK_LINE_";
+var taskHookIds = { next: 0 };
+function resetTaskHookIds() {
+  taskHookIds.next = 0;
+}
+function nextTaskHookId() {
+  const id = taskHookIds.next;
+  taskHookIds.next += 1;
+  return id;
+}
+function taskHookAttrs(id) {
+  return ` data-task-line="@@TASK_LINE_${id}@@" data-task-offset="@@TASK_OFFSET_${id}@@"`;
+}
+function firstTaskHookId(html2) {
+  const match = html2.match(/data-task-line="@@TASK_LINE_(\d+)@@"/);
+  return match ? Number(match[1]) : null;
+}
+function buildLineStarts(source) {
+  const starts = [0];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source.charCodeAt(i) === 10) starts.push(i + 1);
+  }
+  return starts;
+}
+function lineNumberAt(lineStarts, offset) {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = lo + hi + 1 >> 1;
+    if (lineStarts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
+}
+function collectTaskAnchors(token, tokenStart, translation, lineStarts) {
+  const anchors = [];
+  const visit = (tokens, base, containerRaw) => {
+    let cursor = 0;
+    for (const child of tokens) {
+      const raw = typeof child.raw === "string" ? child.raw : "";
+      const found = raw ? containerRaw.indexOf(raw, cursor) : -1;
+      const start = found >= 0 ? found : cursor;
+      if (raw) cursor = start + raw.length;
+      if (child.type === "list" && Array.isArray(child.items)) {
+        let itemCursor = 0;
+        for (const item of child.items) {
+          const itemRaw = typeof item.raw === "string" ? item.raw : "";
+          const itemFound = itemRaw ? raw.indexOf(itemRaw, itemCursor) : -1;
+          const itemStart = itemFound >= 0 ? itemFound : itemCursor;
+          if (itemRaw) itemCursor = itemStart + itemRaw.length;
+          const itemBase = base + start + itemStart;
+          if (item.task) {
+            const offset = translation.map(itemBase);
+            anchors.push({ line: lineNumberAt(lineStarts, offset), offset });
+          }
+          if (Array.isArray(item.tokens)) visit(item.tokens, itemBase, itemRaw);
+        }
+        continue;
+      }
+      if (Array.isArray(child.tokens)) visit(child.tokens, base + start, raw);
+    }
+  };
+  const rootRaw = typeof token.raw === "string" ? token.raw : "";
+  visit([token], tokenStart, rootRaw);
+  return anchors;
+}
+function resolveTaskHooks(html2, token, tokenStart, translation, lineStarts) {
+  const anchors = collectTaskAnchors(token, tokenStart, translation, lineStarts);
+  let out = html2;
+  anchors.forEach((anchor, id) => {
+    const placeholder = ` data-task-line="@@TASK_LINE_${id}@@" data-task-offset="@@TASK_OFFSET_${id}@@"`;
+    out = out.split(placeholder).join(` data-task-line="${anchor.line}" data-task-offset="${anchor.offset}"`);
+  });
+  return out.replace(/ data-task-line="@@TASK_LINE_\d+@@" data-task-offset="@@TASK_OFFSET_\d+@@"/g, "");
+}
 function configureMarked(documentBasePath = "", resolveAssets = true) {
   const renderer = new marked.Renderer();
   const headingIdCounts = /* @__PURE__ */ new Map();
@@ -5777,10 +5852,11 @@ function configureMarked(documentBasePath = "", resolveAssets = true) {
       const customTitle = match[3]?.trim() || "";
       const title = customTitle || CALLOUT_TITLES[literal] || literal.toUpperCase();
       const canonical = CALLOUT_CANONICAL.has(literal) ? literal : CALLOUT_ALIASES[literal] || "note";
-      const cleanContent = content.replace(
+      let cleanContent = content.replace(
         /^\s*<p>\s*\[![^\]]+\](?:[+-])?(?:[^\n<]+)?(?:\s*<br\s*\/?>)?/i,
         "<p>"
       );
+      cleanContent = cleanContent.replace(/^<p>\s*<\/p>\s*/, "");
       const head = `<span class="callout-icon"></span><span class="callout-title">${title}</span>`;
       const body = `<div class="callout-content">${cleanContent}</div>`;
       if (fold === "-" || fold === "+") {
@@ -5789,6 +5865,19 @@ function configureMarked(documentBasePath = "", resolveAssets = true) {
       return `<div class="callout-card callout-${canonical}" data-callout="${literal}"><div class="callout-header">${head}</div>${body}</div>`;
     }
     return `<blockquote>${content}</blockquote>`;
+  };
+  renderer.checkbox = function(checked) {
+    const id = nextTaskHookId();
+    return `<input ${checked ? 'checked="" ' : ""}disabled="" type="checkbox"${taskHookAttrs(id)}>`;
+  };
+  renderer.listitem = function(textOrToken, task) {
+    const text = typeof textOrToken === "object" && textOrToken !== null ? textOrToken.text : textOrToken;
+    const body = typeof text === "string" ? text : "";
+    if (!task) return `<li>${body}</li>
+`;
+    const id = firstTaskHookId(body);
+    return `<li class="task-list-item"${id === null ? "" : taskHookAttrs(id)}>${body}</li>
+`;
   };
   marked.setOptions({
     renderer,
@@ -5954,7 +6043,7 @@ function applyBlockIds(text, translation) {
     (_match, id) => `@@BLOCKID_${id}@@`
   );
 }
-function processMathAndCitations(rawMarkdown, ctx = {}) {
+function processMathAndCitations(rawMarkdown, ctx = {}, renderOptions = {}) {
   rawMarkdown = rawMarkdown.replace(/\r\n?/g, "\n");
   const translation = new SourceTranslation(rawMarkdown.length);
   const cleanMarkdown = trackedReplace(rawMarkdown, translation, /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, () => "");
@@ -6100,6 +6189,7 @@ function processMathAndCitations(rawMarkdown, ctx = {}) {
   sanitized = applyWikiLinks(sanitized, translation, ctx, embedNotes);
   sanitized = applyBlockIds(sanitized, translation);
   sanitized = applyTags(sanitized, translation);
+  const footnotePlacement = renderOptions.footnotePlacement ?? ctx.footnotePlacement ?? "inline";
   const footnoteDefs = /* @__PURE__ */ new Map();
   sanitized = trackedReplace(
     sanitized,
@@ -6127,6 +6217,7 @@ function processMathAndCitations(rawMarkdown, ctx = {}) {
     }
   );
   let footnotesEmitted = 0;
+  const footnoteEndEntries = [];
   for (const [label, def2] of footnoteDefs) {
     const n = footnoteNumbers.get(label);
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -6136,11 +6227,26 @@ function processMathAndCitations(rawMarkdown, ctx = {}) {
       continue;
     }
     const rule = footnotesEmitted === 0 ? '<hr class="footnotes-sep">\n\n' : "";
-    const replacement = `${rule}<a id="fn-${n}"></a>
+    const replacement = `<a id="fn-${n}"></a>
 
 **${n}.** ${def2.body} <a href="#fnref-${n}" class="fn-back" title="\u56DE\u5230\u5F15\u7528\u5904">\u21A9</a>`;
-    sanitized = trackedReplace(sanitized, translation, sentinel, () => replacement);
+    if (footnotePlacement === "end") {
+      sanitized = trackedReplace(sanitized, translation, sentinel, () => "");
+      footnoteEndEntries.push({ n, entry: replacement });
+    } else {
+      sanitized = trackedReplace(sanitized, translation, sentinel, () => `${rule}${replacement}`);
+    }
     footnotesEmitted++;
+  }
+  if (footnotePlacement === "end" && footnoteEndEntries.length > 0) {
+    const entries = footnoteEndEntries.sort((a, b) => a.n - b.n).map((item) => item.entry).join("\n\n");
+    const area = `<hr class="footnotes-sep">
+
+${entries}`;
+    sanitized = `${sanitized.replace(/\s*$/, "")}
+
+${area}
+`;
   }
   sanitized = trackedReplace(
     sanitized,
@@ -6190,17 +6296,25 @@ function detokenizeMath(html2, tokens, diagramSources, tokenSourceSpans) {
   }
   return restoredHtml;
 }
-async function renderCore(rawMarkdown, documentBasePath, resolveAssets = true, ctx = {}, depth = 0) {
+async function renderCore(rawMarkdown, documentBasePath, resolveAssets = true, ctx = {}, depth = 0, renderOptions = {}) {
   configureMarked(documentBasePath, resolveAssets);
-  const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans, embedNotes } = processMathAndCitations(rawMarkdown, ctx);
+  const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans, embedNotes } = processMathAndCitations(rawMarkdown, ctx, renderOptions);
   const lexed = marked.lexer(sanitizedMarkdown);
   const parts = [];
   let cursor = 0;
+  let lineStarts = null;
   for (const token of lexed) {
     const raw = token && typeof token.raw === "string" ? token.raw : "";
     const start = cursor;
     cursor += raw.length;
+    resetTaskHookIds();
     let segment = String(marked.parser([token]));
+    if (segment.includes(TASK_HOOK_MARK)) {
+      if (!lineStarts) {
+        lineStarts = buildLineStarts(rawMarkdown.includes("\r") ? rawMarkdown.replace(/\r\n?/g, "\n") : rawMarkdown);
+      }
+      segment = resolveTaskHooks(segment, token, start, translation, lineStarts);
+    }
     const blockMatch = segment.match(/@@BLOCKID_([A-Za-z0-9_-]+)@@/);
     if (blockMatch) segment = segment.replace(/@@BLOCKID_[A-Za-z0-9_-]+@@/, "");
     const stamp = (attrs) => segment.replace(/^(\s*<[a-zA-Z][a-zA-Z0-9:-]*)/, `$1${attrs}`);
@@ -6220,11 +6334,11 @@ async function renderCore(rawMarkdown, documentBasePath, resolveAssets = true, c
   const rawHtml = parts.join("");
   let html2 = detokenizeMath(rawHtml, tokens, diagramSources, tokenSourceSpans);
   if (embedNotes.length > 0) {
-    html2 = await injectEmbeddedNotes(html2, embedNotes, ctx, depth);
+    html2 = await injectEmbeddedNotes(html2, embedNotes, ctx, depth, renderOptions);
   }
   return resolveRawHtmlImageSources(html2, documentBasePath, resolveAssets);
 }
-async function injectEmbeddedNotes(html2, notes, ctx, depth) {
+async function injectEmbeddedNotes(html2, notes, ctx, depth, renderOptions = {}) {
   let out = html2;
   for (const note of notes) {
     out = out.replace(new RegExp(`<p(?:\\s[^>]*)?>\\s*${note.key}\\s*</p>`), note.key);
@@ -6233,7 +6347,7 @@ async function injectEmbeddedNotes(html2, notes, ctx, depth) {
     if (bodyMd === void 0 || depth >= MAX_EMBED_DEPTH) {
       block2 = `<div class="embedded-note embedded-note-missing" data-embed="${escapeHtml(note.path)}"><div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a><span class="embedded-note-note">\u5185\u5BB9\u672A\u8F7D\u5165</span></div></div>`;
     } else {
-      const inner = await renderCore(bodyMd, "", false, { ...ctx, embeds: {} }, depth + 1);
+      const inner = await renderCore(bodyMd, "", false, { ...ctx, embeds: {} }, depth + 1, renderOptions);
       block2 = `<div class="embedded-note" data-embed="${escapeHtml(note.path)}"><div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a></div><div class="embedded-note-body">${inner}</div></div>`;
     }
     out = out.replace(note.key, () => block2);
@@ -6243,11 +6357,14 @@ async function injectEmbeddedNotes(html2, notes, ctx, depth) {
 function finalizeAssetUrls(html2, documentBasePath) {
   return resolveRawHtmlImageSources(html2, documentBasePath);
 }
-async function renderMarkdownPayload(rawMarkdown, ctx = {}) {
-  return renderCore(rawMarkdown, "", false, ctx);
+async function renderMarkdownPayload(rawMarkdown, ctx = {}, renderOptions = {}) {
+  return renderCore(rawMarkdown, "", false, ctx, 0, renderOptions);
 }
-async function renderMarkdown(rawMarkdown, documentBasePath = "", ctx = {}) {
-  return finalizeAssetUrls(await renderCore(rawMarkdown, documentBasePath, true, ctx), documentBasePath);
+async function renderMarkdown(rawMarkdown, documentBasePath = "", ctx = {}, renderOptions = {}) {
+  return finalizeAssetUrls(
+    await renderCore(rawMarkdown, documentBasePath, true, ctx, 0, renderOptions),
+    documentBasePath
+  );
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

@@ -102,3 +102,74 @@ describe('A 层 · 任务列表', () => {
     expect(html).toContain('已完成');
   });
 });
+
+describe('A 层 · Callout 嵌套', () => {
+  it('两层嵌套：内层是独立卡片且带自己的配色族', async () => {
+    const html = await renderMarkdown('> [!note] 外层\n> 外层正文\n> > [!warning] 内层\n> > 内层正文\n', '');
+    expect(cards(html)).toBe(2);
+    expect(html).toContain('data-callout="note"');
+    expect(html).toContain('data-callout="warning"');
+    expect(html).toContain('callout-note');
+    expect(html).toContain('callout-warning');
+    // 内层必须真在外层里面：拍平到同级或转义成文本都会让这个顺序断言失败
+    expect(html.indexOf('callout-warning')).toBeGreaterThan(html.indexOf('callout-note'));
+    expect(html).toContain('外层正文');
+    expect(html).toContain('内层正文');
+    // 识别词不能漏成可见文本
+    expect(html).not.toContain('[!warning]');
+  });
+
+  it('三层嵌套（中间层折叠）每层各自一张卡片', async () => {
+    const html = await renderMarkdown('> [!note] A\n> > [!warning]- B\n> > > [!tip] C\n> > > C 的正文\n', '');
+    expect(cards(html)).toBe(3);
+    expect(html).toContain('<details');
+    expect(html).toContain('data-callout="tip"');
+    expect(html).toContain('callout-tip');
+    expect(html).toContain('C 的正文');
+    const order = ['callout-note', 'callout-warning', 'callout-tip'].map((cls) => html.indexOf(cls));
+    expect(order[1]).toBeGreaterThan(order[0]);
+    expect(order[2]).toBeGreaterThan(order[1]);
+  });
+
+  it('嵌套内层继续走别名映射（[!hint] → tip 族）', async () => {
+    const html = await renderMarkdown('> [!note] 外\n> > [!hint] 内\n> > 内文\n', '');
+    expect(cards(html)).toBe(2);
+    expect(html).toContain('data-callout="hint"');
+    expect(html).toContain('callout-tip');
+  });
+
+  it('正文以嵌套卡片开头时不留空段落', async () => {
+    const html = await renderMarkdown('> [!note]\n> > [!warning] 内层\n> > 内文\n', '');
+    expect(html).toContain('<div class="callout-content"><div class="callout-card callout-warning"');
+    expect(html).not.toMatch(/<div class="callout-content">\s*<p><\/p>/);
+  });
+
+  it('非法识别词回退成普通引用块（不产生卡片）', async () => {
+    // 注意：语法合法但没登记的识别词（如 [!whatever]）仍归 note 族并保留 data-callout，
+    // 那条既有行为由上面的「未知类型退化为 note」锁住；这里只管语法本身就非法的输入。
+    for (const md of ['> [!1] 不是类型\n> 文本\n', '> [!] 空识别词\n> 文本\n', '> [! ] 空格\n> 文本\n']) {
+      const html = await renderMarkdown(md, '');
+      expect(cards(html), md).toBe(0);
+      expect(html).toMatch(/<blockquote\b/);
+      expect(html).not.toContain('callout-header');
+    }
+  });
+});
+
+describe('A 层 · Callout 别名补全', () => {
+  it('abstract/summary/tldr/cite/check/done/caution 全部落在既有配色族上', async () => {
+    // caution 与 warning 在 App.css 里本来就是同一个选择器（`——.callout-warning, .callout-caution`），
+    // 所以把它映射到 warning 族不改变任何视觉效果，只是让别名表和 Obsidian 一致。
+    const cases: [string, string][] = [
+      ['abstract', 'callout-note'], ['summary', 'callout-note'], ['tldr', 'callout-note'],
+      ['cite', 'callout-note'], ['check', 'callout-tip'], ['done', 'callout-tip'],
+      ['caution', 'callout-warning'],
+    ];
+    for (const [type, cls] of cases) {
+      const html = await renderMarkdown(`> [!${type}] t\n> body\n`, '');
+      expect(html, `type=${type}`).toContain(cls);
+      // 字面类型始终原样保留，宿主按它精确定位
+      expect(html, `type=${type}`).toContain(`data-callout="${type}"`);
+    }
+  });
+});

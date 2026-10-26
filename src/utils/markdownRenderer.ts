@@ -114,6 +114,31 @@ export interface WikiContext {
   lookup?: WikiLookup | null;
   /** Absolute path -> raw Markdown of embedded notes, loaded by the host (depth 1 only). */
   embeds?: Record<string, string>;
+  /**
+   * 脚注区位置的「随 ctx 传递」入口（可选）。
+   *
+   * 为什么渲染选项也肯从这里走：renderClient 只把 `{ id, raw, ctx }` 投递给 Worker，
+   * 独立的 options 参数过不了 postMessage 边界；把它放进 ctx（本来就是可结构化克隆的纯数据）
+   * 才能让两条渲染路径拿到同一份配置。显式的 RenderOptions 参数优先于这里的值。
+   * 不填 = 'inline'，即历史行为。
+   */
+  footnotePlacement?: FootnotePlacement;
+}
+
+/** 脚注区的输出位置：'inline' 就地展开（历史行为），'end' 收集到文末一次输出。 */
+export type FootnotePlacement = 'inline' | 'end';
+
+/**
+ * 渲染选项。全部可选，且默认值与「不传这个参数」时的历史输出逐字节一致。
+ */
+export interface RenderOptions {
+  /**
+   * 脚注区位置。
+   * - 'inline'（默认）：定义处就地展开，正文的上标回链不变 —— 与引入本选项之前的输出完全相同；
+   * - 'end'：定义处只删掉标记，脚注区（分隔线 + 编号条目 + 回链）统一收集到文末输出一次。
+   * 两种模式的编号规则一致：按正文首次引用的顺序编号。
+   */
+  footnotePlacement?: FootnotePlacement;
 }
 
 /** A note embed is block-level HTML: it is substituted AFTER marked, not inside it. */
@@ -410,13 +435,17 @@ function resolveRawHtmlImageSources(html: string, documentBasePath: string, reso
  * `data-callout` on the card for anything that wants to target it precisely.
  */
 const CALLOUT_CANONICAL = new Set([
-  'note', 'tip', 'warning', 'caution', 'important', 'theorem', 'definition', 'assumption',
+  'note', 'tip', 'warning', 'important', 'theorem', 'definition', 'assumption',
 ]);
+// Obsidian 的常用类型名 → 上面某个配色族。别名自己不需要新的颜色块，
+// 字面类型仍原样保留在 data-callout 上，供未来的 Styles 功能精确选取。
+// 注意 caution：Obsidian 里它是 warning 的别名，App.css 里 `.callout-warning, .callout-caution`
+// 本来就是同一套颜色，所以映射到 warning 不改变任何视觉效果（族数仍是 8 个）。
 const CALLOUT_ALIASES: Record<string, string> = {
   info: 'note', abstract: 'note', summary: 'note', tldr: 'note', todo: 'note',
   quote: 'note', cite: 'note',
   hint: 'tip', success: 'tip', check: 'tip', done: 'tip', example: 'tip',
-  attention: 'warning',
+  caution: 'warning', attention: 'warning',
   error: 'important', danger: 'important', failure: 'important', fail: 'important',
   missing: 'important', bug: 'important',
   question: 'definition', help: 'definition', faq: 'definition',
@@ -432,6 +461,143 @@ const CALLOUT_TITLES: Record<string, string> = {
   check: '已核对 (Check)', done: '已完成 (Done)', missing: '缺失 (Missing)',
   cite: '引用 (Cite)', attention: '注意 (Attention)',
 };
+
+/**
+ * 任务列表写回钩子。
+ *
+ * marked v12 的 Parser 解析 task item 时只调用 checkbox(checked)，把结果拼进条目 HTML，
+ * 再交给 listitem(text, task, checked) —— 两个回调都拿不到 item token，也就拿不到这一行在
+ * 源码里的位置。所以这里先落一个整数编号的占位符，由 renderCore() 在「同步渲染完一个顶层块」
+ * 之后按 token 树算出真实坐标再回填。
+ *
+ * 编号顺序是确定的：checkbox() 的调用顺序 == token 树前序（外层条目的复选框先于它内部
+ * 嵌套列表的复选框输出），而占位符在 HTML 里出现的顺序与此一致，所以按下标一一对应。
+ */
+const TASK_HOOK_MARK = '@@TASK_LINE_';
+const taskHookIds = { next: 0 };
+
+function resetTaskHookIds(): void {
+  taskHookIds.next = 0;
+}
+
+function nextTaskHookId(): number {
+  const id = taskHookIds.next;
+  taskHookIds.next += 1;
+  return id;
+}
+
+/** 挂在 <li> 与 <input> 上的同一份占位属性，渲染后由 resolveTaskHooks() 换成真实坐标。 */
+function taskHookAttrs(id: number): string {
+  return ` data-task-line="@@TASK_LINE_${id}@@" data-task-offset="@@TASK_OFFSET_${id}@@"`;
+}
+
+/** 条目 HTML 里第一个任务钩子必然属于该条目自己（嵌套列表的复选框排在它后面）。 */
+function firstTaskHookId(html: string): number | null {
+  const match = html.match(/data-task-line="@@TASK_LINE_(\d+)@@"/);
+  return match ? Number(match[1]) : null;
+}
+
+/** 任务项在源码里的位置。offset 是原文档字符偏移，line 是 1 起算的行号。 */
+interface TaskAnchor {
+  line: number;
+  offset: number;
+}
+
+/** marked token 的最小视图：只声明算坐标要用的字段，避免把整个 token 树搬进来。 */
+interface SourceToken {
+  type?: string;
+  raw?: string;
+  task?: boolean;
+  items?: SourceToken[];
+  tokens?: SourceToken[];
+}
+
+/** 原文每一行的起始偏移，供行号换算使用（每篇文档只建一次）。 */
+function buildLineStarts(source: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source.charCodeAt(i) === 10) starts.push(i + 1);
+  }
+  return starts;
+}
+
+/** 二分查找 offset 落在第几行（1 起算）。 */
+function lineNumberAt(lineStarts: number[], offset: number): number {
+  let lo = 0;
+  let hi = lineStarts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (lineStarts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo + 1;
+}
+
+/**
+ * 按 token 树前序收集任务项的源码坐标。
+ *
+ * 偏移的算法：每个 token 的 raw 都是父级 raw 的连续子串，所以用 indexOf(..., 上一次的 cursor)
+ * 就能定位它在父级里的位置，逐层累加成「重写后文本」的绝对偏移；再用 SourceTranslation.map()
+ * 换算回作者磁盘上的原始偏移（前面各趟预处理都可能改变长度）。
+ */
+function collectTaskAnchors(
+  token: SourceToken,
+  tokenStart: number,
+  translation: SourceTranslation,
+  lineStarts: number[]
+): TaskAnchor[] {
+  const anchors: TaskAnchor[] = [];
+
+  const visit = (tokens: SourceToken[], base: number, containerRaw: string): void => {
+    let cursor = 0;
+    for (const child of tokens) {
+      const raw = typeof child.raw === 'string' ? child.raw : '';
+      const found = raw ? containerRaw.indexOf(raw, cursor) : -1;
+      const start = found >= 0 ? found : cursor;
+      if (raw) cursor = start + raw.length;
+
+      if (child.type === 'list' && Array.isArray(child.items)) {
+        let itemCursor = 0;
+        for (const item of child.items) {
+          const itemRaw = typeof item.raw === 'string' ? item.raw : '';
+          const itemFound = itemRaw ? raw.indexOf(itemRaw, itemCursor) : -1;
+          const itemStart = itemFound >= 0 ? itemFound : itemCursor;
+          if (itemRaw) itemCursor = itemStart + itemRaw.length;
+          const itemBase = base + start + itemStart;
+          if (item.task) {
+            const offset = translation.map(itemBase);
+            anchors.push({ line: lineNumberAt(lineStarts, offset), offset });
+          }
+          // 嵌套列表的坐标以该条目为容器继续算。
+          if (Array.isArray(item.tokens)) visit(item.tokens, itemBase, itemRaw);
+        }
+        continue;
+      }
+      if (Array.isArray(child.tokens)) visit(child.tokens, base + start, raw);
+    }
+  };
+
+  const rootRaw = typeof token.raw === 'string' ? token.raw : '';
+  visit([token], tokenStart, rootRaw);
+  return anchors;
+}
+
+/** 把占位属性换成真实坐标；理论上不该有剩余占位符，真出现也绝不让它漏进 DOM。 */
+function resolveTaskHooks(
+  html: string,
+  token: SourceToken,
+  tokenStart: number,
+  translation: SourceTranslation,
+  lineStarts: number[]
+): string {
+  const anchors = collectTaskAnchors(token, tokenStart, translation, lineStarts);
+  let out = html;
+  anchors.forEach((anchor, id) => {
+    const placeholder = ` data-task-line="@@TASK_LINE_${id}@@" data-task-offset="@@TASK_OFFSET_${id}@@"`;
+    out = out.split(placeholder).join(` data-task-line="${anchor.line}" data-task-offset="${anchor.offset}"`);
+  });
+  return out.replace(/ data-task-line="@@TASK_LINE_\d+@@" data-task-offset="@@TASK_OFFSET_\d+@@"/g, '');
+}
 
 export function configureMarked(documentBasePath: string = '', resolveAssets: boolean = true): void {
   const renderer = new marked.Renderer();
@@ -517,9 +683,12 @@ export function configureMarked(documentBasePath: string = '', resolveAssets: bo
         : (CALLOUT_ALIASES[literal] || 'note');
       // The `[!type]` prefix AND the fold marker have to leave the first paragraph, or a
       // collapsed callout would still show a stray '-' before its body text.
-      const cleanContent = content.replace(
+      let cleanContent = content.replace(
         /^\s*<p>\s*\[![^\]]+\](?:[+-])?(?:[^\n<]+)?(?:\s*<br\s*\/?>)?/i, '<p>'
       );
+      // 头部单独成段时（正文以嵌套 callout、代码块等块级结构开头），上一步只会留下一个
+      // 空的 <p></p>：它会在 .callout-content 里撑出一行空白，必须去掉。
+      cleanContent = cleanContent.replace(/^<p>\s*<\/p>\s*/, '');
       const head = `<span class="callout-icon"></span><span class="callout-title">${title}</span>`;
       const body = `<div class="callout-content">${cleanContent}</div>`;
       if (fold === '-' || fold === '+') {
@@ -531,6 +700,22 @@ export function configureMarked(documentBasePath: string = '', resolveAssets: bo
     }
 
     return `<blockquote>${content}</blockquote>`;
+  };
+
+  // 任务列表写回钩子：输出与 marked 默认完全一致，只多出 class 与 data-task-line /
+  // data-task-offset 两枚属性（坐标稍后由 renderCore() 回填，见文件上方的说明）。
+  // 供宿主把「勾选/取消勾选」写回源码，视觉上不新增任何样式。
+  renderer.checkbox = function (checked: any): string {
+    const id = nextTaskHookId();
+    return `<input ${checked ? 'checked="" ' : ''}disabled="" type="checkbox"${taskHookAttrs(id)}>`;
+  };
+
+  renderer.listitem = function (textOrToken: any, task?: any): string {
+    const text = typeof textOrToken === 'object' && textOrToken !== null ? textOrToken.text : textOrToken;
+    const body = typeof text === 'string' ? text : '';
+    if (!task) return `<li>${body}</li>\n`;
+    const id = firstTaskHookId(body);
+    return `<li class="task-list-item"${id === null ? '' : taskHookAttrs(id)}>${body}</li>\n`;
   };
 
   marked.setOptions({
@@ -827,7 +1012,11 @@ function applyBlockIds(text: string, translation: SourceTranslation): string {
   );
 }
 
-function processMathAndCitations(rawMarkdown: string, ctx: WikiContext = {}): {
+function processMathAndCitations(
+  rawMarkdown: string,
+  ctx: WikiContext = {},
+  renderOptions: RenderOptions = {}
+): {
   sanitizedMarkdown: string;
   tokens: TokenStore;
   diagramSources: string[];
@@ -1099,17 +1288,26 @@ function processMathAndCitations(rawMarkdown: string, ctx: WikiContext = {}): {
   // ---- Footnotes (`[^label]`) --------------------------------------------------
   //
   // marked v12 has no footnote support, so this is built here, inside the masked region.
-  // A reference becomes an inline <sup>; its definition is rewritten IN PLACE into a
-  // numbered paragraph with a back-link.
+  // A reference becomes an inline <sup>; its definition becomes a numbered paragraph with
+  // a back-link. Where that numbered area sits is decided by footnotePlacement:
   //
-  // Why in place instead of hoisted to the document end: a single code path, and the
-  // definition keeps flowing through the normal pipeline - so a footnote containing
-  // maths, inline code or emphasis still renders, where a post-marked append would have
-  // needed a second render pass and a second math tokenizer.
+  //  * 'inline' (default): the definition is rewritten IN PLACE. A single code path, and the
+  //    definition keeps flowing through the normal pipeline - so a footnote containing
+  //    maths, inline code or emphasis still renders, where a post-marked append would have
+  //    needed a second render pass and a second math tokenizer.
+  //  * 'end': the definition line is removed and the whole area (rule + entries) is
+  //    appended to the Markdown as one block at the document tail, so it still flows
+  //    through the same pipeline (math/code inside a footnote keep working) and the body
+  //    keeps its superscript back-link. The area carries no source anchor: it is
+  //    synthesised text, and renderCore() only stamps a span when start < end.
+  //
+  // 两种模式的编号规则完全一致：按正文首次引用的顺序编号，与定义书写顺序无关。
   //
   // Anything unresolved stays literal. An unreferenced definition, or a reference with
   // no definition, is never deleted: silently losing the author's text is worse than a
   // visibly unresolved marker.
+  const footnotePlacement: FootnotePlacement =
+    renderOptions.footnotePlacement ?? ctx.footnotePlacement ?? 'inline';
   const footnoteDefs = new Map<string, { body: string; raw: string }>();
   sanitized = trackedReplace(
     sanitized,
@@ -1140,7 +1338,9 @@ function processMathAndCitations(rawMarkdown: string, ctx: WikiContext = {}): {
     }
   );
 
+  // 逐条落地。'inline' 就地展开；'end' 只把定义行删掉，条目先攒起来，最后统一追加。
   let footnotesEmitted = 0;
+  const footnoteEndEntries: { n: number; entry: string }[] = [];
   for (const [label, def] of footnoteDefs) {
     const n = footnoteNumbers.get(label);
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1155,10 +1355,27 @@ function processMathAndCitations(rawMarkdown: string, ctx: WikiContext = {}): {
       continue;
     }
     const rule = footnotesEmitted === 0 ? '<hr class="footnotes-sep">\n\n' : '';
-    const replacement = `${rule}<a id="fn-${n}"></a>\n\n` +
+    const replacement = `<a id="fn-${n}"></a>\n\n` +
       `**${n}.** ${def.body} <a href="#fnref-${n}" class="fn-back" title="回到引用处">↩</a>`;
-    sanitized = trackedReplace(sanitized, translation, sentinel, () => replacement);
+    if (footnotePlacement === 'end') {
+      sanitized = trackedReplace(sanitized, translation, sentinel, () => '');
+      footnoteEndEntries.push({ n, entry: replacement });
+    } else {
+      sanitized = trackedReplace(sanitized, translation, sentinel, () => `${rule}${replacement}`);
+    }
     footnotesEmitted++;
+  }
+
+  // 'end' 模式：按编号顺序（=正文首次引用顺序）拼成文末脚注区。
+  // 这里直接把 Markdown 追加到文本末尾，让它和正文走同一条管道（marked + 公式/代码还原）；
+  // 追加发生在所有 trackedReplace 之后，所以前面各处的源码坐标不受影响。
+  if (footnotePlacement === 'end' && footnoteEndEntries.length > 0) {
+    const entries = footnoteEndEntries
+      .sort((a, b) => a.n - b.n)
+      .map((item) => item.entry)
+      .join('\n\n');
+    const area = `<hr class="footnotes-sep">\n\n${entries}`;
+    sanitized = `${sanitized.replace(/\s*$/, '')}\n\n${area}\n`;
   }
 
   // Highlight. The flanking rules are Obsidian's: no space directly after the opening
@@ -1261,17 +1478,21 @@ function detokenizeMath(
  * because the markdown image renderer resolves relative asset paths with it.
  * Passing '' therefore leaves every asset path exactly as written in the source
  * (see renderMarkdownPayload()).
+ *
+ * `renderOptions` 是纯配置（不含任何宿主能力），所以主线程与 Worker 两条路径都能接受它；
+ * 不传时默认值与历史输出逐字节一致。
  */
 async function renderCore(
   rawMarkdown: string,
   documentBasePath: string,
   resolveAssets: boolean = true,
   ctx: WikiContext = {},
-  depth: number = 0
+  depth: number = 0,
+  renderOptions: RenderOptions = {}
 ): Promise<string> {
   configureMarked(documentBasePath, resolveAssets);
   const { sanitizedMarkdown, tokens, diagramSources, translation, tokenSourceSpans, embedNotes } =
-    processMathAndCitations(rawMarkdown, ctx);
+    processMathAndCitations(rawMarkdown, ctx, renderOptions);
 
   // Render each top-level block on its own, then stamp that block's TRUE source
   // span onto its first tag. Click-to-source mapping then reads an anchor
@@ -1280,11 +1501,25 @@ async function renderCore(
   const lexed = marked.lexer(sanitizedMarkdown) as any[];
   const parts: string[] = [];
   let cursor = 0;
+  // 行号表按需建立：没有任务列表的文档一分钱都不用付。
+  let lineStarts: number[] | null = null;
   for (const token of lexed) {
     const raw = token && typeof token.raw === 'string' ? token.raw : '';
     const start = cursor;
     cursor += raw.length;
+    // 任务列表占位符从 0 重新编号。marked.parser() 是同步的，且这一行到解析结束之间没有
+    // await，所以同一个线程上并发渲染不会互相污染编号。
+    resetTaskHookIds();
     let segment = String(marked.parser([token]));
+    if (segment.includes(TASK_HOOK_MARK)) {
+      // 行号必须与 translation 用同一个坐标系（LF 归一化后的原文），否则 CRLF 文档会报错行：
+      // processMathAndCitations() 一进来就把 \r\n 归一成 \n，此后所有偏移都是 LF 空间的，
+      // 这也和既有的 data-src-* 锚点保持一致。
+      if (!lineStarts) {
+        lineStarts = buildLineStarts(rawMarkdown.includes('\r') ? rawMarkdown.replace(/\r\n?/g, '\n') : rawMarkdown);
+      }
+      segment = resolveTaskHooks(segment, token, start, translation, lineStarts);
+    }
 
     // A block id is a sentinel still sitting in the rendered text at this point; it is
     // consumed here so the attribute lands on the block's own tag - the same place the
@@ -1312,7 +1547,7 @@ async function renderCore(
 
   let html = detokenizeMath(rawHtml, tokens, diagramSources, tokenSourceSpans);
   if (embedNotes.length > 0) {
-    html = await injectEmbeddedNotes(html, embedNotes, ctx, depth);
+    html = await injectEmbeddedNotes(html, embedNotes, ctx, depth, renderOptions);
   }
   // Last step: raw HTML image sources can only be rewritten once the markup is
   // final, since the Markdown path resolves its own images earlier.
@@ -1332,7 +1567,8 @@ async function injectEmbeddedNotes(
   html: string,
   notes: EmbedNote[],
   ctx: WikiContext,
-  depth: number
+  depth: number,
+  renderOptions: RenderOptions = {}
 ): Promise<string> {
   let out = html;
   for (const note of notes) {
@@ -1348,7 +1584,7 @@ async function injectEmbeddedNotes(
         `<span class="embedded-note-note">内容未载入</span></div>` +
         `</div>`;
     } else {
-      const inner = await renderCore(bodyMd, '', false, { ...ctx, embeds: {} }, depth + 1);
+      const inner = await renderCore(bodyMd, '', false, { ...ctx, embeds: {} }, depth + 1, renderOptions);
       block =
         `<div class="embedded-note" data-embed="${escapeHtml(note.path)}">` +
         `<div class="embedded-note-header"><a class="wikilink" href="${escapeHtml(note.href)}">${escapeHtml(note.label)}</a></div>` +
@@ -1378,17 +1614,33 @@ export function finalizeAssetUrls(html: string, documentBasePath: string): strin
  * deferring the rewrite cannot change its outcome - and the deferral is explicit
  * (resolveAssets = false) rather than an accident of convertFileSrc being missing
  * off-thread. tools/render-equivalence-gate proves the two paths agree.
+ *
+ * 第三个参数是渲染选项（可选）。renderWorker 目前不传，所以 Worker 路径走默认值；
+ * 需要经 Worker 下发配置时，可以放进 ctx（见 WikiContext.footnotePlacement），
+ * 因为 renderClient 只转发 `{ id, raw, ctx }` 这几个字段。
  */
-export async function renderMarkdownPayload(rawMarkdown: string, ctx: WikiContext = {}): Promise<string> {
-  return renderCore(rawMarkdown, '', false, ctx);
+export async function renderMarkdownPayload(
+  rawMarkdown: string,
+  ctx: WikiContext = {},
+  renderOptions: RenderOptions = {}
+): Promise<string> {
+  return renderCore(rawMarkdown, '', false, ctx, 0, renderOptions);
 }
 
+/**
+ * 主线程渲染。第四个参数是渲染选项（可选），默认值与不传它时逐字节一致；
+ * 与 renderMarkdownPayload() 接受同一份 RenderOptions，两条路径的输出因此保持一致。
+ */
 export async function renderMarkdown(
   rawMarkdown: string,
   documentBasePath: string = '',
-  ctx: WikiContext = {}
+  ctx: WikiContext = {},
+  renderOptions: RenderOptions = {}
 ): Promise<string> {
-  return finalizeAssetUrls(await renderCore(rawMarkdown, documentBasePath, true, ctx), documentBasePath);
+  return finalizeAssetUrls(
+    await renderCore(rawMarkdown, documentBasePath, true, ctx, 0, renderOptions),
+    documentBasePath
+  );
 }
 
 interface MermaidApi {

@@ -22,6 +22,13 @@ import {
   type IndexedDoc
 } from './utils/workspaceIndex';
 import { scanWorkspaceFiles, readTextFiles } from './platform/workspaceScan';
+import {
+  parseVaultQuery,
+  searchVault,
+  planReplace,
+  type SearchDoc,
+  type VaultSearchResult
+} from './utils/vaultSearch';
 // Types only: the updater functions are imported dynamically at their call sites, so the
 // updater plugin stays out of the startup chunk (and never loads at all on mobile, where
 // the plugin does not exist). Same pattern as the pdf-lib modules.
@@ -1391,6 +1398,16 @@ export const App: React.FC = () => {
   const [defaultThemeSetting, setDefaultThemeSetting] = useState<ThemePreference>(() => initialPrefs.current.defaultTheme);
   const [defaultModeSetting, setDefaultModeSetting] = useState<'typora' | 'source'>(() => initialPrefs.current.defaultViewMode);
   const [defaultMathEngineSetting, setDefaultMathEngineSetting] = useState<'svg' | 'chtml'>(() => initialPrefs.current.defaultMathEngine || 'svg');
+  // Footnotes: 'inline' keeps them next to the paragraph (MarkDownX default), 'end' collects
+  // them into one section at the bottom like Obsidian. Persisted on its own key because the
+  // typography blob is only written when the user saves program defaults.
+  const [footnotePlacement, setFootnotePlacement] = useState<'inline' | 'end'>(() => {
+    try {
+      return localStorage.getItem('markdownx_footnote_placement') === 'end' ? 'end' : 'inline';
+    } catch {
+      return 'inline';
+    }
+  });
   const [autoWatchSetting, setAutoWatchSetting] = useState<boolean>(() => initialPrefs.current.autoWatchExternalChanges !== false);
   const [externalReloadNotice, setExternalReloadNotice] = useState<string | null>(null);
   const [pdfOpenError, setPdfOpenError] = useState<string | null>(null);
@@ -1950,6 +1967,21 @@ export const App: React.FC = () => {
   const [currentMatchIndex, setCurrentMatchIndex] = useState<number>(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // ---- Vault-wide search (P1) -------------------------------------------------------
+  //
+  // The in-document search above only ever sees the active tab. Vault search reuses the
+  // text the index build already read, so a query is one in-memory pass and re-typing
+  // never touches the disk. Nothing is written until the user asks for a replace, and a
+  // replace ALWAYS re-runs the query first: hits carry offsets, and stale offsets would
+  // overwrite the wrong characters.
+  const [vaultMode, setVaultMode] = useState(false);
+  const [vaultResult, setVaultResult] = useState<VaultSearchResult | null>(null);
+  const [vaultConfirming, setVaultConfirming] = useState(false);
+  const [vaultNotice, setVaultNotice] = useState<string | null>(null);
+  const docTextsRef = useRef<Map<string, string>>(new Map());
+  /** A hit waiting for its file to finish opening + rendering before it is revealed. */
+  const pendingVaultJumpRef = useRef<{ path: string; offset: number; length: number } | null>(null);
+
   // The resolved theme drives the body class (all body.theme-* rules hang off it).
   //
   // Add/remove ONLY the theme class. Assigning `body.className` wholesale also erased every
@@ -2118,6 +2150,14 @@ export const App: React.FC = () => {
       const files = await scanWorkspaceFiles(root);
       const notes = files.filter((f) => NOTE_EXT_RE.test(f.path));
       const docs = [];
+      // Vault search (P1) reads from this cache instead of the disk, so a rebuild refills it.
+      // Bounded twice on purpose: the per-file cap keeps one huge note from pinning memory,
+      // the total cap keeps a giant workspace from doing the same. Files over budget simply
+      // fall out of vault search - they are still indexed for links, tags and backlinks.
+      const DOC_TEXT_MAX_CHARS = 2 * 1024 * 1024;
+      const DOC_TEXT_BUDGET_CHARS = 64 * 1024 * 1024;
+      docTextsRef.current.clear();
+      let cachedChars = 0;
       const BATCH = 200;
       for (let i = 0; i < notes.length; i += BATCH) {
         const slice = notes.slice(i, i + BATCH);
@@ -2125,6 +2165,10 @@ export const App: React.FC = () => {
         for (const item of read) {
           if (typeof item.content !== 'string') continue;
           docs.push(scanDocument(item.path, item.content));
+          if (item.content.length <= DOC_TEXT_MAX_CHARS && cachedChars + item.content.length <= DOC_TEXT_BUDGET_CHARS) {
+            docTextsRef.current.set(normalizePath(item.path), item.content);
+            cachedChars += item.content.length;
+          }
         }
         if (wikiBuildSeqRef.current !== seq) return;
       }
@@ -2166,7 +2210,7 @@ export const App: React.FC = () => {
     async (content: string, path: string | null) => {
       const lookup: WikiLookup | null = wikiIndex ? wikiIndex.lookup : null;
       const docPath = path || '';
-      if (!lookup || !docPath) return { docPath, lookup, embeds: {} as Record<string, string> };
+      if (!lookup || !docPath) return { docPath, lookup, embeds: {} as Record<string, string>, footnotePlacement };
 
       const wanted = new Set<string>();
       for (const link of scanWikiLinks(content)) {
@@ -2194,9 +2238,9 @@ export const App: React.FC = () => {
           embeds[item.path] = body;
         }
       }
-      return { docPath, lookup, embeds };
+      return { docPath, lookup, embeds, footnotePlacement };
     },
-    [wikiIndex]
+    [wikiIndex, footnotePlacement]
   );
 
   const updatePreview = useCallback(async (content: string, currentPath: string | null) => {
@@ -2235,6 +2279,15 @@ export const App: React.FC = () => {
       updatePreview(activeFile.content, activeFile.path);
     }
   }, [activeFile?.id, activeFile?.path, updatePreview]);
+
+  // Footnote placement is a pure presentation switch: the renderer only reads it while
+  // producing HTML, so nothing else would repaint the page. Reading the active tab from the
+  // ref (instead of listing it as a dependency) keeps this from firing on every keystroke.
+  useEffect(() => {
+    const tab = openFilesRef.current.find((item) => item.id === activeFileIdRef.current);
+    if (!tab || tab.kind === 'pdf') return;
+    void updatePreview(tab.content, tab.path || null);
+  }, [footnotePlacement, updatePreview]);
 
   // 300ms debounce when typing in source mode
   /**
@@ -2336,6 +2389,9 @@ export const App: React.FC = () => {
 
   /** One entry point for preview clicks: wiki links, then links, then the property editor. */
   const handlePreviewClick = (event: React.MouseEvent<HTMLElement>) => {
+    // A task checkbox is interactive chrome, not document text: handle it before the link
+    // and property handlers so ticking a box never opens a note.
+    if (handlePreviewTaskToggle(event)) return;
     if (handleWikiLink(event)) return;
     if (handlePreviewLink(event)) return;
     handlePropsClick(event);
@@ -2366,6 +2422,37 @@ export const App: React.FC = () => {
     debounceTimerRef.current = setTimeout(() => {
       updatePreview(newContent, activeFile?.path || null);
     }, 300);
+  };
+
+  /**
+   * A click on a task checkbox in the preview writes through to the note.
+   *
+   * The renderer stamps every task item with the LINE it came from; this handler addresses
+   * the edit by line and re-finds the marker inside that line. It deliberately never uses
+   * the stamped character offset: offsets live in LF space while the buffer may hold CRLF,
+   * so a one-character drift would toggle the neighbouring task instead.
+   */
+  const handlePreviewTaskToggle = (event: React.MouseEvent<HTMLElement>): boolean => {
+    const target = event.target as HTMLElement | null;
+    const item = target?.closest('.task-list-item') as HTMLElement | null;
+    if (!item || !activeFile) return false;
+    const lineAttr = item.getAttribute('data-task-line');
+    if (!lineAttr) return false;
+    const lineIndex = Number.parseInt(lineAttr, 10) - 1;
+    if (!Number.isFinite(lineIndex) || lineIndex < 0) return false;
+    const content = activeFile.content;
+    const lines = content.split(/\r?\n/);
+    const line = lines[lineIndex];
+    if (line === undefined) return false;
+    const nextLine = /\[\s\]/.test(line) ? line.replace(/\[\s\]/, '[x]') : line.replace(/\[[xX]\]/, '[ ]');
+    if (nextLine === line) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    lines[lineIndex] = nextLine;
+    // Preserve the file's own line endings: joining with '\n' would rewrite every CRLF
+    // file as LF on the first checkbox click.
+    handleContentChange(lines.join(content.includes('\r\n') ? '\r\n' : '\n'));
+    return true;
   };
 
   // Right-click policy. WebView2 (the Chromium engine under the app) shows its
@@ -3098,6 +3185,167 @@ export const App: React.FC = () => {
       console.error('File open error:', error);
     }
   }, []);
+
+  // ---- Vault-wide search: run / replace / reveal ------------------------------------
+  //
+  // Search itself is a pure in-memory pass over `docTextsRef` (filled by the index build),
+  // so it is safe to call on every keystroke. Replace is the only writer, and it re-runs
+  // the query right before writing: hits carry byte offsets, and a stale offset would
+  // overwrite the wrong characters in a file the user may have edited meanwhile.
+
+  const vaultDocs = useCallback((): SearchDoc[] => {
+    if (!wikiIndex) return [];
+    const docs: SearchDoc[] = [];
+    // Iterate the MAP KEYS, not `doc.path`: the index keys are normalised to forward slashes
+    // while `doc.path` keeps whatever the scanner produced (on Windows that is backslashes).
+    // The text cache is keyed normalised, so looking up by `doc.path` silently missed every
+    // file - the bug that made vault search return nothing at all on Windows.
+    for (const [key, doc] of Object.entries(wikiIndex.docs)) {
+      const content = docTextsRef.current.get(key);
+      // Files over the cache budget have no text here: they are still indexed for links and
+      // tags, just not searchable. Skipping beats returning a half-typed body.
+      if (content === undefined) continue;
+      docs.push({ path: doc.path, name: doc.name, content, tags: doc.tags, headings: doc.headings });
+    }
+    return docs;
+  }, [wikiIndex]);
+
+  // Dev-only diagnostics for the CDP smoke test. import.meta.env.DEV is a build-time
+  // constant, so this whole hook disappears from release bundles.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const probeWindow = window as unknown as Record<string, unknown>;
+    probeWindow.__mdxProbe = {
+      docs: () => vaultDocs().map((doc) => ({ path: doc.path, len: doc.content.length })),
+      cacheKeys: () => Array.from(docTextsRef.current.keys()),
+      indexPaths: () => (wikiIndex ? Object.keys(wikiIndex.docs) : [])
+    };
+  }, [vaultDocs, wikiIndex]);
+
+  const runVaultSearch = useCallback(
+    (raw: string) => {
+      setVaultConfirming(false);
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        setVaultResult(null);
+        return;
+      }
+      setVaultResult(searchVault(vaultDocs(), parseVaultQuery(trimmed), { limit: 200 }));
+    },
+    [vaultDocs]
+  );
+
+  /** Open a hit's file and remember where to land once its preview is on screen. */
+  const revealVaultHit = useCallback(
+    (hit: { path: string; offset: number; length: number }) => {
+      pendingVaultJumpRef.current = {
+        path: normalizePath(hit.path),
+        offset: hit.offset,
+        length: hit.length
+      };
+      void openFileByPath(hit.path);
+    },
+    [openFileByPath]
+  );
+
+  const handleVaultReplace = useCallback(async () => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return;
+    const docs = vaultDocs();
+    const fresh = searchVault(docs, parseVaultQuery(trimmed), { limit: 5000 });
+    const edits = planReplace(docs, fresh.hits, replaceQuery);
+    if (edits.length === 0) {
+      setVaultConfirming(false);
+      setVaultNotice('没有可替换的匹配项');
+      return;
+    }
+    const succeeded: string[] = [];
+    const failed: string[] = [];
+    for (const edit of edits) {
+      try {
+        await writeTextFile(edit.path, edit.after);
+        docTextsRef.current.set(normalizePath(edit.path), edit.after);
+        succeeded.push(edit.path);
+      } catch (err) {
+        console.error('[MarkdownX] vault replace failed:', edit.path, err);
+        failed.push(edit.path.split(/[\\/]/).pop() || edit.path);
+      }
+    }
+    // Open tabs hold their own copy. A CLEAN tab is refreshed from what was just written; a
+    // MODIFIED one is left untouched, because its buffer is newer than the disk and swapping
+    // it would silently discard unsaved edits.
+    const touched = new Set(succeeded.map((p) => normalizePath(p)));
+    const dirtySkipped = openFilesRef.current.filter(
+      (tab) => !!tab.path && touched.has(normalizePath(tab.path || '')) && tab.isModified
+    ).length;
+    if (succeeded.length > 0) {
+      setOpenFiles((prev) =>
+        prev.map((tab) => {
+          if (!tab.path || !touched.has(normalizePath(tab.path)) || tab.isModified) return tab;
+          const text = docTextsRef.current.get(normalizePath(tab.path));
+          return text === undefined ? tab : { ...tab, content: text };
+        })
+      );
+    }
+    const replaced = edits.reduce((n, edit) => n + edit.count, 0);
+    const parts = [`已替换 ${replaced} 处，涉及 ${succeeded.length} 个文件`];
+    if (dirtySkipped > 0) parts.push(`${dirtySkipped} 个已改动未保存的文件未同步`);
+    if (failed.length > 0) parts.push(`失败 ${failed.length} 个：${failed.slice(0, 3).join('、')}`);
+    setVaultNotice(parts.join('；'));
+    setVaultConfirming(false);
+    // Links and tags may now point somewhere else, so rebuild rather than patch in place.
+    if (succeeded.length > 0) {
+      setVaultResult(null);
+      if (workspaceDir) void rebuildWikiIndex(workspaceDir);
+    }
+  }, [searchQuery, replaceQuery, vaultDocs, workspaceDir, rebuildWikiIndex]);
+
+  // Landing for a vault hit: after the file opens and its HTML matches its text, scroll the
+  // preview block (or place the caret in the source) and flash it, exactly like the
+  // double-click jump does.
+  useEffect(() => {
+    const pending = pendingVaultJumpRef.current;
+    if (!pending || !activeFile?.path) return;
+    if (normalizePath(activeFile.path) !== pending.path) return;
+    if (!isSourceMode && renderedForContentRef.current !== activeFile.content) return;
+    pendingVaultJumpRef.current = null;
+    const offset = Math.max(0, Math.min(pending.offset, activeFile.content.length));
+
+    if (isSourceMode) {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const pos = Math.min(offset, ta.value.length);
+      requestAnimationFrame(() => {
+        ta.focus();
+        ta.setSelectionRange(pos, Math.min(pos + pending.length, ta.value.length));
+        const caret = measureTextareaCaret(ta, pos);
+        ta.scrollTop = Math.max(0, caret.top - ta.clientHeight / 3);
+      });
+      return;
+    }
+
+    const article = previewRef.current;
+    const scroller = article?.closest('.typora-document-scroll') as HTMLElement | null;
+    if (!article || !scroller) return;
+    const target = blockForSourceOffset(article, activeFile.content, offset);
+    if (!target) return;
+    // Absolute geometry via rects, same reason as the double-click jump: offsetTop is
+    // unreliable because neither the scroller nor the article is positioned.
+    const reveal = () => {
+      const delta = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      scroller.scrollTop = Math.max(0, scroller.scrollTop + delta - 24);
+    };
+    requestAnimationFrame(reveal);
+    // The async typesetters reflow the article after this frame; re-apply once they settle.
+    const settle = window.setTimeout(reveal, 350);
+    target.classList.add('jump-target-flash');
+    const clearFlash = window.setTimeout(() => target.classList.remove('jump-target-flash'), 2500);
+    return () => {
+      window.clearTimeout(settle);
+      window.clearTimeout(clearFlash);
+      target.classList.remove('jump-target-flash');
+    };
+  }, [activeFile, isSourceMode, renderedHtml]);
 
   /**
    * A CLI argument is only worth opening if it looks like a document path.
@@ -4164,26 +4412,101 @@ ${texBody}
               <div className="sb-scroll">
                 {sidebarPanel === 'search' ? (
                   <div className="search-view">
-                    <div className="sidebar-pane-title">文档全文查找与替换</div>
+                    <div className="sidebar-pane-title">{vaultMode ? '全库检索与替换' : '文档全文查找与替换'}</div>
+                    <div className="search-scope-row">
+                      <button
+                        className={`search-scope-btn${vaultMode ? '' : ' active'}`}
+                        onClick={() => {
+                          setVaultMode(false);
+                          setVaultResult(null);
+                          setVaultNotice(null);
+                        }}
+                      >
+                        当前文档
+                      </button>
+                      <button
+                        className={`search-scope-btn${vaultMode ? ' active' : ''}`}
+                        onClick={() => {
+                          setVaultMode(true);
+                          setVaultResult(null);
+                          setVaultNotice(null);
+                          runVaultSearch(searchQuery);
+                        }}
+                      >
+                        全库
+                      </button>
+                    </div>
                     <div className="search-box">
                       <input
                         type="text"
                         className="search-input"
-                        placeholder="查找内容..."
+                        placeholder={vaultMode ? '关键词 / tag:路径 / /正则/ …' : '查找内容...'}
                         autoFocus
                         value={searchQuery}
-                        onChange={(e) => handleSearch(e.target.value)}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setSearchQuery(value);
+                          setVaultNotice(null);
+                          setVaultConfirming(false);
+                          if (vaultMode) runVaultSearch(value);
+                          else handleSearch(value);
+                        }}
                       />
-                      <div className="search-nav-row">
-                        <span className="search-count-label">
-                          {searchMatchesCount > 0 ? `${currentMatchIndex + 1} / ${searchMatchesCount} 处匹配` : (searchQuery ? '无匹配项' : '输入关键词')}
-                        </span>
-                        <div className="search-nav-btns">
-                          <button className="search-nav-btn" onClick={() => handleNavigateMatch(-1)} title="上一个匹配">▲</button>
-                          <button className="search-nav-btn" onClick={() => handleNavigateMatch(1)} title="下一个匹配">▼</button>
+                      {vaultMode ? (
+                        <div className="search-nav-row">
+                          <span className="search-count-label">
+                            {vaultResult
+                              ? vaultResult.truncated
+                                ? `前 ${vaultResult.hits.length} 条 / 共 ${vaultResult.total} 处 · ${vaultResult.filesWithHits} 个文件`
+                                : `${vaultResult.total} 处 · ${vaultResult.filesWithHits} 个文件`
+                              : searchQuery.trim()
+                                ? '无匹配项'
+                                : '支持 tag: path: file: section: task: /正则/ -排除'}
+                          </span>
                         </div>
-                      </div>
+                      ) : (
+                        <div className="search-nav-row">
+                          <span className="search-count-label">
+                            {searchMatchesCount > 0 ? `${currentMatchIndex + 1} / ${searchMatchesCount} 处匹配` : (searchQuery ? '无匹配项' : '输入关键词')}
+                          </span>
+                          <div className="search-nav-btns">
+                            <button className="search-nav-btn" onClick={() => handleNavigateMatch(-1)} title="上一个匹配">▲</button>
+                            <button className="search-nav-btn" onClick={() => handleNavigateMatch(1)} title="下一个匹配">▼</button>
+                          </div>
+                        </div>
+                      )}
                     </div>
+
+                    {vaultMode && (
+                      <div className="vault-hits">
+                        {!wikiIndex && !wikiBuilding && (
+                          <div className="sidebar-empty-hint">先打开一个文件夹才能全库检索</div>
+                        )}
+                        {wikiBuilding && <div className="sidebar-empty-hint">正在扫描工作区…</div>}
+                        {vaultResult && vaultResult.total === 0 && !wikiBuilding && (
+                          <div className="sidebar-empty-hint">
+                            没有命中。过滤条件（tag: / path: / file: / section: / task:）只用来缩小范围，
+                            检索本身还需要至少一个正文关键词。
+                          </div>
+                        )}
+                        {vaultResult?.hits.map((hit, index) => (
+                          <button
+                            key={`${hit.path}#${hit.offset}#${index}`}
+                            className="vault-hit"
+                            title={hit.path}
+                            onClick={() => revealVaultHit(hit)}
+                          >
+                            <span className="vault-hit-head">
+                              <span className="vault-hit-file">{hit.name}</span>
+                              <span className="vault-hit-line">:{hit.line}</span>
+                            </span>
+                            <span className="vault-hit-context">{hit.context}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {vaultNotice && <div className="sidebar-empty-hint">{vaultNotice}</div>}
 
                     <div className="replace-box">
                       <input
@@ -4191,11 +4514,35 @@ ${texBody}
                         className="replace-input"
                         placeholder="替换为..."
                         value={replaceQuery}
-                        onChange={(e) => setReplaceQuery(e.target.value)}
+                        onChange={(e) => {
+                          setReplaceQuery(e.target.value);
+                          setVaultConfirming(false);
+                        }}
                       />
                       <div className="replace-btns">
-                        <button className="replace-action-btn" onClick={handleReplaceOne}>替换当前</button>
-                        <button className="replace-action-btn" onClick={handleReplaceAll}>全部替换</button>
+                        {vaultMode ? (
+                          vaultConfirming ? (
+                            <>
+                              <button className="replace-action-btn danger" onClick={() => void handleVaultReplace()}>
+                                确认替换 {vaultResult?.total ?? 0} 处
+                              </button>
+                              <button className="replace-action-btn" onClick={() => setVaultConfirming(false)}>取消</button>
+                            </>
+                          ) : (
+                            <button
+                              className="replace-action-btn"
+                              disabled={!replaceQuery || !vaultResult || vaultResult.hits.length === 0}
+                              onClick={() => setVaultConfirming(true)}
+                            >
+                              全库替换…
+                            </button>
+                          )
+                        ) : (
+                          <>
+                            <button className="replace-action-btn" onClick={handleReplaceOne}>替换当前</button>
+                            <button className="replace-action-btn" onClick={handleReplaceAll}>全部替换</button>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -5894,6 +6241,34 @@ $$`}
                       title="高速秒开：仅 1.1MB，加载极快，纯轻量级渲染"
                     >
                       ⚡ 高速 CHTML
+                    </button>
+                  </div>
+                </div>
+
+                <div className="typo-row">
+                  <span className="typo-label">脚注位置 (Footnotes):</span>
+                  <div className="typo-radio-toggle">
+                    <button
+                      className={`typo-radio-btn ${footnotePlacement === 'inline' ? 'active' : ''}`}
+                      onClick={() => {
+                        setFootnotePlacement('inline');
+                        try { localStorage.setItem('markdownx_footnote_placement', 'inline'); } catch {}
+                        setModalFeedback('✓ 脚注就地展开（默认）：紧跟段落，不必翻到文末');
+                      }}
+                      title="脚注紧跟正文段落展开，适合边读边看"
+                    >
+                      就地展开
+                    </button>
+                    <button
+                      className={`typo-radio-btn ${footnotePlacement === 'end' ? 'active' : ''}`}
+                      onClick={() => {
+                        setFootnotePlacement('end');
+                        try { localStorage.setItem('markdownx_footnote_placement', 'end'); } catch {}
+                        setModalFeedback('✓ 脚注汇聚文末：与 Obsidian 一致，正文只留上标');
+                      }}
+                      title="脚注统一收集到文末脚注区（Obsidian 行为）"
+                    >
+                      汇聚文末
                     </button>
                   </div>
                 </div>
