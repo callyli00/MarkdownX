@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { readTextFile, writeTextFile, writeFile } from '@tauri-apps/plugin-fs';
-import { triggerMathJax, renderMermaidDiagrams } from './utils/markdownRenderer';
+import { triggerMathJax, typesetMathNodes, renderMermaidDiagrams } from './utils/markdownRenderer';
 import { readProperties, propertyValue, stripFrontmatter, latexMetadata, type PropertyKind } from './utils/properties';
 import { classifyLink, resolveRelativePath, anchorCandidates } from './utils/linkTarget';
 import { setProperty, removeProperty } from './utils/propertyEdit';
@@ -23,6 +23,7 @@ import {
 } from './utils/workspaceIndex';
 import { scanWorkspaceFiles, readTextFiles } from './platform/workspaceScan';
 import { findUnlinkedMentions } from './utils/mentions';
+import { isFullReplace, isNoopPatch, planPatch } from './utils/domPatch';
 import {
   parseVaultQuery,
   searchVault,
@@ -2116,6 +2117,14 @@ export const App: React.FC = () => {
   // The Markdown that `renderedHtml` was produced from. Rendering is async, so
   // a position restore must wait until this matches the current document.
   const renderedForContentRef = useRef<string | null>(null);
+  // Serialised top-level preview children from the last patch, plus the nodes the patch inserted
+  // (null = no patch has run yet). Both live in refs: they describe the DOM, not the render input.
+  const articleChildrenRef = useRef<string[]>([]);
+  const pendingTypesetRef = useRef<HTMLElement[] | null>(null);
+  // Which DOM node the cached child list describes. React may unmount and re-create the <article>
+  // (empty document, file switch) while renderedHtml stays identical; without this, the no-op
+  // branch would trust a cache describing a node that no longer exists and leave a blank preview.
+  const patchedArticleRef = useRef<HTMLElement | null>(null);
   /** Content of the newest render request; guards against out-of-order completion. */
   const latestRenderRef = useRef<string | null>(null);
 
@@ -2699,11 +2708,84 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('contextmenu', handleContextMenu, true);
   }, []);
 
-  // Typeset MathJax whenever rendered HTML updates
-  useEffect(() => {
-    if (previewRef.current && !isSourceMode) {
-      triggerMathJax(previewRef.current);
+  /**
+   * Incremental preview.
+   *
+   * Rendering still produces the whole document (cross-block passes: equation numbering, heading
+   * anchors, footnote placement, embed injection), but the DOM only receives the top-level nodes
+   * whose HTML actually changed. A keystroke inside one paragraph therefore no longer re-creates
+   * every formula on the page - which is what made editing long notes feel heavy.
+   *
+   * Layout effect, not effect: the patch must land before the browser paints, or a frame of the
+   * previous document would be visible while the textarea already shows the new text.
+   */
+  useLayoutEffect(() => {
+    const article = previewRef.current;
+    if (!article || isSourceMode) {
+      // The article unmounts in source mode and for an empty document; resynchronise on return.
+      articleChildrenRef.current = [];
+      pendingTypesetRef.current = null;
+      return;
     }
+    if (patchedArticleRef.current !== article) {
+      articleChildrenRef.current = [];
+      patchedArticleRef.current = article;
+    }
+    const template = document.createElement('template');
+    template.innerHTML = renderedHtml;
+    const freshNodes = Array.from(template.content.childNodes);
+    const serialise = (node: ChildNode) =>
+      node.nodeType === Node.ELEMENT_NODE ? (node as Element).outerHTML : node.textContent ?? '';
+    const next = freshNodes.map(serialise);
+    const previous = articleChildrenRef.current;
+    const plan = planPatch(previous, next);
+
+    const insertRange = (start: number, reference: ChildNode | null) => {
+      const inserted: HTMLElement[] = [];
+      const slice = freshNodes.slice(start, start + plan.insert.length);
+      for (const node of slice) {
+        const clone = node.cloneNode(true);
+        article.insertBefore(clone, reference);
+        if (clone.nodeType === Node.ELEMENT_NODE) inserted.push(clone as HTMLElement);
+      }
+      return inserted;
+    };
+
+    if (isNoopPatch(plan)) {
+      // Same HTML: leave the DOM untouched, including its typeset math, and skip typesetting.
+      pendingTypesetRef.current = [];
+      return;
+    }
+
+    if (isFullReplace(plan, previous.length)) {
+      article.textContent = '';
+      pendingTypesetRef.current = insertRange(0, null);
+      articleChildrenRef.current = next;
+      return;
+    }
+
+    const children = Array.from(article.childNodes);
+    const reference = children[plan.prefix + plan.removeCount] ?? null;
+    for (let i = 0; i < plan.removeCount; i += 1) {
+      const node = children[plan.prefix + i];
+      if (node) article.removeChild(node);
+    }
+    pendingTypesetRef.current = insertRange(plan.prefix, reference);
+    articleChildrenRef.current = next;
+  }, [renderedHtml, isSourceMode]);
+
+  // Typeset exactly what the patch inserted. `null` means "the patch never ran" (first paint,
+  // mode switch): fall back to the whole-article typeset, which is also what resets MathJax
+  // state after a document switch.
+  useEffect(() => {
+    if (!previewRef.current || isSourceMode) return;
+    const inserted = pendingTypesetRef.current;
+    pendingTypesetRef.current = null;
+    if (inserted === null) {
+      triggerMathJax(previewRef.current);
+      return;
+    }
+    if (inserted.length > 0) void typesetMathNodes(inserted);
   }, [renderedHtml, isSourceMode]);
 
   // Draw ```mermaid diagrams whenever the preview HTML is rebuilt.
@@ -5835,7 +5917,6 @@ ${texBody}
                   <article
                     ref={previewRef}
                     className="academic-article"
-                    dangerouslySetInnerHTML={{ __html: renderedHtml }}
                     onDoubleClick={handlePreviewDoubleClick}
                     onClick={handlePreviewClick}
                   />

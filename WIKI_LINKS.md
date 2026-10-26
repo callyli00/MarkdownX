@@ -224,6 +224,7 @@ node tools/local-check/smoke-p2.mjs   # 补全/标题补全/建笔记（18 项�
 node tools/local-check/smoke-p3.mjs   # 重命名 + 改链 + 撞名拒绝（17 项）
 node tools/local-check/smoke-p4.mjs   # 未链接提及面板（10 项）
 node tools/local-check/smoke-p5.mjs   # 区块级 / 章节级嵌入（10 项）
+node tools/local-check/smoke-p6.mjs   # 增量预览：只替换变化的块（9 项）
 ```
 
 两者共用 `tools/local-check/cdp-harness.mjs`（受信任输入：`Input.dispatchMouseEvent` / `Input.insertText`；`el.click()` 在 React 18 委托下不会触发 onClick）。运行前把 `tools/local-check/fixtures/vault` 复制成 `C:/tmp/vault2`，并以 `markdown-x.exe "C:/tmp/vault2"` 启动。

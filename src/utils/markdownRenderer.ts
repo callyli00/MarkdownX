@@ -1828,3 +1828,42 @@ export async function triggerMathJax(targetElement: HTMLElement | null): Promise
     }
   }
 }
+
+/**
+ * Typeset only the given nodes - the incremental counterpart of triggerMathJax().
+ *
+ * triggerMathJax() clears the whole article and re-typesets it, which for a formula-heavy note
+ * is the single most expensive thing a keystroke can trigger. When the preview patches only the
+ * blocks that changed, the untouched blocks are already typeset, so passing just the new nodes
+ * to MathJax is both correct and dramatically cheaper.
+ *
+ * Deliberately skips typesetClear() and texReset(): cleared state is exactly what we want to
+ * keep for nodes we are not touching, and every numbered equation in this app carries an
+ * explicit \tag from the renderer's own numbering pass, so there is no counter to reset.
+ */
+export async function typesetMathNodes(nodes: HTMLElement[]): Promise<void> {
+  const targets = nodes.filter((node) => node && node.isConnected !== false);
+  if (targets.length === 0) return;
+
+  const getMj = () => (window as unknown as any).MathJax;
+  if (!getMj()?.typesetPromise) {
+    let waited = 0;
+    while (!getMj()?.typesetPromise && waited < 6000) {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      waited += 60;
+    }
+  }
+
+  const mj = getMj();
+  if (!mj?.typesetPromise) return;
+  if (mj.startup?.promise) {
+    try {
+      await mj.startup.promise;
+    } catch {}
+  }
+  try {
+    await mj.typesetPromise(targets);
+  } catch (err) {
+    console.error('MathJax incremental typeset failed:', err);
+  }
+}

@@ -397,6 +397,11 @@ Release 路线 1.28s / 2.84s，**必须先过 `github.com`** —— 该主机在
 6. **单实例语义**：第二次双击由单实例插件转发给已有窗口；`argv[0]` 必须剔除（否则会把 exe 当文档打开）。
 7. **打包目标收敛为 `["nsis"]`**：只需 Windows 安装包；若将来要 Linux 包，再补 `appimage`/`deb`。
 8. **外壳布局的两条用户硬要求**（不要"顺手优化"掉）：状态栏保持**通栏**；侧边栏**贯通到状态栏上沿**。
+9. **预览的 DOM 由补丁器接管，不由 React 管**（P5，2026-10-26）：`<article ref={previewRef}>` 上**不得再挂
+   `dangerouslySetInnerHTML`**。渲染仍出整篇 HTML，但只把变化的顶层块写进 DOM（`src/utils/domPatch.ts`
+   算计划，App 的 `useLayoutEffect` 执行），变化的节点才交给 `typesetMathNodes()` 增量排版。
+   破坏它的典型方式：把 innerHTML 塞回 JSX（→ 每按一键全篇重排，MathJax 全量 typeset），
+   或让补丁器与 `renderedHtml` 失去同步（→ 空白预览）。真机判据见 `tools/local-check/smoke-p6.mjs`。
 
 ---
 
