@@ -89,6 +89,38 @@ fn read_file_from_path(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// Rename (or move) one file inside the workspace.
+///
+/// Refuses to overwrite: a rename that silently replaces another note is data loss, and nothing
+/// in the UI can undo it. The destination's parent directory is created when missing, so moving
+/// `note.md` into a new `notes/` folder takes one round trip instead of a mkdir plus a rename.
+///
+/// Errors are Chinese sentences because they reach the status bar verbatim.
+#[tauri::command]
+fn rename_path(from: String, to: String) -> Result<(), String> {
+    rename_path_impl(&from, &to)
+}
+
+fn rename_path_impl(from: &str, to: &str) -> Result<(), String> {
+    let src = std::path::Path::new(from);
+    if from.trim().is_empty() || !src.exists() {
+        return Err(format!("源文件不存在：{from}"));
+    }
+    let dst = std::path::Path::new(to);
+    if to.trim().is_empty() {
+        return Err("新名字不能为空".to_string());
+    }
+    if dst.exists() {
+        return Err(format!("目标已存在：{to}"));
+    }
+    if let Some(parent) = dst.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+        }
+    }
+    std::fs::rename(src, dst).map_err(|e| format!("重命名失败：{e}"))
+}
+
 #[tauri::command]
 fn read_dir_files(dir_path: String) -> Result<Vec<FileEntry>, String> {
     let p = std::path::Path::new(&dir_path);
@@ -964,6 +996,7 @@ pub fn run() {
             get_host_platform,
             read_file_from_path,
             read_dir_files,
+            rename_path,
             scan_workspace_files,
             read_text_files,
             toggle_fullscreen,
@@ -979,6 +1012,43 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::rename_path_impl;
+
+    /// One test, several assertions: the three behaviours share a temp directory, and splitting
+    /// them would mean three directory setups for one rule each.
+    #[test]
+    fn moves_files_refuses_to_clobber_and_creates_missing_parents() {
+        let dir = std::env::temp_dir().join(format!("mdx-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let from = dir.join("a.md");
+        std::fs::write(&from, "x").unwrap();
+        let to = dir.join("b.md");
+        rename_path_impl(from.to_str().unwrap(), to.to_str().unwrap()).unwrap();
+        assert!(to.exists(), "目标文件应存在");
+        assert!(!from.exists(), "源文件应消失");
+
+        // 目标已存在 -> 拒绝，且两个文件都还在
+        std::fs::write(&from, "y").unwrap();
+        assert!(rename_path_impl(from.to_str().unwrap(), to.to_str().unwrap()).is_err());
+        assert!(from.exists() && to.exists());
+
+        // 目标目录不存在 -> 自动创建
+        let nested = dir.join("sub").join("deep").join("c.md");
+        rename_path_impl(to.to_str().unwrap(), nested.to_str().unwrap()).unwrap();
+        assert!(nested.exists(), "缺目录时应自动创建");
+
+        // 源不存在 / 空名字 -> 报错而不是 panic
+        assert!(rename_path_impl(dir.join("missing.md").to_str().unwrap(), to.to_str().unwrap()).is_err());
+        assert!(rename_path_impl(nested.to_str().unwrap(), "   ").is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

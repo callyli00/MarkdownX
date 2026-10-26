@@ -17,7 +17,13 @@
  */
 
 import { resolveWikiPage, wikiKey } from './wikiLink';
-import { normalizePath, type BlockRef, type IndexedDoc, type WorkspaceIndex } from './workspaceIndex';
+import {
+  normalizePath,
+  vaultRelativeKeyOf,
+  type BlockRef,
+  type IndexedDoc,
+  type WorkspaceIndex
+} from './workspaceIndex';
 
 export type SuggestKind = 'page' | 'heading' | 'block';
 
@@ -134,26 +140,6 @@ function anchorOwner(
 }
 
 /**
- * The vault-relative key (`notes/daily`, extension stripped) that `lookup.byPath` holds for a
- * file, or '' when the table has none.
- *
- * `byPath` stores BOTH `notes/daily.md` and `notes/daily`, so the shortest key pointing at this
- * exact file is the one Obsidian would write into the link. The scan is linear, which is fine:
- * it only runs for the few suggestions whose bare name is ambiguous, and it is the only way to
- * recover the vault root without the index having to carry one.
- */
-function vaultRelativeKey(index: WorkspaceIndex | null | undefined, absPath: string): string {
-  const byPath = index?.lookup?.byPath ?? null;
-  if (!byPath || !absPath) return '';
-  let best = '';
-  for (const key of Object.keys(byPath)) {
-    if (byPath[key] !== absPath) continue;
-    if (!best || key.length < best.length || (key.length === best.length && key < best)) best = key;
-  }
-  return stemOf(best);
-}
-
-/**
  * Name to insert for a page: the bare stem, unless that stem is ambiguous inside the vault.
  *
  * Ambiguity is read from `lookup.byName` rather than from the document list, because that table
@@ -167,7 +153,7 @@ function insertFor(doc: IndexedDoc, index: WorkspaceIndex | null | undefined): s
   const stem = stemOf(name);
   const candidates = index?.lookup?.byName?.[wikiKey(stem || name)] ?? [];
   if (candidates.length <= 1) return stem || name;
-  const relativeKey = vaultRelativeKey(index, doc.path);
+  const relativeKey = vaultRelativeKeyOf(index as WorkspaceIndex, doc.path);
   // A document at the vault root has no longer key than its own name; nothing better exists.
   return relativeKey || stem || name;
 }

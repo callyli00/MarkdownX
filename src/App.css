@@ -4432,3 +4432,103 @@ body.theme-dark .props-card { background: rgba(255, 255, 255, 0.04); }
 [data-theme="dark"] .wiki-suggest-row.active {
   background: rgba(96, 165, 250, 0.22);
 }
+
+/* Rename dialog: a single-field modal. Kept deliberately small - renaming is a one-line edit,
+   not a settings surface. */
+.rename-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.rename-dialog {
+  width: min(420px, 88vw);
+  padding: 18px 20px;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28);
+}
+
+.rename-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.rename-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #6b7280;
+}
+
+.rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 8px;
+  outline: none;
+}
+
+.rename-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+.rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.rename-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #fff;
+  cursor: pointer;
+}
+
+.rename-btn.primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.rename-btn.primary:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.dark .rename-dialog,
+[data-theme="dark"] .rename-dialog {
+  background: #1f2937;
+}
+
+.dark .rename-title,
+[data-theme="dark"] .rename-title {
+  color: #f3f4f6;
+}
+
+.dark .rename-input,
+[data-theme="dark"] .rename-input {
+  background: #111827;
+  color: #e5e7eb;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.dark .rename-btn,
+[data-theme="dark"] .rename-btn {
+  background: #111827;
+  color: #e5e7eb;
+  border-color: rgba(255, 255, 255, 0.18);
+}

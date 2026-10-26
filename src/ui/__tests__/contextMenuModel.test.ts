@@ -12,8 +12,17 @@ describe('buildMenu: tab', () => {
 describe('buildMenu: sidebar', () => {
   it('file/doc entries offer open + path actions', () => {
     for (const surface of ['sidebar-file', 'sidebar-doc'] as const) {
-      expect(ids({ surface })).toEqual(['file-open', 'file-copy-path', 'file-reveal']);
+      expect(ids({ surface })).toEqual(['file-open', 'file-rename', 'file-copy-path', 'file-reveal']);
     }
+  });
+
+  it('rename is disabled without a path (a synthetic entry has no file)', () => {
+    const rename = buildMenu({ surface: 'sidebar-file' }).find((i) => i.id === 'file-rename');
+    expect(rename?.disabled).toBe(true);
+    const withPath = buildMenu({ surface: 'sidebar-file', path: 'C:\\vault\\a.md' }).find(
+      (i) => i.id === 'file-rename'
+    );
+    expect(withPath?.disabled).toBe(false);
   });
 });
 

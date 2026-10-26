@@ -153,6 +153,9 @@ TS:   buildIndex(docs)                 一遍建表：反链、标签计数、�
 | `src/utils/__tests__/wikiLink.test.ts` | 25 项 |
 | `src/utils/__tests__/wikiRender.test.ts` | 19 项 |
 | `src/utils/__tests__/workspaceIndex.test.ts` | 36 项 |
+| `src/utils/linkSuggest.ts`、`__tests__/linkSuggest.test.ts` | `[[` 补全与别名归一（纯函数） |
+| `src/utils/renameLinks.ts`、`__tests__/renameLinks.test.ts` | 重命名改链计划（纯函数） |
+| `src-tauri/src/lib.rs`（`rename_path`） | 改名 + 拒绝覆盖 |
 
 ## 别名（aliases）
 
@@ -197,11 +200,22 @@ aliases:
 - 内容写入 `# 标题` 作为种子，然后立刻打开并重建索引。
 - 目标文件已存在时只打开、不覆盖——索引可能是旧的，磁盘上的文件优先。
 
+## 重命名笔记 → 自动改链
+
+侧栏文件树上右键 →「重命名…」：改文件名，并把整个工作区里指向它的 `[[链接]]` 一次性改成新名字。
+
+- 纯函数在 `src/utils/renameLinks.ts`：`planRenameReferences(index, from, to, readDoc)` 返回 `[{ docPath, content, changes }]`，`rewriteWikiLinks` 只碰链接那一小段（`[[old]]`、`[[old|别名]]`、`[[old#标题]]`、`![[old]]` 保留嵌入标记与前缀/锚点），围栏代码与行内代码里的内容不动。
+- **先算改链，再移动文件**：索引里还有旧路径时才能判断"哪些引用是断的、哪些是写给旧名的"。顺序反了，`[[alpha]]` 会被当成"指向不存在"而跳过。
+- 已打开的标签只改内存里的缓冲区并标记为未保存（不替你保存）；没打开的笔记直接写盘。
+- 重命名后：索引重建、文件树重读、**文件监听重挂到新路径**（否则改名后的文件改动不再触发"磁盘已变化"）、被改名文档自己的标签页同步换路径（否则下一次 Ctrl+S 会把旧路径写回来，留下两份笔记）。
+- 撞名不覆盖：目标已存在时只报错并保持对话框打开，磁盘上的文件优先。
+
 ## 真机冒烟
 
 ```bash
 node tools/local-check/smoke-p1.mjs   # 检索/替换/复选框写回（12 项）
 node tools/local-check/smoke-p2.mjs   # 补全/标题补全/建笔记（18 项）
+node tools/local-check/smoke-p3.mjs   # 重命名 + 改链 + 撞名拒绝（17 项）
 ```
 
 两者共用 `tools/local-check/cdp-harness.mjs`（受信任输入：`Input.dispatchMouseEvent` / `Input.insertText`；`el.click()` 在 React 18 委托下不会触发 onClick）。运行前把 `tools/local-check/fixtures/vault` 复制成 `C:/tmp/vault2`，并以 `markdown-x.exe "C:/tmp/vault2"` 启动。

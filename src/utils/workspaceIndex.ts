@@ -474,6 +474,27 @@ export function buildWikiLookup(docs: IndexedDoc[]): WikiLookup {
 }
 
 /**
+ * Vault-relative key (`notes/daily`, extension stripped) for one file, or '' when unknown.
+ *
+ * `byPath` holds BOTH `notes/daily.md` and `notes/daily`, so the shortest key pointing at this
+ * exact file is the form Obsidian writes into a link. The scan is linear, which is fine because
+ * it only runs for renaming and for suggestions whose bare name is ambiguous, and it is the only
+ * way to recover the vault root without the index having to carry one.
+ */
+export function vaultRelativeKeyOf(index: WorkspaceIndex, absPath: string): string {
+  const byPath = index?.lookup?.byPath ?? null;
+  if (!byPath || !absPath) return '';
+  let best = '';
+  for (const key of Object.keys(byPath)) {
+    if (byPath[key] !== absPath) continue;
+    if (!best || key.length < best.length || (key.length === best.length && key < best)) best = key;
+  }
+  if (!best) return '';
+  const dot = best.lastIndexOf('.');
+  return dot > 0 ? best.slice(0, dot) : best;
+}
+
+/**
  * Build the whole index.
  *
  * Cost is O(documents + links + tags): the lookup table is built once, and each link is resolved

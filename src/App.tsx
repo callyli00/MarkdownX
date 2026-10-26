@@ -30,6 +30,7 @@ import {
   type VaultSearchResult
 } from './utils/vaultSearch';
 import { detectTrigger, suggestLinks, notePathFor, type SuggestItem } from './utils/linkSuggest';
+import { planRenameReferences, renamedPathFor } from './utils/renameLinks';
 // Types only: the updater functions are imported dynamically at their call sites, so the
 // updater plugin stays out of the startup chunk (and never loads at all on mobile, where
 // the plugin does not exist). Same pattern as the pdf-lib modules.
@@ -1794,6 +1795,12 @@ export const App: React.FC = () => {
       case 'file-open':
         if (ctx.path) void openFileByPath(ctx.path);
         return;
+      case 'file-rename': {
+        if (!ctx.path) return;
+        const currentName = ctx.path.split(/[\\/]/).pop() || '';
+        setRenameTarget({ path: ctx.path, name: currentName });
+        return;
+      }
       case 'file-copy-path':
         void copyTextToClipboard(ctx.path || '');
         return;
@@ -2460,6 +2467,13 @@ export const App: React.FC = () => {
     return true;
   };
 
+  // ---- Rename (P3) -------------------------------------------------------------------
+  //
+  // The dialog only collects a name. Everything about "which links point here and what they
+  // should say afterwards" is planRenameReferences' job (pure, tested in renameLinks.test.ts).
+  const [renameTarget, setRenameTarget] = useState<{ path: string; name: string } | null>(null);
+  const [renameBusy, setRenameBusy] = useState(false);
+
   // ---- `[[` completion ---------------------------------------------------------------
   //
   // Ranking lives in utils/linkSuggest.ts; this is only the "where is the caret, and what does
@@ -2534,6 +2548,98 @@ export const App: React.FC = () => {
     } catch (err) {
       console.error('[MarkdownX] create note from link failed:', err);
       setModalFeedback(`✗ 新建笔记失败：${String(err)}`);
+    }
+  };
+
+  /**
+   * Rename the file and rewrite every link that pointed at it.
+   *
+   * Order matters: the rewrites are planned from the CURRENT index, which still knows the old
+   * path. Planning after the move would resolve `[[alpha]]` against a table where alpha.md no
+   * longer exists, so every reference would look dangling instead of pointing at the old name.
+   *
+   * Open tabs keep their edits in memory (no implicit save): a dirty buffer is newer than the
+   * file on disk, and writing it here would save changes the user never asked to save.
+   */
+  const commitRename = async () => {
+    if (!renameTarget || renameBusy) return;
+    const oldPath = renameTarget.path;
+    const nextPath = renamedPathFor(oldPath, renameTarget.name);
+    if (!nextPath) {
+      setModalFeedback('✗ 新名字不能为空');
+      return;
+    }
+    if (normalizePath(nextPath) === normalizePath(oldPath)) {
+      setRenameTarget(null);
+      return;
+    }
+    setRenameBusy(true);
+    try {
+      const rewrites = planRenameReferences(
+        wikiIndex,
+        oldPath,
+        nextPath,
+        (path) => docTextsRef.current.get(normalizePath(path)) ?? null
+      );
+      await invoke('rename_path', { from: oldPath, to: nextPath });
+
+      const openIdsByPath = new Map<string, string>();
+      for (const tab of openFilesRef.current) {
+        if (tab.path) openIdsByPath.set(normalizePath(tab.path), tab.id);
+      }
+
+      let fileChanges = 0;
+      let bufferChanges = 0;
+      for (const item of rewrites) {
+        const openId = openIdsByPath.get(normalizePath(item.docPath));
+        if (openId) {
+          bufferChanges += item.changes;
+          setOpenFiles((prev) =>
+            prev.map((f) => (f.id === openId ? { ...f, content: item.content, isModified: true } : f))
+          );
+        } else {
+          fileChanges += item.changes;
+          await writeTextFile(item.docPath, item.content);
+        }
+        docTextsRef.current.set(normalizePath(item.docPath), item.content);
+      }
+
+      // The renamed document's own tab must follow the file, or the next Ctrl+S would
+      // recreate the old path and leave two notes behind.
+      const nextName = nextPath.split(/[\\/]/).pop() || nextPath;
+      setOpenFiles((prev) =>
+        prev.map((f) =>
+          f.path && normalizePath(f.path) === normalizePath(oldPath)
+            ? { ...f, path: nextPath, name: nextName }
+            : f
+        )
+      );
+      // The watcher is bound to a path, not to a tab: re-point it or editing the renamed note
+      // stops triggering "file changed on disk".
+      try {
+        await invoke('stop_watching_file', { filePath: oldPath });
+        await invoke('start_watching_file', { filePath: nextPath });
+      } catch {
+        // A watcher that refuses to start is a degraded feature, never a failed rename.
+      }
+
+      await rebuildWikiIndex(workspaceDir);
+      // The tree is not live: it holds the entry list read when the folder was opened, so a
+      // rename would leave the old name clickable until the next manual refresh.
+      if (workspaceDir) await loadWorkspaceFiles(workspaceDir);
+      const touched = rewrites.length;
+      const detail =
+        touched === 0
+          ? '没有笔记引用它'
+          : `更新 ${touched} 篇笔记的 ${fileChanges + bufferChanges} 处链接` +
+            (bufferChanges > 0 ? `（其中 ${bufferChanges} 处在未保存的标签里）` : '');
+      setModalFeedback(`✓ 已重命名为 ${nextName}；${detail}`);
+      setRenameTarget(null);
+    } catch (err) {
+      console.error('[MarkdownX] rename failed:', err);
+      setModalFeedback(`✗ 重命名失败：${String(err)}`);
+    } finally {
+      setRenameBusy(false);
     }
   };
 
@@ -6468,6 +6574,44 @@ $$`}
                   完成
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renameTarget && (
+        <div
+          className="rename-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setRenameTarget(null);
+          }}
+        >
+          <div className="rename-dialog" role="dialog" aria-label="重命名笔记">
+            <h3 className="rename-title">重命名</h3>
+            <p className="rename-hint">
+              指向这篇笔记的链接会自动改写；不写扩展名时保留原来的扩展名。
+            </p>
+            <input
+              className="rename-input"
+              autoFocus
+              value={renameTarget.name}
+              onChange={(event) => setRenameTarget({ ...renameTarget, name: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void commitRename();
+                else if (event.key === 'Escape') setRenameTarget(null);
+              }}
+            />
+            <div className="rename-actions">
+              <button className="rename-btn" onClick={() => setRenameTarget(null)}>
+                取消
+              </button>
+              <button
+                className="rename-btn primary"
+                onClick={() => void commitRename()}
+                disabled={renameBusy}
+              >
+                {renameBusy ? '重命名中…' : '确定'}
+              </button>
             </div>
           </div>
         </div>

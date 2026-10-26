@@ -71,6 +71,7 @@ export function buildMenu(t: ContextTarget): MenuItem[] {
     case 'sidebar-doc':
       items.push(
         { id: 'file-open', label: '打开', icon: '📄' },
+        { id: 'file-rename', label: '重命名…', icon: '✎', shortcut: 'F2', dividerBefore: true, disabled: !t.path },
         { id: 'file-copy-path', label: '复制完整路径', icon: '⧉', dividerBefore: true },
         { id: 'file-reveal', label: '在文件夹中显示', icon: '🗀' },
       );
