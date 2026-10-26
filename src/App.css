@@ -4532,3 +4532,17 @@ body.theme-dark .props-card { background: rgba(255, 255, 255, 0.04); }
   color: #e5e7eb;
   border-color: rgba(255, 255, 255, 0.18);
 }
+
+/* Unlinked-mention rows reuse the backlink row; only the line number is new. */
+.links-row-line {
+  margin-left: 2px;
+  font-size: 11px;
+  font-weight: 400;
+  color: #9ca3af;
+  font-variant-numeric: tabular-nums;
+}
+
+.dark .links-row-line,
+[data-theme="dark"] .links-row-line {
+  color: #6b7280;
+}

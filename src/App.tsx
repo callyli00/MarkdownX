@@ -22,6 +22,7 @@ import {
   type IndexedDoc
 } from './utils/workspaceIndex';
 import { scanWorkspaceFiles, readTextFiles } from './platform/workspaceScan';
+import { findUnlinkedMentions } from './utils/mentions';
 import {
   parseVaultQuery,
   searchVault,
@@ -2138,7 +2139,7 @@ export const App: React.FC = () => {
   // stale index degrades to "every link unresolved" instead of blocking a keystroke.
   const [wikiIndex, setWikiIndex] = useState<WorkspaceIndex | null>(null);
   const [wikiBuilding, setWikiBuilding] = useState(false);
-  const [linkTab, setLinkTab] = useState<'backlinks' | 'tags' | 'unresolved'>('backlinks');
+  const [linkTab, setLinkTab] = useState<'backlinks' | 'mentions' | 'tags' | 'unresolved'>('backlinks');
   const embedCacheRef = useRef<Map<string, string>>(new Map());
   const wikiBuildSeqRef = useRef(0);
 
@@ -2250,6 +2251,31 @@ export const App: React.FC = () => {
     },
     [wikiIndex, footnotePlacement]
   );
+
+  /**
+   * Unlinked mentions: the panel row that needs every document's text.
+   *
+   * Computed lazily here rather than during the index build because the answer depends on which
+   * note is open - rebuilding the whole index every time the user switches tabs would be the most
+   * expensive thing in the app. Keyed on the index and the active path, both of which change only
+   * on open/save, so a keystroke never triggers it.
+   */
+  const unlinkedMentions = useMemo(() => {
+    const path = activeFile?.path;
+    if (!wikiIndex || !path) return [];
+    const doc = wikiIndex.docs[normalizePath(path)];
+    const docs: Array<{ path: string; content: string }> = [];
+    for (const [docPath, content] of docTextsRef.current) docs.push({ path: docPath, content });
+    return findUnlinkedMentions(
+      docs,
+      {
+        path,
+        name: doc?.name || path.split(/[\\/]/).pop() || path,
+        aliases: doc?.aliases ?? []
+      },
+      { limitPerDoc: 3, maxDocs: 300 }
+    );
+  }, [wikiIndex, activeFile?.path]);
 
   const updatePreview = useCallback(async (content: string, currentPath: string | null) => {
     try {
@@ -4593,7 +4619,7 @@ ${texBody}
                     ? '返回工作区'
                     : wikiBuilding
                       ? '正在索引工作区…'
-                      : '反链 / 标签 / 未解析链接'}
+                      : '反链 / 提及 / 标签 / 未解析链接'}
                 </span>
               </div>
 
@@ -4743,6 +4769,7 @@ ${texBody}
                     <div className="sidebar-pane-title">知识链接 · LINKS</div>
                     <div className="links-tabs">
                       <button className={`links-tab ${linkTab === 'backlinks' ? 'active' : ''}`} onClick={() => setLinkTab('backlinks')}>反链</button>
+                      <button className={`links-tab ${linkTab === 'mentions' ? 'active' : ''}`} onClick={() => setLinkTab('mentions')}>提及</button>
                       <button className={`links-tab ${linkTab === 'tags' ? 'active' : ''}`} onClick={() => setLinkTab('tags')}>标签</button>
                       <button className={`links-tab ${linkTab === 'unresolved' ? 'active' : ''}`} onClick={() => setLinkTab('unresolved')}>未解析</button>
                     </div>
@@ -4761,6 +4788,29 @@ ${texBody}
                             <button key={`${ref.from}-${index}`} className="links-row" onClick={() => void openFileByPath(ref.from)}>
                               <span className="links-row-title">{ref.from.split(/[\\/]/).pop()}</span>
                               <span className="links-row-context">{ref.context}</span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    )}
+
+                    {wikiIndex && linkTab === 'mentions' && (
+                      <div className="links-list">
+                        {unlinkedMentions.length === 0 ? (
+                          <div className="sidebar-empty-hint">没有未链接的提及（写成 [[链接]] 的算反链）</div>
+                        ) : (
+                          unlinkedMentions.map((hit) => (
+                            <button
+                              key={`${hit.docPath}-${hit.line}`}
+                              className="links-row"
+                              onClick={() => void openFileByPath(hit.docPath)}
+                              title={`${hit.docPath}:${hit.line}`}
+                            >
+                              <span className="links-row-title">
+                                {hit.docPath.split(/[\/]/).pop()}
+                                <span className="links-row-line">:{hit.line}</span>
+                              </span>
+                              <span className="links-row-context">{hit.snippet}</span>
                             </button>
                           ))
                         )}
