@@ -25,6 +25,7 @@ import { scanWorkspaceFiles, readTextFiles } from './platform/workspaceScan';
 import { findUnlinkedMentions } from './utils/mentions';
 import { isFullReplace, isNoopPatch, planPatch } from './utils/domPatch';
 import { imageMarkdown, insertTextAtSelection, pastedImageFileName } from './utils/pastedImage';
+import { rankCommands, type PaletteCommand } from './utils/commandPalette';
 import {
   parseVaultQuery,
   searchVault,
@@ -2578,6 +2579,11 @@ export const App: React.FC = () => {
   // The dialog only collects a name. Everything about "which links point here and what they
   // should say afterwards" is planRenameReferences' job (pure, tested in renameLinks.test.ts).
   const [renameTarget, setRenameTarget] = useState<{ path: string; name: string } | null>(null);
+  // Command palette (Ctrl+Shift+P). Open state, query and highlighted row; the command list itself
+  // is built during render so every closure sees the current file/theme.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState('');
+  const [paletteActive, setPaletteActive] = useState(0);
   const [renameBusy, setRenameBusy] = useState(false);
 
   // ---- `[[` completion ---------------------------------------------------------------
@@ -3361,6 +3367,14 @@ export const App: React.FC = () => {
       }
 
       if (e.ctrlKey || e.metaKey) {
+        // Command palette first: it must win over any single-letter shortcut below.
+        if (e.shiftKey && e.key.toLowerCase() === 'p') {
+          e.preventDefault();
+          setPaletteQuery('');
+          setPaletteActive(0);
+          setPaletteOpen(true);
+          return;
+        }
         if (e.key === 'Tab') {
           e.preventDefault();
           handleCycleTab();
@@ -4492,6 +4506,58 @@ ${texBody}
   };
 
 
+  /**
+   * Commands the palette can run.
+   *
+   * Built per render instead of memoised: every entry closes over the current document, theme and
+   * panel state, and sixteen closures are far cheaper than debugging a stale list.
+   */
+  type PaletteEntry = PaletteCommand & { run: () => void };
+  const paletteEntries: PaletteEntry[] = [
+    { id: 'file.new', title: '新建文档', keywords: ['new', 'blank'], run: () => handleNewFile() },
+    { id: 'file.open', title: '打开文件', keywords: ['open'], run: () => void handleOpenFile() },
+    { id: 'file.workspace', title: '打开工作区文件夹', keywords: ['folder', 'vault'], run: () => void handleSelectWorkspace() },
+    { id: 'file.save', title: '保存当前文档', keywords: ['save'], shortcut: 'Ctrl+S', run: () => void handleSaveFile() },
+    { id: 'file.saveAs', title: '另存为', keywords: ['save as'], run: () => void handleSaveFileAs() },
+    { id: 'search.vault', title: '全库搜索 / 替换', keywords: ['vault', 'grep', 'find'], run: () => openSearchPanel() },
+    {
+      id: 'panel.links',
+      title: '反链 / 提及 / 标签面板',
+      keywords: ['links', 'backlinks', 'tags'],
+      run: () => {
+        setIsSidebarOpen(true);
+        setSidebarPanel('links');
+      }
+    },
+    { id: 'view.source', title: '切换源码 / 预览', keywords: ['mode', 'preview'], shortcut: 'Ctrl+/', run: () => toggleSourceMode() },
+    { id: 'view.theme', title: '切换主题（浅色 / 深色 / 护眼）', keywords: ['theme', 'dark', 'light', 'sepia'], run: () => cycleTheme() },
+    {
+      id: 'edit.rename',
+      title: '重命名当前笔记（自动改链）',
+      keywords: ['rename', 'move'],
+      run: () => {
+        if (activeFile?.path) {
+          setRenameTarget({ path: activeFile.path, name: activeFile.name });
+          setModalFeedback(null);
+        }
+      }
+    },
+    { id: 'export.html', title: '导出 HTML（带样式）', keywords: ['html'], run: () => void handleExportHtmlWithStyles() },
+    { id: 'export.htmlPlain', title: '导出 HTML（精简样式）', keywords: ['html'], run: () => void handleExportHtmlPlain() },
+    { id: 'export.latex', title: '导出 LaTeX', keywords: ['tex'], run: () => void handleExportLatex() },
+    { id: 'export.word', title: '导出 Word', keywords: ['docx', 'word'], run: () => void handleExportWord() },
+    { id: 'print', title: '打印 / 导出 PDF', keywords: ['pdf', 'print'], shortcut: 'Ctrl+P', run: () => void handlePrint() },
+    { id: 'devtools', title: '开发者工具', keywords: ['devtools', 'inspect'], shortcut: 'Shift+F12', run: () => void handleOpenDevTools() }
+  ];
+  const paletteMatches = rankCommands(paletteEntries, paletteQuery, 10);
+
+  const runPaletteCommand = (entry: PaletteEntry) => {
+    setPaletteOpen(false);
+    setPaletteQuery('');
+    setPaletteActive(0);
+    entry.run();
+  };
+
   const handleCloseFile = (idToClose: string) => {
     setActiveMenu(null);
     const tabToClose = openFiles.find((f) => f.id === idToClose);
@@ -5595,6 +5661,60 @@ ${texBody}
             >
               ✕ 忽略
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Command palette (Ctrl+Shift+P) */}
+      {paletteOpen && (
+        <div className="palette-overlay" onClick={() => setPaletteOpen(false)}>
+          <div className="palette-box" onClick={(e) => e.stopPropagation()}>
+            <input
+              className="palette-input"
+              autoFocus
+              value={paletteQuery}
+              placeholder="输入命令…（Enter 执行，Esc 关闭）"
+              onChange={(e) => {
+                setPaletteQuery(e.target.value);
+                setPaletteActive(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setPaletteOpen(false);
+                } else if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setPaletteActive((index) => (paletteMatches.length ? (index + 1) % paletteMatches.length : 0));
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setPaletteActive((index) =>
+                    paletteMatches.length ? (index - 1 + paletteMatches.length) % paletteMatches.length : 0
+                  );
+                } else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const entry = paletteMatches[paletteActive];
+                  if (entry) runPaletteCommand(entry);
+                }
+              }}
+            />
+            <div className="palette-list">
+              {paletteMatches.length === 0 ? (
+                <div className="palette-empty">没有匹配的命令</div>
+              ) : (
+                paletteMatches.map((entry, index) => (
+                  <button
+                    key={entry.id}
+                    className={`palette-row ${index === paletteActive ? 'active' : ''}`}
+                    onMouseEnter={() => setPaletteActive(index)}
+                    onClick={() => runPaletteCommand(entry)}
+                  >
+                    <span className="palette-title">{entry.title}</span>
+                    {entry.hint ? <span className="palette-hint">{entry.hint}</span> : null}
+                    {entry.shortcut ? <span className="palette-shortcut">{entry.shortcut}</span> : null}
+                  </button>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}
