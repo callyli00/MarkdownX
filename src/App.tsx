@@ -35,6 +35,14 @@ import {
 } from './utils/vaultSearch';
 import { detectTrigger, suggestLinks, notePathFor, type SuggestItem } from './utils/linkSuggest';
 import { planRenameReferences, renamedPathFor } from './utils/renameLinks';
+import {
+  MATH_TEX_ATTR,
+  assembleClipboardText,
+  flattenForCopy,
+  mathHostSource,
+  wrapTex,
+  type CopyTreeNode
+} from './utils/mathCopy';
 // Types only: the updater functions are imported dynamically at their call sites, so the
 // updater plugin stays out of the startup chunk (and never loads at all on mobile, where
 // the plugin does not exist). Same pattern as the pdf-lib modules.
@@ -162,8 +170,8 @@ const THEME_OPTIONS: { id: ThemePreference; name: string; icon: string }[] = [
 
 
 /** Shown in the About dialog (version, build date, licence, recent notes). */
-const APP_VERSION = 'v2.8.0';
-const APP_BUILD_DATE = '2026-10-25';
+const APP_VERSION = 'v2.9.0';
+const APP_BUILD_DATE = '2026-10-30';
 const APP_LICENSE = 'Apache-2.0';
 const APP_TECH = 'Tauri v2 + Rust · React 18 + TypeScript · MathJax · Mermaid · highlight.js';
 
@@ -204,6 +212,16 @@ const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 520;
 const SIDEBAR_DEFAULT_W = 260;
 const RELEASE_NOTES: { version: string; date: string; items: string[] }[] = [
+  {
+    version: 'v2.9.0',
+    date: '2026-10-30',
+    items: [
+      '复制不再丢公式：拖选一段带公式的正文，Ctrl+C 复制出来的公式会还原成 LaTeX 源码（行内 $…$、独立成行 $$…$$），正文与换行结构不变',
+      '右键「复制选中文字」走同一条路径；只选中一个公式时也能复制到它的 TeX',
+      '不改渲染引擎：仍是 MathJax SVG 输出（换 CHTML 一样选不中）；选区里没有公式时完全走浏览器原生复制，富文本格式照旧',
+      '手机端长按选择后的复制同样带公式'
+    ]
+  },
   {
     version: 'v2.8.0',
     date: '2026-10-26',
@@ -1253,6 +1271,124 @@ function locateClickIn(block: HTMLElement, point: { x: number; y: number } | und
 }
 
 /**
+ * Build the copy payload for a selection taken from the rendered article.
+ *
+ * A typeset formula has no selectable characters (SVG glyph paths, and the one textual
+ * copy MathJax keeps is clipped to 1px with `user-select: none`), so both
+ * `Selection.toString()` and the browser's own Ctrl+C drop it silently — the surrounding
+ * sentence survives, the formula does not. This rebuilds the payload from the DOM: every
+ * math host is replaced by its LaTeX source (the renderer stamped it on `data-tex-source`),
+ * then the ENGINE produces the plain text of that tree, so block boundaries and line
+ * breaks stay native while the formulas stay in place.
+ *
+ * Two shapes have to be handled, because `cloneContents()` only carries nodes STRICTLY
+ * inside the range:
+ *   - a formula inside the selected text (the paragraph case) arrives as a complete
+ *     `[data-tex-source]` host and is substituted in place;
+ *   - a selection that IS one formula (drag across a display row, or `selectNodeContents`
+ *     on it) leaves the host OUT of the fragment — the host is the range's container — so
+ *     its source has to be read from the boundary container instead. Without that, copying
+ *     exactly one formula would keep producing nothing, which is the whole point of the fix.
+ *
+ * `hasMath` false means "nothing to fix, let the native copy run" — its rich formatting is
+ * better than anything built here.
+ */
+function copyPayloadFor(
+  range: Range,
+  doc: Document
+): { text: string; html: string; hasMath: boolean } {
+  const fragment = range.cloneContents();
+  const hosts = Array.from(fragment.querySelectorAll(`[${MATH_TEX_ATTR}]`)) as HTMLElement[];
+  // The formula the selection starts and/or ends inside of (absent when both boundaries
+  // fall in ordinary text or land on the host element itself, which `hosts` covers).
+  const startHost = closestMathHost(range.startContainer);
+  const endHost = closestMathHost(range.endContainer);
+  if (hosts.length === 0 && !startHost && !endHost) {
+    return { text: '', html: '', hasMath: false };
+  }
+
+  // Glyph trees that came along WITHOUT their host (a boundary inside a formula) carry no
+  // usable text; drop them before going on to read the fragment.
+  for (const artifact of Array.from(fragment.querySelectorAll('mjx-assistive-mml, mjx-container'))) {
+    artifact.remove();
+  }
+
+  // Fallback text first: it must be read while the math hosts are still in the tree with
+  // their `data-tex-source`; afterwards only the substituted TeX text remains.
+  const fallback = assembleClipboardText(flattenForCopy(fragment as unknown as CopyTreeNode));
+
+  for (const host of hosts) {
+    const math = mathHostSource(host);
+    if (!math) continue;
+    const replacement = doc.createElement(math.display ? 'div' : 'span');
+    replacement.textContent = wrapTex(math.tex, math.display);
+    host.replaceWith(replacement);
+  }
+
+  const serialized = doc.createElement('div');
+  serialized.appendChild(fragment.cloneNode(true));
+  const html = serialized.innerHTML;
+
+  // `innerText` respects layout (paragraph breaks become newlines), so it needs a box that
+  // is laid out but invisible; `display: none` would degrade it to `textContent`.
+  const probe = doc.createElement('div');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.cssText = 'position:fixed;top:0;left:-10000px;width:40em;pointer-events:none;';
+  probe.appendChild(fragment);
+  doc.body.appendChild(probe);
+  const laidOut = probe.innerText || '';
+  probe.remove();
+
+  let text = (laidOut || fallback).trim();
+  let markup = html;
+
+  // A boundary inside a formula: its source is not in the fragment, so add it on the side
+  // the boundary sits on. `$$…$$` display math already carries its own line breaks.
+  const boundaryMath = startHost
+    ? mathHostSource(startHost)
+    : endHost
+      ? mathHostSource(endHost)
+      : null;
+  if (boundaryMath) {
+    const tex = wrapTex(boundaryMath.tex, boundaryMath.display);
+    const own = doc.createElement(boundaryMath.display ? 'div' : 'span');
+    own.textContent = tex;
+    if (endHost && !startHost) {
+      text = text ? `${text}\n${tex}` : tex;
+      markup = `${markup}${own.outerHTML}`;
+    } else {
+      text = text ? `${tex}\n${text}` : tex;
+      markup = `${own.outerHTML}${markup}`;
+    }
+  }
+
+  return { text, html: markup, hasMath: true };
+}
+
+/** The nearest ancestor (or self) that carries a formula's LaTeX source. */
+function closestMathHost(node: Node | null): HTMLElement | null {
+  let current: Node | null = node;
+  while (current) {
+    if (current.nodeType === 1 && (current as HTMLElement).hasAttribute(MATH_TEX_ATTR)) {
+      return current as HTMLElement;
+    }
+    current = current.parentNode;
+  }
+  return null;
+}
+
+/** The current selection as text with formulas restored (plain string when it is math-free). */
+function selectionCopyText(sel: Selection): string {
+  try {
+    if (sel.rangeCount === 0) return sel.toString();
+    const payload = copyPayloadFor(sel.getRangeAt(0), document);
+    return payload.hasMath && payload.text ? payload.text : sel.toString();
+  } catch {
+    return sel.toString();
+  }
+}
+
+/**
  * Map the clicked character inside an anchored block to its exact source
  * offset, aligning folded rendered text against the block's own source slice.
  * Returns null when no reliable alignment exists; the caller then falls back
@@ -1714,7 +1850,8 @@ export const App: React.FC = () => {
     const el = e.target as HTMLElement;
     ctxAnchorElementRef.current = el;
     const sel = window.getSelection();
-    const selectedText = sel && !sel.isCollapsed ? sel.toString() : undefined;
+    // Math-aware: a raw selection string silently drops every typeset formula.
+    const selectedText = sel && !sel.isCollapsed ? selectionCopyText(sel) || undefined : undefined;
 
     const a = el.closest('a') as HTMLAnchorElement | null;
     const img = el.closest('img') as HTMLImageElement | null;
@@ -2450,6 +2587,34 @@ export const App: React.FC = () => {
     }
     void openFileByPath(target);
     return true;
+  };
+
+  /**
+   * Ctrl+C inside the preview: keep the formulas.
+   *
+   * The native copy cannot include them (see copyPayloadFor), so the only faithful route is
+   * to take the clipboard over — but ONLY when the selection really contains math. Any other
+   * selection keeps the native behaviour, rich formatting included.
+   */
+  const handlePreviewCopy = (event: React.ClipboardEvent<HTMLElement>) => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+    let payload: { text: string; html: string; hasMath: boolean };
+    try {
+      payload = copyPayloadFor(sel.getRangeAt(0), document);
+    } catch {
+      return; // never break the native copy
+    }
+    if (!payload.hasMath || !payload.text) return;
+    event.preventDefault();
+    try {
+      // text/plain is what a Markdown editor (and our own source view) pastes; text/html
+      // keeps the paragraph structure when pasting into Word or a mail client.
+      event.clipboardData.setData('text/plain', payload.text);
+      if (payload.html) event.clipboardData.setData('text/html', payload.html);
+    } catch {
+      /* clipboardData can be read-only in some webviews: fall back to the native copy */
+    }
   };
 
   /** One entry point for preview clicks: wiki links, then links, then the property editor. */
@@ -6132,6 +6297,7 @@ ${texBody}
                     className="academic-article"
                     onDoubleClick={handlePreviewDoubleClick}
                     onClick={handlePreviewClick}
+                    onCopy={handlePreviewCopy}
                   />
                 ) : (
                   <div

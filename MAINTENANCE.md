@@ -827,6 +827,38 @@ TOC 自然无处可跳。配对还取决于粘连 `$$` 的**奇偶性**，这正
    必须比对**落点处的文字**。
 3. **用"去掉公式后拼接的短语"在源码里搜是假阴性** —— 源码里公式是真实字符，任何跨越公式的短语
    只存在于一侧。必须按**词**比对。
+### 12.11 【已修】"公式无法选中"与"复制正文丢公式"（v2.9.0）
+
+**用户问的是"为什么公式选不中"，答案是两层，别只答第一层。**
+
+**第一层（MathJax 固有，改不了也不该改）**：默认走 `tex-svg.js`，排版后每个字形是
+`<svg><g><use>/<path>`，**没有文本节点**；唯一那份文字副本 `mjx-assistive-mml` 是给读屏软件的，
+MathJax 自己注入 `clip: rect(1px,1px,1px,1px)` + `user-select: none`（见
+`node_modules/mathjax/es5/a11y/assistive-mml.js` 的 `assistiveStyles`）。所以公式**永远不会**
+出现蓝色选区高亮，`Selection.toString()` 与 Ctrl+C 都会静默跳过它。换 `chtml` 也没用
+（MathJax #2240：字形是 `<mjx-c>` + webfont，同样无可选字符）。
+
+**第二层（我们能修，v2.9.0 已修）**：复制出去的内容不该缺公式。渲染器早就把 LaTeX 盖在公式宿主上
+（`.math-inline` / `.math-equation-row` 的 `data-tex-source`），复制时把它换回来即可。
+
+**实现要点与踩到的坑**（`src/utils/mathCopy.ts` 纯逻辑 + `App.tsx` 的 `copyPayloadFor`）：
+- `copyPayloadFor` 收的是 **Range 而不是 cloneContents 的 fragment**：`cloneContents()` 只带
+  **严格位于选区内部**的节点，所以"拖选一整行公式"时宿主本身就是选区容器，**不在 fragment 里** ——
+  只按 fragment 找 `[data-tex-source]` 会漏掉，表现为"只选一个公式时复制仍然是空的"（首次冒烟就撞上了）。
+  现在再从 `range.startContainer` / `endContainer` 往上找最近的宿主，按边界所在的一侧补上源码。
+- fragment 里**不带宿主的** `mjx-container` / `mjx-assistive-mml` 要先删掉，否则它们的 MathML 文字
+  会混进纯文本（`x`、`2` 之类）。
+- 纯文本走"离屏探针 + `innerText`"，段落/换行由引擎按布局给出；`display:none` 会退化成
+  `textContent`，行结构就没了。
+- 选区里没有公式时**必须不接管剪贴板**（不 `preventDefault`），否则富文本复制退化。
+
+**验收**：单测 573 项（新增 `mathCopy` 13 项）+ `tsc --noEmit` 干净；桌面真机 CDP 冒烟
+（`smoke-copy.mjs`：真实 WebView 里建 Range → 派发带真 `DataTransfer` 的 `ClipboardEvent` → 读回
+`text/plain`）9/9，含"对照组：原生选区确实丢了公式"。
+
+> 想做到"点一下公式就整块选中并高亮"是另一件事（把公式当原子对象，Typora/Obsidian 的做法），
+> 不在本次范围内。
+
 ## 13. Android 移动端移植（分支 `feat/android-port`）
 
 ### 13.1 工具链版本（每一条都有出处，不是"建议值"）
